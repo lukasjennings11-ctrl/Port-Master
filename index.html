@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Prism Play — free mobile games you can play right in your browser or download to your device." />
+  <title>Prism Play — Mobile Games</title>
+
+  <!-- Preconnect for Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ─── Reset & base ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --prism-1: #ff3cac;
+      --prism-2: #784ba0;
+      --prism-3: #2b86c5;
+      --prism-4: #00d2ff;
+      --prism-5: #a8ff78;
+      --bg: #0d0d1a;
+      --surface: #161628;
+      --surface2: #1e1e38;
+      --text: #f0eeff;
+      --text-muted: #9b97bb;
+      --radius: 20px;
+      --transition: 0.25s ease;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Nunito', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ─── Focus styles (accessibility) ─── */
+    :focus-visible {
+      outline: 3px solid var(--prism-4);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
+    /* ─── Skip link ─── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 1rem;
+      background: var(--prism-4);
+      color: #000;
+      font-weight: 700;
+      padding: 0.5rem 1rem;
+      border-radius: 0 0 8px 8px;
+      z-index: 9999;
+      text-decoration: none;
+      transition: top var(--transition);
+    }
+    .skip-link:focus { top: 0; }
+
+    /* ─── Prismatic gradient text utility ─── */
+    .gradient-text {
+      background: linear-gradient(90deg, var(--prism-1), var(--prism-2), var(--prism-3), var(--prism-4), var(--prism-5));
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: shimmer 4s linear infinite;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 0% center; }
+      100% { background-position: 200% center; }
+    }
+
+    /* ─── Header / Hero ─── */
+    header {
+      position: relative;
+      padding: 2rem 1.5rem 0;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    /* Animated background prism effect */
+    header::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 30%, rgba(255,60,172,0.18) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 10%, rgba(0,210,255,0.18) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 80%, rgba(168,255,120,0.12) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1100px;
+      margin: 0 auto 3rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--prism-1), var(--prism-3), var(--prism-5));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      flex-shrink: 0;
+      box-shadow: 0 0 20px rgba(0,210,255,0.35);
+    }
+
+    .logo-name {
+      font-size: 1.5rem;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.25rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 0.4rem 0.8rem;
+      border-radius: 8px;
+      transition: color var(--transition), background var(--transition);
+    }
+
+    .nav-links a:hover,
+    .nav-links a:focus-visible {
+      color: var(--text);
+      background: rgba(255,255,255,0.07);
+    }
+
+    /* ─── Hero ─── */
+    .hero {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1rem 5rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.4rem, 7vw, 4.5rem);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.2rem;
+    }
+
+    .hero p {
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 2rem;
+    }
+
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: linear-gradient(135deg, var(--prism-1), var(--prism-3));
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 1.05rem;
+      padding: 0.85rem 2rem;
+      border-radius: 50px;
+      border: none;
+      cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition);
+      box-shadow: 0 4px 24px rgba(255,60,172,0.4);
+    }
+
+    .hero-cta:hover,
+    .hero-cta:focus-visible {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(255,60,172,0.55);
+    }
+
+    /* ─── Divider wave ─── */
+    .wave {
+      width: 100%;
+      overflow: hidden;
+      line-height: 0;
+      margin-bottom: -2px;
+    }
+
+    /* ─── Main content ─── */
+    main {
+      background: var(--surface);
+      padding: 4rem 1.5rem 6rem;
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 600px;
+      margin: 0 auto 3rem;
+    }
+
+    .section-label {
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--prism-4);
+      margin-bottom: 0.5rem;
+    }
+
+    .section-header h2 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+    }
+
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+    }
+
+    /* ─── Filter pills ─── */
+    .filter-bar {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .filter-btn {
+      background: var(--surface2);
+      color: var(--text-muted);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 50px;
+      padding: 0.45rem 1.1rem;
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .filter-btn:hover,
+    .filter-btn:focus-visible {
+      background: rgba(0,210,255,0.12);
+      color: var(--prism-4);
+      border-color: var(--prism-4);
+    }
+
+    .filter-btn[aria-pressed="true"] {
+      background: linear-gradient(135deg, rgba(43,134,197,0.3), rgba(0,210,255,0.3));
+      color: var(--prism-4);
+      border-color: var(--prism-4);
+    }
+
+    /* ─── Game grid ─── */
+    .games-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.5rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    /* ─── Game card ─── */
+    .game-card {
+      background: var(--surface2);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,0.07);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform var(--transition), box-shadow var(--transition);
+      position: relative;
+    }
+
+    .game-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+    }
+
+    /* Category badge */
+    .game-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.25rem 0.7rem;
+      border-radius: 50px;
+      z-index: 2;
+    }
+
+    .badge-browser {
+      background: rgba(0,210,255,0.2);
+      color: var(--prism-4);
+      border: 1px solid rgba(0,210,255,0.4);
+    }
+
+    .badge-download {
+      background: rgba(255,60,172,0.2);
+      color: var(--prism-1);
+      border: 1px solid rgba(255,60,172,0.4);
+    }
+
+    /* Thumbnail */
+    .game-thumb {
+      aspect-ratio: 16/9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .game-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .thumb-placeholder {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3.5rem;
+    }
+
+    /* Card body */
+    .game-body {
+      padding: 1.2rem 1.4rem 1.4rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .game-genre {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .game-name {
+      font-size: 1.2rem;
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      line-height: 1.2;
+    }
+
+    .game-desc {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      flex: 1;
+    }
+
+    .game-actions {
+      display: flex;
+      gap: 0.6rem;
+      margin-top: 0.8rem;
+      flex-wrap: wrap;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border-radius: 50px;
+      font-family: inherit;
+      font-weight: 700;
+      font-size: 0.875rem;
+      padding: 0.55rem 1.2rem;
+      cursor: pointer;
+      text-decoration: none;
+      border: none;
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition);
+      white-space: nowrap;
+    }
+
+    .btn:hover,
+    .btn:focus-visible {
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--prism-1), var(--prism-3));
+      color: #fff;
+      box-shadow: 0 3px 16px rgba(255,60,172,0.35);
+    }
+
+    .btn-primary:hover,
+    .btn-primary:focus-visible {
+      box-shadow: 0 6px 24px rgba(255,60,172,0.5);
+    }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    .btn-secondary:hover,
+    .btn-secondary:focus-visible {
+      background: rgba(255,255,255,0.12);
+    }
+
+    .btn-store {
+      background: #000;
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .btn-store:hover,
+    .btn-store:focus-visible {
+      background: #111;
+    }
+
+    /* Modal overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal {
+      background: var(--surface2);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,0.1);
+      width: 100%;
+      max-width: 420px;
+      overflow: hidden;
+      position: relative;
+      animation: modal-in 0.2s ease;
+    }
+
+    @keyframes modal-in {
+      from { transform: scale(0.92) translateY(20px); opacity: 0; }
+      to   { transform: scale(1) translateY(0); opacity: 1; }
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: var(--text);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      font-size: 1.1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      transition: background var(--transition);
+    }
+
+    .modal-close:hover { background: rgba(255,255,255,0.18); }
+
+    .modal-game-thumb {
+      aspect-ratio: 16/9;
+      width: 100%;
+    }
+
+    .modal-game-thumb .thumb-placeholder {
+      font-size: 5rem;
+    }
+
+    .modal-body {
+      padding: 1.4rem 1.5rem 1.8rem;
+    }
+
+    .modal-body h3 {
+      font-size: 1.5rem;
+      font-weight: 900;
+      margin-bottom: 0.5rem;
+    }
+
+    .modal-body p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 1.2rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+    }
+
+    .modal-actions .btn {
+      justify-content: center;
+      padding: 0.75rem 1.2rem;
+      font-size: 0.95rem;
+    }
+
+    /* Game frame overlay */
+    .game-frame-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #000;
+      z-index: 2000;
+      flex-direction: column;
+    }
+
+    .game-frame-overlay.open {
+      display: flex;
+    }
+
+    .frame-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 1rem;
+      background: var(--surface2);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+    }
+
+    .frame-title {
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .frame-close {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: var(--text);
+      padding: 0.4rem 0.9rem;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+
+    .frame-close:hover { background: rgba(255,255,255,0.18); }
+
+    #game-iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #000;
+    }
+
+    /* ─── About section ─── */
+    .about-section {
+      background: var(--bg);
+      padding: 5rem 1.5rem;
+      text-align: center;
+    }
+
+    .about-inner {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .about-inner h2 {
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .about-inner p {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      margin-bottom: 1rem;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.2rem;
+      margin-top: 3rem;
+      text-align: left;
+    }
+
+    .feature {
+      background: var(--surface);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      padding: 1.3rem;
+    }
+
+    .feature-icon {
+      font-size: 1.8rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .feature h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+
+    .feature p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
+    /* ─── Footer ─── */
+    footer {
+      background: var(--surface);
+      border-top: 1px solid rgba(255,255,255,0.06);
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+    }
+
+    .footer-logo {
+      font-size: 1.4rem;
+      font-weight: 900;
+      margin-bottom: 0.5rem;
+    }
+
+    footer p {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    footer nav {
+      margin-top: 1rem;
+    }
+
+    footer nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin: 0 0.6rem;
+      transition: color var(--transition);
+    }
+
+    footer nav a:hover { color: var(--text); }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 600px) {
+      .nav-links { display: none; }
+
+      .games-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .modal { max-width: 100%; border-radius: var(--radius) var(--radius) 0 0; }
+      .modal-overlay { align-items: flex-end; }
+    }
+
+    /* ─── Reduced motion ─── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+
+    /* ─── High contrast mode ─── */
+    @media (forced-colors: active) {
+      .btn-primary, .hero-cta { background: ButtonText; color: ButtonFace; border: 2px solid ButtonText; }
+      .game-card { border: 2px solid CanvasText; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Skip navigation for screen readers -->
+  <a class="skip-link" href="#games">Skip to games</a>
+
+  <!-- ─── HEADER ─── -->
+  <header role="banner">
+    <nav class="nav" aria-label="Main navigation">
+      <a href="#" class="logo" aria-label="Prism Play — home">
+        <div class="logo-icon" aria-hidden="true">🎮</div>
+        <span class="logo-name gradient-text">Prism Play</span>
+      </a>
+      <ul class="nav-links" role="list">
+        <li><a href="#games">Games</a></li>
+        <li><a href="#about">About</a></li>
+      </ul>
+    </nav>
+
+    <div class="hero">
+      <h1><span class="gradient-text">Play anywhere.<br>No download needed.</span></h1>
+      <p>Discover fun mobile games — play instantly in your browser or grab them from your favourite app store.</p>
+      <a href="#games" class="hero-cta" aria-label="Browse all games">
+        <span aria-hidden="true">🕹️</span> Browse Games
+      </a>
+    </div>
+
+    <!-- Decorative wave -->
+    <div class="wave" aria-hidden="true">
+      <svg viewBox="0 0 1440 60" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+        <path d="M0,30 C360,60 1080,0 1440,30 L1440,60 L0,60 Z" fill="#161628"/>
+      </svg>
+    </div>
+  </header>
+
+  <!-- ─── GAMES SECTION ─── -->
+  <main>
+    <section id="games" aria-labelledby="games-heading">
+      <div class="section-header">
+        <p class="section-label" aria-hidden="true">🌈 The Library</p>
+        <h2 id="games-heading">All Games</h2>
+        <p>Tap a card to learn more and start playing or downloading.</p>
+      </div>
+
+      <!-- Filter pills -->
+      <div class="filter-bar" role="group" aria-label="Filter games by genre">
+        <button class="filter-btn" aria-pressed="true" data-filter="all" onclick="filterGames(this)">All Games</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Puzzle" onclick="filterGames(this)">🧩 Puzzle</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Physics" onclick="filterGames(this)">🔮 Physics</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Arcade" onclick="filterGames(this)">🕹️ Arcade</button>
+      </div>
+
+      <!-- ─── GAME CARDS ─────────────────────────────────────── -->
+      <!--
+        HOW TO ADD / UPDATE GAMES
+        ──────────────────────────
+        Each .game-card has:
+          data-type="browser"  → "Play Now" button (set data-url to your hosted game's index.html)
+          data-type="download" → App Store / Google Play links (set data-ios / data-android)
+
+        THUMBNAIL: Replace the emoji in .thumb-placeholder with an <img> tag:
+          <img src="screenshot.png" alt="Screenshot of Game Name" />
+
+        PLAY URL: Point data-url at the index.html inside your unzipped game folder.
+        Copy & paste a card block to add more games.
+      -->
+
+      <div class="games-grid" id="games-grid" role="list">
+
+        <!-- Game 1 — Fuse (2048 merge) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Fuse"
+          data-desc="Slide and merge numbered tiles to reach 2048. How high can you go before the board fills up?"
+          data-genre="Puzzle · Merge"
+          data-color="#f7971e,#ff3cac"
+          data-url="dist/fuse/index.html"
+          data-emoji="🔢"
+          aria-label="Fuse — Puzzle merge game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#f7971e,#ff3cac);" aria-hidden="true">
+            <div class="thumb-placeholder">🔢</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Puzzle · Merge</p>
+            <h3 class="game-name">Fuse</h3>
+            <p class="game-desc">Slide and merge numbered tiles to reach 2048. How high can you go before the board fills up?</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 2 — Orbit (Suika physics) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Orbit"
+          data-desc="Drop planets into a gravitational field and watch them collide, merge, and grow. Don't let them escape!"
+          data-genre="Physics · Casual"
+          data-color="#2b86c5,#a259ff"
+          data-url="dist/orbit/index.html"
+          data-emoji="🔮"
+          aria-label="Orbit — Physics casual game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#2b86c5,#a259ff);" aria-hidden="true">
+            <div class="thumb-placeholder">🔮</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Physics · Casual</p>
+            <h3 class="game-name">Orbit</h3>
+            <p class="game-desc">Drop planets into a gravitational field and watch them collide, merge, and grow. Don't let them escape!</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 3 — Stack (timing tower) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Stack"
+          data-desc="Tap at the perfect moment to land each block. Miss and your tower shrinks. How tall can you build it?"
+          data-genre="Arcade · Timing"
+          data-color="#00d2ff,#a8ff78"
+          data-url="dist/stack/index.html"
+          data-emoji="🏗️"
+          aria-label="Stack — Arcade timing game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#00d2ff,#a8ff78);" aria-hidden="true">
+            <div class="thumb-placeholder">🏗️</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Arcade · Timing</p>
+            <h3 class="game-name">Stack</h3>
+            <p class="game-desc">Tap at the perfect moment to land each block. Miss and your tower shrinks. How tall can you build it?</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 4 — Gem Drop (match-3) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Gem Drop"
+          data-desc="Match three or more sparkling gems to clear the board. Chain combos and beat every level!"
+          data-genre="Puzzle · Match-3"
+          data-color="#ff3cac,#784ba0"
+          data-url="dist/match3/index.html"
+          data-emoji="💎"
+          aria-label="Gem Drop — Puzzle match-3 game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#ff3cac,#784ba0);" aria-hidden="true">
+            <div class="thumb-placeholder">💎</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Puzzle · Match-3</p>
+            <h3 class="game-name">Gem Drop</h3>
+            <p class="game-desc">Match three or more sparkling gems to clear the board. Chain combos and beat every level!</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+      </div><!-- /games-grid -->
+    </section>
+  </main>
+
+  <!-- ─── ABOUT ─── -->
+  <section id="about" class="about-section" aria-labelledby="about-heading">
+    <div class="about-inner">
+      <p class="section-label" aria-hidden="true">✨ Our Mission</p>
+      <h2 id="about-heading">Games for <span class="gradient-text">everyone</span></h2>
+      <p>
+        Prism Play is a home for independently made mobile games. Every title is crafted with care — and designed to work on any device, connection, or ability level.
+      </p>
+      <p>
+        Play instantly in your browser, or take the games with you by downloading from the App Store or Google Play.
+      </p>
+
+      <div class="features" role="list">
+        <div class="feature" role="listitem">
+          <div class="feature-icon" aria-hidden="true">⚡</div>
+          <h3>Instant Play</h3>
+          <p>No login, no waiting. Browser games launch immediately.</p>
+        </div>
+        <div class="feature" role="listitem">
+          <div class="feature-icon" aria-hidden="true">♿</div>
+          <h3>Accessible</h3>
+          <p>Keyboard navigable, screen-reader friendly, high-contrast supported.</p>
+        </div>
+        <div class="feature" role="listitem">
+          <div class="feature-icon" aria-hidden="true">📱</div>
+          <h3>Mobile-First</h3>
+          <p>Built for touchscreens and small screens from day one.</p>
+        </div>
+        <div class="feature" role="listitem">
+          <div class="feature-icon" aria-hidden="true">🆓</div>
+          <h3>Free to Play</h3>
+          <p>All games on Prism Play are free. No paywalls, no ads.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ─── -->
+  <footer role="contentinfo">
+    <div class="footer-logo gradient-text">Prism Play</div>
+    <p>Made with 💜 — &copy; <span id="year"></span> Prism Play. All rights reserved.</p>
+    <nav aria-label="Footer navigation">
+      <a href="#games">Games</a>
+      <a href="#about">About</a>
+    </nav>
+  </footer>
+
+  <!-- ─── GAME DETAIL MODAL ─── -->
+  <div
+    class="modal-overlay"
+    id="modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modal-title"
+    aria-hidden="true"
+    onclick="closeModal(event)"
+  >
+    <div class="modal" id="modal">
+      <button class="modal-close" aria-label="Close game details" onclick="closeModal(null, true)">✕</button>
+      <div class="modal-game-thumb" id="modal-thumb" aria-hidden="true"></div>
+      <div class="modal-body">
+        <p class="game-genre" id="modal-genre" style="color:var(--text-muted);font-size:0.78rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem;"></p>
+        <h3 id="modal-title"></h3>
+        <p id="modal-desc"></p>
+        <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── IN-BROWSER GAME FRAME ─── -->
+  <div
+    class="game-frame-overlay"
+    id="frame-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Game player"
+    aria-hidden="true"
+  >
+    <div class="frame-bar">
+      <span class="frame-title" id="frame-title"></span>
+      <button class="frame-close" onclick="closeFrame()" aria-label="Exit game and return to Prism Play">✕ Exit Game</button>
+    </div>
+    <iframe id="game-iframe" title="Game player" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock"></iframe>
+  </div>
+
+  <!-- ─── SCRIPTS ─── -->
+  <script>
+    // Year in footer
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // ── Filter games ──
+    function filterGames(btn) {
+      const filter = btn.dataset.filter;
+      document.querySelectorAll('.filter-btn').forEach(b => b.setAttribute('aria-pressed', 'false'));
+      btn.setAttribute('aria-pressed', 'true');
+
+      document.querySelectorAll('.game-card').forEach(card => {
+        const match = filter === 'all' || card.dataset.genre.includes(filter);
+        card.style.display = match ? '' : 'none';
+        card.setAttribute('aria-hidden', String(!match));
+      });
+    }
+
+    // ── Modal ──
+    let lastFocused = null;
+
+    function openModal(card) {
+      lastFocused = document.activeElement;
+      const overlay  = document.getElementById('modal-overlay');
+      const modal    = document.getElementById('modal');
+      const isBrowser = card.dataset.type === 'browser';
+
+      // Populate
+      document.getElementById('modal-title').textContent  = card.dataset.name;
+      document.getElementById('modal-desc').textContent   = card.dataset.desc;
+      document.getElementById('modal-genre').textContent  = card.dataset.genre;
+
+      // Thumb
+      const thumbEl = document.getElementById('modal-thumb');
+      const [c1, c2] = (card.dataset.color || '#ff3cac,#784ba0').split(',');
+      thumbEl.innerHTML = `<div class="thumb-placeholder" style="background:linear-gradient(135deg,${c1},${c2});width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:5rem;" aria-hidden="true">${card.dataset.emoji || '🎮'}</div>`;
+
+      // Actions
+      const actionsEl = document.getElementById('modal-actions');
+      if (isBrowser) {
+        actionsEl.innerHTML = `
+          <button class="btn btn-primary" onclick="launchGame('${card.dataset.url}', '${card.dataset.name}')">
+            <span aria-hidden="true">▶</span> Play Now in Browser
+          </button>`;
+      } else {
+        actionsEl.innerHTML = `
+          ${card.dataset.ios ? `<a class="btn btn-store" href="${card.dataset.ios}" target="_blank" rel="noopener noreferrer" aria-label="Download ${card.dataset.name} on the App Store">
+            🍎 App Store
+          </a>` : ''}
+          ${card.dataset.android ? `<a class="btn btn-store" href="${card.dataset.android}" target="_blank" rel="noopener noreferrer" aria-label="Download ${card.dataset.name} on Google Play">
+            🤖 Google Play
+          </a>` : ''}`;
+      }
+
+      overlay.classList.add('open');
+      overlay.setAttribute('aria-hidden', 'false');
+      // Focus the close button
+      setTimeout(() => modal.querySelector('.modal-close').focus(), 50);
+
+      // Trap focus
+      document.addEventListener('keydown', trapModalFocus);
+    }
+
+    function closeModal(event, force) {
+      if (!force && event && event.target !== document.getElementById('modal-overlay')) return;
+      const overlay = document.getElementById('modal-overlay');
+      overlay.classList.remove('open');
+      overlay.setAttribute('aria-hidden', 'true');
+      document.removeEventListener('keydown', trapModalFocus);
+      if (lastFocused) lastFocused.focus();
+    }
+
+    function trapModalFocus(e) {
+      if (e.key === 'Escape') { closeModal(null, true); return; }
+      if (e.key !== 'Tab') return;
+      const modal = document.getElementById('modal');
+      const focusable = modal.querySelectorAll('button, a[href], [tabindex]:not([tabindex="-1"])');
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
+      else            { if (document.activeElement === last)  { e.preventDefault(); first.focus(); } }
+    }
+
+    // ── Game frame ──
+    function launchGame(url, name) {
+      closeModal(null, true);
+      const overlay = document.getElementById('frame-overlay');
+      document.getElementById('frame-title').textContent = name;
+      document.getElementById('game-iframe').src = url;
+      overlay.classList.add('open');
+      overlay.setAttribute('aria-hidden', 'false');
+      document.getElementById('frame-overlay').querySelector('.frame-close').focus();
+      document.addEventListener('keydown', trapFrameFocus);
+    }
+
+    function closeFrame() {
+      const overlay = document.getElementById('frame-overlay');
+      document.getElementById('game-iframe').src = '';
+      overlay.classList.remove('open');
+      overlay.setAttribute('aria-hidden', 'true');
+      document.removeEventListener('keydown', trapFrameFocus);
+      if (lastFocused) lastFocused.focus();
+    }
+
+    function trapFrameFocus(e) {
+      if (e.key === 'Escape') closeFrame();
+    }
+  </script>
+</body>
+</html>
