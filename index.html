@@ -759,6 +759,7 @@
         <button class="filter-btn" aria-pressed="false" data-filter="Idle" onclick="filterGames(this)">💰 Idle</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Daily" onclick="filterGames(this)">🧠 Daily</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Party" onclick="filterGames(this)">🍹 Party</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Strategy" onclick="filterGames(this)">🛡️ Strategy</button>
       </div>
 
       <!-- ─── GAME CARDS ─────────────────────────────────────── -->
@@ -1060,6 +1061,35 @@
             <p class="game-genre" aria-hidden="true">Arcade · Puzzle</p>
             <h3 class="game-name">Burst</h3>
             <p class="game-desc">Aim, pop 3+ matching bubbles, and don't let the descending ceiling reach your shooter.</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 13 — Outpost (tower defense) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Outpost"
+          data-desc="Build and upgrade turrets along a winding path to hold the line against endless escalating waves."
+          data-genre="Strategy · Tower Defense"
+          data-color="#5ef79b,#ffd166"
+          data-url="dist/td/index.html"
+          data-emoji="🛡️"
+          aria-label="Outpost — Strategy tower defense game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#5ef79b,#ffd166);" aria-hidden="true">
+            <div class="thumb-placeholder">🛡️</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Strategy · Tower Defense</p>
+            <h3 class="game-name">Outpost</h3>
+            <p class="game-desc">Build and upgrade turrets along a winding path to hold the line against endless escalating waves.</p>
             <div class="game-actions">
               <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
                 <span aria-hidden="true">▶</span> Play Now

@@ -1,0 +1,9 @@
+{
+  "slug": "td",
+  "title": "Outpost",
+  "genre": "td",
+  "tagline": "Build and upgrade turrets, hold the line against endless waves.",
+  "controls": "Tap empty cells to build, tap turrets to upgrade",
+  "tags": ["strategy", "tower-defense", "arcade", "casual", "mobile", "highscore"],
+  "created": "2026-06-16"
+}
