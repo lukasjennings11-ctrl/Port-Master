@@ -758,6 +758,7 @@
         <button class="filter-btn" aria-pressed="false" data-filter="Arcade" onclick="filterGames(this)">🕹️ Arcade</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Idle" onclick="filterGames(this)">💰 Idle</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Daily" onclick="filterGames(this)">🧠 Daily</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Party" onclick="filterGames(this)">🍹 Party</button>
       </div>
 
       <!-- ─── GAME CARDS ─────────────────────────────────────── -->
@@ -1001,6 +1002,35 @@
             <p class="game-genre" aria-hidden="true">Arcade · IO</p>
             <h3 class="game-name">Splat</h3>
             <p class="game-desc">Grow by eating, dodge the bigger blobs, and climb the rank counter in this single-player arena.</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 11 — Party Deck -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Party Deck"
+          data-desc="A repertoire of classic drinking & party games — Kings Cup, Never Have I Ever, Most Likely To, Categories, Ride the Bus, and Truth or Drink. Draw a card and follow the prompt."
+          data-genre="Party · Drinking"
+          data-color="#ffce54,#ff3cac"
+          data-url="dist/partydeck/index.html"
+          data-emoji="🍹"
+          aria-label="Party Deck — Party drinking game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#ffce54,#ff3cac);" aria-hidden="true">
+            <div class="thumb-placeholder">🍹</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Party · Drinking</p>
+            <h3 class="game-name">Party Deck</h3>
+            <p class="game-desc">A repertoire of classic drinking &amp; party games — Kings Cup, Never Have I Ever, Most Likely To, Categories, Ride the Bus, and Truth or Drink. Draw a card and follow the prompt.</p>
             <div class="game-actions">
               <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
                 <span aria-hidden="true">▶</span> Play Now
