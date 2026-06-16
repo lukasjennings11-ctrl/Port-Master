@@ -1,0 +1,9 @@
+{
+  "slug": "equate",
+  "title": "Equate",
+  "genre": "equate",
+  "tagline": "Guess the hidden 8-character equation in 6 tries.",
+  "controls": "Type digits/operators · Enter to submit · Backspace to delete",
+  "tags": ["math", "puzzle", "daily", "logic", "casual", "mobile", "highscore"],
+  "created": "2026-06-16"
+}

@@ -1,0 +1,9 @@
+{
+  "slug": "match3",
+  "title": "Gem Drop",
+  "genre": "match3",
+  "tagline": "Swap gems, chain combos, chase your best score.",
+  "controls": "Tap a gem then tap a neighbour to swap",
+  "tags": ["puzzle", "casual", "match3", "mobile", "highscore", "gems"],
+  "created": "2026-06-15"
+}

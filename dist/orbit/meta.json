@@ -1,0 +1,9 @@
+{
+  "slug": "orbit",
+  "title": "Orbit",
+  "genre": "suika",
+  "tagline": "Drop and merge cosmic orbs — fuse your way to the star.",
+  "controls": "Tap / move to aim, release to drop",
+  "tags": ["puzzle", "casual", "physics", "merge", "mobile", "suika"],
+  "created": "2026-06-15"
+}

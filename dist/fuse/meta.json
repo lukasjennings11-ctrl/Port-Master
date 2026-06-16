@@ -1,0 +1,9 @@
+{
+  "slug": "fuse",
+  "title": "Fuse",
+  "genre": "merge",
+  "tagline": "Swipe to fuse matching tiles and chase 2048.",
+  "controls": "Swipe or arrow keys",
+  "tags": ["puzzle", "casual", "mobile", "highscore", "2048"],
+  "created": "2026-06-15"
+}

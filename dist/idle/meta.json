@@ -1,0 +1,9 @@
+{
+  "slug": "idle",
+  "title": "Coin Forge",
+  "genre": "idle",
+  "tagline": "Click to mine, hire helpers, watch your fortune snowball.",
+  "controls": "Tap the ore to mine · tap upgrades to buy",
+  "tags": ["idle", "incremental", "clicker", "casual", "mobile", "highscore"],
+  "created": "2026-06-16"
+}

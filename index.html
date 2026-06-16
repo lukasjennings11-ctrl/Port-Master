@@ -756,6 +756,8 @@
         <button class="filter-btn" aria-pressed="false" data-filter="Puzzle" onclick="filterGames(this)">🧩 Puzzle</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Physics" onclick="filterGames(this)">🔮 Physics</button>
         <button class="filter-btn" aria-pressed="false" data-filter="Arcade" onclick="filterGames(this)">🕹️ Arcade</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Idle" onclick="filterGames(this)">💰 Idle</button>
+        <button class="filter-btn" aria-pressed="false" data-filter="Daily" onclick="filterGames(this)">🧠 Daily</button>
       </div>
 
       <!-- ─── GAME CARDS ─────────────────────────────────────── -->
@@ -883,6 +885,122 @@
             <p class="game-genre" aria-hidden="true">Puzzle · Match-3</p>
             <h3 class="game-name">Gem Drop</h3>
             <p class="game-desc">Match three or more sparkling gems to clear the board. Chain combos and beat every level!</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 5 — Coin Forge (idle clicker) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Coin Forge"
+          data-desc="Tap to mine, hire helpers, and watch your fortune snowball — even while you're away."
+          data-genre="Idle · Clicker"
+          data-color="#ffb347,#ff3cac"
+          data-url="dist/idle/index.html"
+          data-emoji="🪙"
+          aria-label="Coin Forge — Idle clicker game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#ffb347,#ff3cac);" aria-hidden="true">
+            <div class="thumb-placeholder">🪙</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Idle · Clicker</p>
+            <h3 class="game-name">Coin Forge</h3>
+            <p class="game-desc">Tap to mine, hire helpers, and watch your fortune snowball — even while you're away.</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 6 — Dash Lanes (endless runner) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Dash Lanes"
+          data-desc="Tap to switch lanes, dodge the traffic, and outrun your best score as the speed keeps climbing."
+          data-genre="Arcade · Runner"
+          data-color="#00d2ff,#784ba0"
+          data-url="dist/runner/index.html"
+          data-emoji="🏃"
+          aria-label="Dash Lanes — Arcade runner game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#00d2ff,#784ba0);" aria-hidden="true">
+            <div class="thumb-placeholder">🏃</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Arcade · Runner</p>
+            <h3 class="game-name">Dash Lanes</h3>
+            <p class="game-desc">Tap to switch lanes, dodge the traffic, and outrun your best score as the speed keeps climbing.</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 7 — Five (daily word puzzle) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Five"
+          data-desc="Guess the 5-letter word in 6 tries. One puzzle a day, shared by everyone — keep your streak alive."
+          data-genre="Daily · Word"
+          data-color="#a8ff78,#2b86c5"
+          data-url="dist/wordle/index.html"
+          data-emoji="🔤"
+          aria-label="Five — Daily word puzzle game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#a8ff78,#2b86c5);" aria-hidden="true">
+            <div class="thumb-placeholder">🔤</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Daily · Word</p>
+            <h3 class="game-name">Five</h3>
+            <p class="game-desc">Guess the 5-letter word in 6 tries. One puzzle a day, shared by everyone — keep your streak alive.</p>
+            <div class="game-actions">
+              <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
+                <span aria-hidden="true">▶</span> Play Now
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Game 8 — Equate (daily math puzzle) -->
+        <article
+          class="game-card"
+          role="listitem"
+          data-type="browser"
+          data-name="Equate"
+          data-desc="Guess the hidden 8-character equation in 6 tries. A daily math puzzle for logic lovers."
+          data-genre="Daily · Math"
+          data-color="#2b86c5,#ff3cac"
+          data-url="dist/equate/index.html"
+          data-emoji="🧮"
+          aria-label="Equate — Daily math puzzle game, playable in browser"
+        >
+          <span class="game-badge badge-browser" aria-label="Play in browser">▶ Browser</span>
+          <div class="game-thumb" style="background:linear-gradient(135deg,#2b86c5,#ff3cac);" aria-hidden="true">
+            <div class="thumb-placeholder">🧮</div>
+          </div>
+          <div class="game-body">
+            <p class="game-genre" aria-hidden="true">Daily · Math</p>
+            <h3 class="game-name">Equate</h3>
+            <p class="game-desc">Guess the hidden 8-character equation in 6 tries. A daily math puzzle for logic lovers.</p>
             <div class="game-actions">
               <button class="btn btn-primary" onclick="openModal(this.closest('.game-card'))">
                 <span aria-hidden="true">▶</span> Play Now

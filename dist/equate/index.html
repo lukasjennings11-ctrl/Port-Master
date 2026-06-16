@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0f12" />
+  <title>Equate — daily equation puzzle</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="hud">
+      <div class="brand">EQUATE</div>
+      <div class="controls">
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+        <button id="practice" class="text-btn">Practice</button>
+      </div>
+    </header>
+
+    <div class="subbar">
+      <div class="streak" id="streak">🔥 0&nbsp;day streak</div>
+      <div class="mode-badge" id="mode-badge">Daily</div>
+    </div>
+
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+    </div>
+
+    <p class="msg" id="msg"></p>
+
+    <div class="keyboard" id="keyboard"></div>
+
+    <p class="hint">Guess a true equation, 8 characters · <b>Enter</b> to submit</p>
+
+    <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+      <div class="panel">
+        <h1 id="ov-title">Solved!</h1>
+        <div class="word" id="ov-word">12+34=46</div>
+        <p id="ov-sub">Nice work.</p>
+        <div class="ov-scores">
+          <div><span class="label">Guesses</span><b id="ov-guesses">0</b></div>
+          <div><span class="label">Streak</span><b id="ov-streak">0</b></div>
+        </div>
+        <div class="ov-actions">
+          <button id="ov-share" class="cta secondary">Copy result</button>
+          <button id="ov-close" class="cta">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="shared/juice.js?v=1"></script>
+  <script src="shared/retention.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>

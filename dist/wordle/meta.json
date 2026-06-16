@@ -1,0 +1,9 @@
+{
+  "slug": "wordle",
+  "title": "Five",
+  "genre": "wordle",
+  "tagline": "Guess the 5-letter word in 6 tries. One puzzle a day, shared by everyone.",
+  "controls": "Type letters · Enter to submit · Backspace to delete",
+  "tags": ["word", "puzzle", "daily", "casual", "mobile", "highscore"],
+  "created": "2026-06-16"
+}
