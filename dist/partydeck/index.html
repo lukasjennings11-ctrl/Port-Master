@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Party Deck — Prism Play</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Nunito',system-ui,sans-serif;background:#0d0d1a;color:#f0eeff;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:1.5rem 1rem;}
+  h1{font-weight:900;margin-bottom:0.3rem;background:linear-gradient(90deg,#ff3cac,#784ba0,#2b86c5,#00d2ff,#a8ff78);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  .sub{color:#9b97bb;margin-bottom:1.2rem;text-align:center;max-width:520px;}
+  .notice{color:#ffce54;font-size:0.85rem;text-align:center;max-width:480px;margin-bottom:1.2rem;}
+  a.back{color:#9b97bb;text-decoration:none;font-weight:700;margin-bottom:1rem;}
+  a.back:hover{color:#fff;}
+  .game-picker{display:flex;flex-wrap:wrap;gap:0.6rem;justify-content:center;margin-bottom:1.5rem;max-width:600px;}
+  .pill{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:50px;padding:0.5rem 1.1rem;font-weight:700;font-size:0.9rem;cursor:pointer;color:#f0eeff;font-family:inherit;}
+  .pill.active{background:linear-gradient(135deg,#ff3cac,#2b86c5);border-color:transparent;}
+  .deck-area{display:flex;flex-direction:column;align-items:center;gap:1.2rem;}
+  .card{width:260px;min-height:170px;border-radius:16px;background:#fff;color:#111;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:1.4rem;font-weight:800;box-shadow:0 12px 32px rgba(0,0,0,0.45);font-size:1.15rem;line-height:1.4;}
+  .card .rule-title{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.08em;color:#784ba0;font-weight:900;margin-bottom:0.6rem;}
+  .card.empty{background:rgba(255,255,255,0.05);border:2px dashed rgba(255,255,255,0.15);box-shadow:none;color:#9b97bb;font-weight:700;font-size:1rem;}
+  .controls{display:flex;gap:1rem;}
+  .btn{background:linear-gradient(135deg,#ff3cac,#2b86c5);color:#fff;border:none;border-radius:50px;padding:0.85rem 2.2rem;font-weight:700;font-size:1.05rem;cursor:pointer;font-family:inherit;}
+  .btn.secondary{background:rgba(255,255,255,0.08);}
+  .count{color:#9b97bb;font-size:0.9rem;}
+</style>
+</head>
+<body>
+  <a class="back" href="../../index.html">&larr; Back to Prism Play</a>
+  <h1>Party Deck</h1>
+  <p class="sub">A repertoire of classic party &amp; drinking games. Pick a mode, draw a card, follow the prompt. Drink responsibly — swap in water/soda for any "drink" prompt if you'd rather keep it sober.</p>
+  <p class="notice">21+ where applicable. Non-alcoholic play is always an option — the cards work the same either way.</p>
+
+  <div class="game-picker" id="picker"></div>
+
+  <div class="deck-area">
+    <div class="card empty" id="card">Pick a mode, then press Draw</div>
+    <div class="count" id="count"></div>
+    <div class="controls">
+      <button class="btn" id="draw-btn" onclick="draw()">Draw Card</button>
+      <button class="btn secondary" id="reset-btn" onclick="reshuffle()">Reshuffle</button>
+    </div>
+  </div>
+
+<script>
+const DECKS = {
+  kingscup: {
+    label: "👑 Kings Cup",
+    rules: [
+      "ACE — Waterfall: everyone drinks, you stop first, rest follow in order.",
+      "2 — You: pick someone to drink.",
+      "3 — Me: you drink.",
+      "4 — Floor: last to touch the floor drinks.",
+      "5 — Guys: all guys drink.",
+      "6 — Chicks: all girls drink.",
+      "7 — Heaven: last to raise a hand drinks.",
+      "8 — Mate: pick a drinking buddy, they drink whenever you do for the rest of the game.",
+      "9 — Rhyme: say a word, go around rhyming until someone fails — they drink.",
+      "10 — Categories: name a category, go around naming things in it until someone fails.",
+      "JACK — Make a Rule: create a new rule everyone must follow or drink.",
+      "QUEEN — Question Master: anyone who answers your questions drinks, until the next Queen is drawn.",
+      "KING — Pour: pour a bit of your drink into the center King's Cup. Whoever draws the last King drinks it all."
+    ]
+  },
+  nhid: {
+    label: "🙊 Never Have I Ever",
+    rules: [
+      "Never have I ever skipped work/school by faking sick.",
+      "Never have I ever sent a text to the wrong person.",
+      "Never have I ever stalked an ex on social media.",
+      "Never have I ever pretended to like a gift.",
+      "Never have I ever gone the whole day without showering.",
+      "Never have I ever lied about my age.",
+      "Never have I ever cried during a movie.",
+      "Never have I ever broken something and blamed someone else.",
+      "Never have I ever ghosted someone.",
+      "Never have I ever forgotten someone's name right after meeting them.",
+      "Never have I ever eaten food off the floor.",
+      "Never have I ever pretended to be sick to avoid plans.",
+      "Never have I ever sung in the shower at full volume.",
+      "Never have I ever had a crush on a friend's partner.",
+      "Never have I ever snooped through someone's phone."
+    ]
+  },
+  mostlikely: {
+    label: "🎯 Most Likely To",
+    rules: [
+      "Most likely to become famous.",
+      "Most likely to forget their own birthday.",
+      "Most likely to win the lottery and lose the ticket.",
+      "Most likely to survive a zombie apocalypse.",
+      "Most likely to cry at a wedding (their own or someone else's).",
+      "Most likely to start a business on a whim.",
+      "Most likely to be running late to their own funeral.",
+      "Most likely to adopt every stray animal they see.",
+      "Most likely to talk their way out of a speeding ticket.",
+      "Most likely to fall asleep at a party.",
+      "Most likely to become a hermit.",
+      "Most likely to accidentally start a conspiracy theory."
+    ]
+  },
+  categories: {
+    label: "📋 Categories",
+    rules: [
+      "Category: Types of cheese. Go around — first to hesitate or repeat drinks.",
+      "Category: 80s movies.",
+      "Category: Things found in a kitchen.",
+      "Category: Countries in Europe.",
+      "Category: Famous Toms.",
+      "Category: Pizza toppings.",
+      "Category: Things that are sticky.",
+      "Category: Dance moves.",
+      "Category: Boy band names.",
+      "Category: Things you'd find on a desert island.",
+      "Category: Excuses for being late.",
+      "Category: Superheroes."
+    ]
+  },
+  rideoflame: {
+    label: "🚌 Ride the Bus",
+    rules: [
+      "Round 1 — Red or Black: guess the color of the next card. Wrong guess, drink.",
+      "Round 2 — Higher or Lower: guess if the next card is higher or lower. Wrong, drink.",
+      "Round 3 — In Between or Outside: guess if the next card falls between the previous two. Wrong, drink.",
+      "Round 4 — Suit: guess the suit of the next card. Wrong, drink twice.",
+      "Final — The Bus: dealer flips your row of cards face up one at a time; for each face card you must drink before the next flip."
+    ]
+  },
+  truthordrink: {
+    label: "🗣️ Truth or Drink",
+    rules: [
+      "What's the most embarrassing thing in your search history?",
+      "What's a lie you told that someone still believes?",
+      "What's the worst gift you've ever given?",
+      "Who in this room would you trade lives with for a day?",
+      "What's something you pretend to understand but don't?",
+      "What's your most irrational fear?",
+      "What's the last thing you Googled?",
+      "What's a rule you secretly think is dumb but follow anyway?",
+      "What's the pettiest thing you've ever done?",
+      "Who was your most embarrassing celebrity crush?",
+      "What's a secret talent nobody knows about?",
+      "What's the worst advice you've ever given someone?"
+    ]
+  }
+};
+
+let currentDeckKey = null;
+let pool = [];
+
+function buildPicker(){
+  const picker = document.getElementById('picker');
+  picker.innerHTML = '';
+  Object.keys(DECKS).forEach(key => {
+    const btn = document.createElement('button');
+    btn.className = 'pill';
+    btn.textContent = DECKS[key].label;
+    btn.onclick = () => selectDeck(key, btn);
+    picker.appendChild(btn);
+  });
+}
+
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
+}
+
+function selectDeck(key, btnEl){
+  currentDeckKey = key;
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  btnEl.classList.add('active');
+  pool = shuffle(DECKS[key].rules);
+  document.getElementById('card').className = 'card empty';
+  document.getElementById('card').textContent = 'Press Draw to start ' + DECKS[key].label;
+  updateCount();
+}
+
+function updateCount(){
+  document.getElementById('count').textContent = currentDeckKey
+    ? pool.length + ' card' + (pool.length===1?'':'s') + ' left'
+    : '';
+}
+
+function draw(){
+  if(!currentDeckKey){ return; }
+  if(pool.length === 0){ pool = shuffle(DECKS[currentDeckKey].rules); }
+  const next = pool.pop();
+  const cardEl = document.getElementById('card');
+  cardEl.className = 'card';
+  cardEl.innerHTML = '<div class="rule-title">' + DECKS[currentDeckKey].label + '</div>' + next;
+  updateCount();
+}
+
+function reshuffle(){
+  if(!currentDeckKey){ return; }
+  pool = shuffle(DECKS[currentDeckKey].rules);
+  document.getElementById('card').className = 'card empty';
+  document.getElementById('card').textContent = 'Deck reshuffled — press Draw';
+  updateCount();
+}
+
+buildPicker();
+</script>
+</body>
+</html>

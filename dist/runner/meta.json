@@ -1,0 +1,9 @@
+{
+  "slug": "runner",
+  "title": "Dash Lanes",
+  "genre": "runner",
+  "tagline": "Tap to switch lanes, dodge the traffic, outrun your best.",
+  "controls": "Tap left/right side of screen or arrow keys to switch lanes",
+  "tags": ["arcade", "casual", "runner", "endless", "mobile", "highscore"],
+  "created": "2026-06-16"
+}

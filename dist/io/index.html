@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#061018" />
+  <title>Splat — grow or get eaten</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="hud">
+      <div class="brand">SPLAT</div>
+      <div class="scores">
+        <div class="score-box"><span class="label">MASS</span><span id="score">10</span></div>
+        <div class="score-box"><span class="label">BEST</span><span id="best">0</span></div>
+      </div>
+    </header>
+
+    <div class="subbar">
+      <div class="streak" id="streak">🔥 0&nbsp;day streak</div>
+      <div class="rank-box">Rank <span id="rank">1</span>/<span id="rankTotal">13</span></div>
+      <div class="controls">
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+        <button id="new"  class="text-btn">New</button>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <canvas id="game" aria-label="Splat game arena"></canvas>
+      <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+        <div class="panel">
+          <h1 id="ov-title">Eaten!</h1>
+          <p  id="ov-sub">A bigger blob got you.</p>
+          <div class="ov-scores">
+            <div><span class="label">Mass</span><b id="ov-score">0</b></div>
+            <div><span class="label">Best</span><b id="ov-best">0</b></div>
+          </div>
+          <button id="ov-again" class="cta">Respawn</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="hint">Drag to move · eat smaller blobs · avoid bigger ones</p>
+  </div>
+
+  <script src="shared/juice.js?v=1"></script>
+  <script src="shared/retention.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>

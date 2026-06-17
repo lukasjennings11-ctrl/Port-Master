@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a12" />
+  <title>Stack — build your tower</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="hud">
+      <div class="brand">STACK</div>
+      <div class="scores">
+        <div class="score-box"><span class="label">SCORE</span><span id="score">0</span></div>
+        <div class="score-box"><span class="label">BEST</span><span id="best">0</span></div>
+      </div>
+    </header>
+
+    <div class="subbar">
+      <div class="streak" id="streak">🔥 0&nbsp;day streak</div>
+      <div class="height-box">Floor <span id="floor">1</span></div>
+      <div class="controls">
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+        <button id="new"  class="text-btn">New</button>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <canvas id="game" aria-label="Stack game board"></canvas>
+      <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+        <div class="panel">
+          <h1 id="ov-title">Game Over</h1>
+          <p  id="ov-sub">Your tower crumbled.</p>
+          <div class="ov-scores">
+            <div><span class="label">Score</span><b id="ov-score">0</b></div>
+            <div><span class="label">Best</span><b id="ov-best">0</b></div>
+            <div><span class="label">Floor</span><b id="ov-floor">1</b></div>
+          </div>
+          <button id="ov-again" class="cta">Play again</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="hint">Tap / <b>Space</b> to drop · align perfectly for a <b>bonus</b></p>
+  </div>
+
+  <script src="shared/juice.js?v=1"></script>
+  <script src="shared/retention.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#120e0a" />
+  <title>Coin Forge — idle miner</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="hud">
+      <div class="brand">COIN FORGE</div>
+      <div class="controls">
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+        <button id="new"  class="text-btn">Reset</button>
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="coins"><span id="coins">0</span><span class="unit">coins</span></div>
+      <div class="cps">Earning <b id="cps">0</b> coins/sec</div>
+    </div>
+
+    <div class="subbar">
+      <div class="streak" id="streak">🔥 0&nbsp;day streak</div>
+    </div>
+
+    <div class="mine-wrap">
+      <button id="mine-btn" aria-label="Mine for coins">⛏️</button>
+      <div class="popups-layer" id="popups"></div>
+    </div>
+    <div class="click-power">+<b id="click-power">1</b> per tap</div>
+
+    <div class="shop-label">Upgrades</div>
+    <div class="shop" id="shop"></div>
+
+    <p class="hint">Tap the ore · buy helpers below · they earn coins even when you're away</p>
+
+    <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+      <div class="panel">
+        <h1>Welcome back!</h1>
+        <b class="big" id="ov-amount">+0 coins</b>
+        <p id="ov-sub">Your helpers kept mining while you were away.</p>
+        <button id="ov-close" class="cta">Collect</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="shared/juice.js?v=1"></script>
+  <script src="shared/retention.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>

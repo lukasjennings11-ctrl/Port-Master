@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0d18" />
+  <title>Burst — bubble shooter</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="hud">
+      <div class="brand">BURST</div>
+      <div class="scores">
+        <div class="score-box"><span class="label">SCORE</span><span id="score">0</span></div>
+        <div class="score-box"><span class="label">BEST</span><span id="best">0</span></div>
+      </div>
+    </header>
+
+    <div class="subbar">
+      <div class="streak" id="streak">🔥 0&nbsp;day streak</div>
+      <div class="shots-box">Next row in <span id="shotsLeft">6</span></div>
+      <div class="controls">
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+        <button id="new"  class="text-btn">New</button>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <canvas id="game" aria-label="Burst game board"></canvas>
+      <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+        <div class="panel">
+          <h1 id="ov-title">Overrun!</h1>
+          <p  id="ov-sub">The bubbles reached the bottom.</p>
+          <div class="ov-scores">
+            <div><span class="label">Score</span><b id="ov-score">0</b></div>
+            <div><span class="label">Best</span><b id="ov-best">0</b></div>
+          </div>
+          <button id="ov-again" class="cta">Play again</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="hint">Drag to aim, release to fire · pop 3+ same-color bubbles</p>
+  </div>
+
+  <script src="shared/juice.js?v=1"></script>
+  <script src="shared/retention.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>

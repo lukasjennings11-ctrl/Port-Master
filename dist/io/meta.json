@@ -1,0 +1,9 @@
+{
+  "slug": "io",
+  "title": "Splat",
+  "genre": "io",
+  "tagline": "Grow by eating, dodge the bigger blobs, top the arena.",
+  "controls": "Drag to move (or arrow keys/WASD)",
+  "tags": ["arcade", "io", "casual", "mobile", "highscore"],
+  "created": "2026-06-16"
+}

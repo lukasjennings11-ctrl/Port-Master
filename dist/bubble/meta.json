@@ -1,0 +1,9 @@
+{
+  "slug": "bubble",
+  "title": "Burst",
+  "genre": "bubble",
+  "tagline": "Aim, pop 3+ matching bubbles, don't let the ceiling reach you.",
+  "controls": "Drag to aim, release to fire (or arrow keys + space)",
+  "tags": ["arcade", "puzzle", "casual", "mobile", "highscore", "bubble-shooter"],
+  "created": "2026-06-16"
+}
