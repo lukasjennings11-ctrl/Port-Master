@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#080d1e"/>
+  <!-- Radial glow -->
+  <radialGradient id="g" cx="50%" cy="38%" r="55%">
+    <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.35"/>
+    <stop offset="100%" stop-color="#080d1e" stop-opacity="0"/>
+  </radialGradient>
+  <rect width="512" height="512" rx="96" fill="url(#g)"/>
+  <!-- Prism triangle -->
+  <polygon points="256,108 392,332 120,332" fill="none" stroke="#5b8cff" stroke-width="18" stroke-linejoin="round"/>
+  <!-- Refracted light rays -->
+  <line x1="120" y1="332" x2="64"  y2="388" stroke="#ff6b9d" stroke-width="12" stroke-linecap="round"/>
+  <line x1="120" y1="332" x2="88"  y2="410" stroke="#ffb347" stroke-width="10" stroke-linecap="round"/>
+  <line x1="120" y1="332" x2="116" y2="420" stroke="#7af0d0" stroke-width="8"  stroke-linecap="round"/>
+  <line x1="120" y1="332" x2="148" y2="416" stroke="#5b8cff" stroke-width="10" stroke-linecap="round"/>
+  <!-- Inner glow dot at apex -->
+  <circle cx="256" cy="108" r="8" fill="#5b8cff" opacity="0.9"/>
+  <!-- P P letters (subtle) -->
+  <text x="256" y="290" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="900" font-size="72" letter-spacing="8" fill="#eef2ff" opacity="0.88">PP</text>
+</svg>

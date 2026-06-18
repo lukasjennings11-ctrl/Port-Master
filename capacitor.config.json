@@ -1,0 +1,19 @@
+{
+  "appId": "com.prismplay.arcade",
+  "appName": "Prism Play",
+  "webDir": ".",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#080d1e",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false,
+      "launchAutoHide": true
+    },
+    "StatusBar": {
+      "style": "Dark",
+      "backgroundColor": "#080d1e"
+    }
+  }
+}

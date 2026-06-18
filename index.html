@@ -4,6 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#080d1e" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Prism Play" />
   <title>Prism Play — Ten Browser Games</title>
   <meta name="description" content="Ten browser games. No installs. No accounts. Pick one and play." />
   <meta property="og:title" content="Prism Play" />
@@ -581,6 +586,11 @@
       empty.style.display = visible === 0 ? 'block' : 'none';
     });
   });
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+  }
 </script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "sharp": "^0.35.1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
+    "@capacitor/ios": "^8.4.0",
+    "@capacitor/splash-screen": "^8.0.1"
+  }
+}
