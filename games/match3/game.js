@@ -83,12 +83,17 @@
     for (var r2 = 0; r2 < ROWS; r2++) {
       for (var c2 = 0; c2 < COLS; c2++) {
         var col;
-        do { col = rand(NCOLORS); } while (wouldMatch(r2, c2, col));
+        do { col = rand(activeColors()); } while (wouldMatch(r2, c2, col));
         grid[r2][c2] = col;
       }
     }
   }
 
+  function activeColors() {
+    if (score < 200) return 4;
+    if (score < 600) return 5;
+    return 6;
+  }
   function wouldMatch(r, c, col) {
     // horizontal: two to the left
     if (c >= 2 && grid[r][c-1] === col && grid[r][c-2] === col) return true;
@@ -225,7 +230,7 @@
       for (var c3 = 0; c3 < COLS; c3++) {
         for (var r4 = 0; r4 < ROWS; r4++) {
           if (grid[r4][c3] === -1) {
-            grid[r4][c3] = rand(NCOLORS);
+            grid[r4][c3] = rand(activeColors());
             var a3 = cellAnim[r4][c3];
             a3.dy = -1; a3.scale = 0.6; a3.alpha = 0;
             filled = true;

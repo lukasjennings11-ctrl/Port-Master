@@ -39,6 +39,8 @@
             <div><span class="label">Best</span><b id="ov-best">0</b></div>
           </div>
           <button id="ov-again" class="cta">Play again</button>
+          <button id="ov-share" class="cta secondary" style="display:none">Share score</button>
+          <p style="margin-top:10px;font-size:.85rem"><a href="/" style="color:var(--accent);text-decoration:none">&larr; All 10 Prism Play games</a></p>
         </div>
       </div>
     </div>
@@ -47,5 +49,22 @@
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
   <script src="game.js?v=1"></script>
+  <script>
+  (function(){
+    var btn = document.getElementById('ov-share');
+    var overlay = document.getElementById('overlay');
+    if (!btn || !overlay) return;
+    new MutationObserver(function(){
+      if (!overlay.classList.contains('hidden')) btn.style.display = '';
+      else { btn.style.display = 'none'; btn.textContent = 'Share score'; }
+    }).observe(overlay, {attributes:true, attributeFilter:['class']});
+    btn.addEventListener('click', function(){
+      var sc = (document.getElementById('ov-score')||{}).textContent || '?';
+      var text = 'Outpost — ' + sc + ' pts on Prism Play!';
+      if (navigator.share) { navigator.share({title:'Outpost',text:text,url:'https://ljennings11.itch.io/outpost'}); }
+      else if (navigator.clipboard) { navigator.clipboard.writeText(text+' https://ljennings11.itch.io/outpost').then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
+    });
+  })();
+  </script>
 </body>
 </html>

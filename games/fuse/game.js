@@ -88,12 +88,18 @@
     for (var r = 0; r < N; r++) { g.push([]); for (var c = 0; c < N; c++) g[r].push(null); }
     return g;
   }
+  function spawnVal() {
+    if (score < 500)  return Math.random() < 0.90 ? 2 : 4;
+    if (score < 2000) return Math.random() < 0.78 ? 2 : 4;
+    if (score < 5000) { var r = Math.random(); return r < 0.65 ? 2 : r < 0.90 ? 4 : 8; }
+    var r = Math.random(); return r < 0.50 ? 2 : r < 0.80 ? 4 : 8;
+  }
   function spawn() {
     var empties = [];
     for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) { if (!cells[r][c]) empties.push([r, c]); }
     if (!empties.length) return;
     var pick = empties[(Math.random() * empties.length) | 0];
-    var t = makeTile(Math.random() < 0.9 ? 2 : 4, pick[0], pick[1]);
+    var t = makeTile(spawnVal(), pick[0], pick[1]);
     t.spawnT = SPAWN;
     cells[pick[0]][pick[1]] = t;
   }
