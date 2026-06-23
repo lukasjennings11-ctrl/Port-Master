@@ -11,9 +11,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="loader"><div class="logo">ORBIT</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">ORBIT</a>
+      <span class="brand">ORBIT</span>
       <div class="scores">
         <div class="score"><span class="label">SCORE</span><span id="score">0</span></div>
         <div class="score"><span class="label">BEST</span><span id="best">0</span></div>
@@ -42,7 +43,6 @@
           </div>
           <button id="ov-again" class="cta">Play again</button>
           <button id="ov-share" class="cta secondary" style="display:none">Share score</button>
-          <p style="margin-top:10px;font-size:.85rem"><a href="/" style="color:var(--accent);text-decoration:none">&larr; All 10 Prism Play games</a></p>
         </div>
       </div>
     </div>
@@ -50,6 +50,7 @@
   </div>
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
+  <script src="../../shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
   <script>
   (function(){
@@ -62,9 +63,9 @@
     }).observe(overlay, {attributes:true, attributeFilter:['class']});
     btn.addEventListener('click', function(){
       var sc = (document.getElementById('ov-score')||{}).textContent || '?';
-      var text = 'Orbit — ' + sc + ' pts on Prism Play!';
-      if (navigator.share) { navigator.share({title:'Orbit',text:text,url:'https://ljennings11.itch.io/orbit'}); }
-      else if (navigator.clipboard) { navigator.clipboard.writeText(text+' https://ljennings11.itch.io/orbit').then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
+      var text = 'Orbit — ' + sc + ' pts!';
+      if (navigator.share) { navigator.share({title:'Orbit',text:text}); }
+      else if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
     });
   })();
   </script>

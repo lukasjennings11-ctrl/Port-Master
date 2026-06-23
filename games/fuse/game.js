@@ -47,9 +47,13 @@
   var ovScore = document.getElementById('ov-score');
   var ovBest = document.getElementById('ov-best');
   var ovAgain = document.getElementById('ov-again');
+  var ovContinue = document.getElementById('ov-continue');
+  var ovShare = document.getElementById('ov-share');
+  var loaderEl = document.getElementById('loader');
+  var intro = document.getElementById('intro');
 
   // ---- state ----
-  var cells, score, over, won, bestBest, bestAtStart;
+  var cells, score, over, won, bestBest, bestAtStart, usedContinue;
   var anim = { active: false, t: 0 };
   var absorbing = [];
   var pendingMerges = [];
@@ -125,6 +129,7 @@
 
   function move(dir) {
     if (anim.active || over) return false;
+    if (intro && !intro.classList.contains('hidden')) return false;
     var v = VEC[dir];
     var trav = traversals(v);
     eachTile(function (t) { t.merged = false; t.sr = t.r; t.sc = t.c; });
@@ -280,6 +285,7 @@
   // ---- overlays ----
   function showWin() {
     overlayMode = 'win';
+    Portal.happytime();
     Juice.Audio.play('win');
     var ctr = center(1.5, 1.5);
     particles.burst(ctr.x, ctr.y, { count: 60, colors: ['#5b8cff', '#7af0d0', '#f25c9a', '#ffd75c', '#b15cf2'], speed: 280, life: 1.1, size: 6, gravity: 240 });
@@ -293,6 +299,7 @@
   }
   function gameOver() {
     overlayMode = 'over';
+    Portal.gameStop();
     Juice.Audio.play('lose'); Juice.vibrate([20, 40, 20]); shake.add(10, 0.4);
     var isBest = score > bestAtStart;
     Retention.submitScore(GAME, score);
@@ -301,14 +308,35 @@
     ovScore.textContent = score;
     ovBest.textContent = bestBest;
     ovAgain.textContent = 'Play again';
+    // rewarded "continue" — clears the smallest tiles to reopen moves (once/game)
+    ovContinue.style.display = (Portal.available && !usedContinue) ? '' : 'none';
+    ovShare.style.display = score > 0 ? '' : 'none';
     overlay.classList.remove('hidden');
+  }
+
+  // remove the lowest-value tiles so moves reopen, then resume the same run
+  function continueGame() {
+    usedContinue = true;
+    var min = Infinity;
+    eachTile(function (t) { if (t.value < min) min = t.value; });
+    var removed = 0;
+    for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) {
+      if (cells[r][c] && cells[r][c].value === min && removed < 4) {
+        var ctr = center(r, c);
+        particles.burst(ctr.x, ctr.y, { count: 12, colors: ['#fff', '#7af0d0'], speed: 150, life: 0.5, size: 4 });
+        cells[r][c] = null; removed++;
+      }
+    }
+    over = false;
+    hideOverlay();
+    Portal.gameStart();
   }
   function hideOverlay() { overlay.classList.add('hidden'); }
 
   // ---- lifecycle ----
   function reset() {
     cells = emptyGrid();
-    score = 0; over = false; won = false;
+    score = 0; over = false; won = false; usedContinue = false;
     bestAtStart = bestBest;
     absorbing = []; pendingMerges = []; pendingSpawn = false; anim.active = false;
     particles.list = []; popups.list = [];
@@ -348,23 +376,58 @@
   canvas.addEventListener('pointerdown', function (e) { if (e.pointerType !== 'touch') startSwipe(e.clientX, e.clientY); });
   window.addEventListener('pointerup', function (e) { if (e.pointerType !== 'touch') endSwipe(e.clientX, e.clientY); });
 
+  // restart a fresh run (board + gameplay bracket)
+  function restart() { reset(); Portal.gameStart(); }
+
+  // share score — no external URL (portal rules); Web Share text or clipboard
+  function shareScore() {
+    var text = 'I scored ' + score + ' in Fuse!';
+    try {
+      if (navigator.share) { navigator.share({ title: 'Fuse', text: text }); }
+      else if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function () {
+          ovShare.textContent = 'Copied ✓';
+          setTimeout(function () { ovShare.textContent = 'Share score'; }, 1500);
+        });
+      }
+    } catch (e) {}
+  }
+
   // buttons
-  document.getElementById('new').addEventListener('click', reset);
-  document.getElementById('mute').addEventListener('click', function () {
+  var muteBtn = document.getElementById('mute');
+  document.getElementById('new').addEventListener('click', function () {
+    Portal.commercialBreak(restart);
+  });
+  muteBtn.addEventListener('click', function () {
     var m = Juice.Audio.toggleMute();
+    Retention.set(GAME, 'muted', m);
+    Portal.mute(m);
     this.textContent = m ? '🔇' : '🔊';
   });
   ovAgain.addEventListener('click', function () {
     if (overlayMode === 'win') { hideOverlay(); }  // keep going on the same board
-    else { reset(); }
+    else { Portal.commercialBreak(restart); }
+  });
+  ovContinue.addEventListener('click', function () {
+    Portal.rewardedAd(continueGame, function () {});
+  });
+  ovShare.addEventListener('click', shareScore);
+  document.getElementById('intro-go').addEventListener('click', function () {
+    intro.classList.add('hidden');
+    Portal.gameStart();
   });
 
   // ---- boot ----
   function boot() {
+    Portal.loadingStart();
     layout();
     bestBest = Retention.best(GAME);
     var st = Retention.touchStreak(GAME);
     streakEl.innerHTML = '🔥 ' + st + '&nbsp;day streak';
+
+    // restore persisted mute
+    if (Retention.get(GAME, 'muted', false)) { Juice.Audio.setMuted(true); muteBtn.textContent = '🔇'; }
+
     reset();
     if (window.ResizeObserver) { new ResizeObserver(layout).observe(wrap); }
     window.addEventListener('resize', layout);
@@ -377,6 +440,20 @@
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+
+    // init the portal SDK (no-op off-platform), then reveal the game
+    Portal.init().then(function () {
+      Portal.loadingStop();
+      Portal.mute(Juice.Audio.isMuted());
+      if (loaderEl) loaderEl.classList.add('hidden');
+      // first-run how-to, otherwise start playing immediately
+      if (!Retention.get(GAME, 'seenIntro', false)) {
+        Retention.set(GAME, 'seenIntro', true);
+        intro.classList.remove('hidden');
+      } else {
+        Portal.gameStart();
+      }
+    });
   }
 
   // expose a tiny hook so the headless playtest harness can drive the game

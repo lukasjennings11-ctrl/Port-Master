@@ -1,19 +1,28 @@
-# Match3 — portal submission
+# Gem Drop — CrazyGames submission
 
-**Title:** Match3
+**Title:** Gem Drop
 
-**Tagline:** <one punchy line — fill in>
+**Tagline / short description:** Swap gems, chain combos, chase your best score.
 
-**Controls:** Swipe / arrow keys (mobile + desktop).
+**Instructions (how to play):** Tap a gem then tap a neighbour to swap
 
-**Tags:** puzzle, casual, mobile, hypercasual, highscore
+**Controls:** Tap a gem then tap a neighbour to swap
+
+**Orientation:** responsive — portrait + landscape, plays at 375px width and on desktop.
+
+**Tags:** puzzle, casual, match3, mobile, highscore, gems
 
 **Description:**
 <2-3 sentences. What you do, the one-more-go hook, the goal.>
 
-## Where to upload
-- itch.io  (Kind: HTML, check 'mobile friendly', set viewport ~520x720, upload match3.zip)
-- CrazyGames developer portal (HTML5; add their SDK for rev-share before submitting)
-- GameDistribution / Playgama Bridge (one build to many portals)
+## Compliance (baked into this build)
+- [x] CrazyGames SDK v3 injected in <head>; shared/portal.js wires init + loading + gameplay + ad calls.
+- [x] No external links (no portal back-link, no competitor/itch.io links, no cross-promo links).
+- [x] Loading screen (#loader) paired with the SDK loading callbacks.
+- [x] Mute persists; ads pause game audio.
+- [ ] Verify in the CrazyGames QA tool that gameplayStart/Stop + ad requests fire.
 
-> Reminder: integrate a portal SDK's rewarded-video before monetized submission; itch.io accepts the plain zip as-is for the first real-world signal.
+## Where to upload
+- CrazyGames developer portal (HTML5 zip; SDK already included for rev-share).
+- itch.io (same zip — SDK no-ops off-platform; Kind: HTML, 'mobile friendly').
+- GameDistribution / Playgama Bridge (one build to many portals).

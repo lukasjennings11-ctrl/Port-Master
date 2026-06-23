@@ -316,9 +316,9 @@
   });
   canvas.addEventListener('touchstart', function (e) { e.preventDefault(); }, { passive: false });
 
-  document.getElementById('new').addEventListener('click', reset);
-  document.getElementById('mute').addEventListener('click', function () { this.textContent = Juice.Audio.toggleMute() ? '🔇' : '🔊'; });
-  ovAgain.addEventListener('click', reset);
+  document.getElementById('new').addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
+  document.getElementById('mute').addEventListener('click', function () { var _m = Juice.Audio.toggleMute(); Retention.set(GAME, 'muted', _m); Portal.mute(_m); this.textContent = _m ? '🔇' : '🔊'; });
+  ovAgain.addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
 
   // ---- boot ----
   function boot() {
@@ -354,5 +354,27 @@
     reset: reset
   };
 
+
+  // gameplayStop when the game-over/result overlay appears
+  (function () {
+    var _ov = document.getElementById('overlay');
+    if (_ov && window.MutationObserver) {
+      new MutationObserver(function () {
+        if (!_ov.classList.contains('hidden')) Portal.gameStop();
+      }).observe(_ov, { attributes: true, attributeFilter: ['class'] });
+    }
+  })();
+
+  // ---- portal (CrazyGames SDK) lifecycle ----
+  if (Retention.get(GAME, 'muted', false)) {
+    Juice.Audio.setMuted(true);
+    var _mb = document.getElementById('mute'); if (_mb) _mb.textContent = '🔇';
+  }
+  Portal.loadingStart();
   boot();
+  Portal.init().then(function () {
+    Portal.loadingStop();
+    var _L = document.getElementById('loader'); if (_L) _L.classList.add('hidden');
+    Portal.gameStart();
+  });
 })();

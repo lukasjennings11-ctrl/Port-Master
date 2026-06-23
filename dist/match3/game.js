@@ -83,12 +83,17 @@
     for (var r2 = 0; r2 < ROWS; r2++) {
       for (var c2 = 0; c2 < COLS; c2++) {
         var col;
-        do { col = rand(NCOLORS); } while (wouldMatch(r2, c2, col));
+        do { col = rand(activeColors()); } while (wouldMatch(r2, c2, col));
         grid[r2][c2] = col;
       }
     }
   }
 
+  function activeColors() {
+    if (score < 200) return 4;
+    if (score < 600) return 5;
+    return 6;
+  }
   function wouldMatch(r, c, col) {
     // horizontal: two to the left
     if (c >= 2 && grid[r][c-1] === col && grid[r][c-2] === col) return true;
@@ -225,7 +230,7 @@
       for (var c3 = 0; c3 < COLS; c3++) {
         for (var r4 = 0; r4 < ROWS; r4++) {
           if (grid[r4][c3] === -1) {
-            grid[r4][c3] = rand(NCOLORS);
+            grid[r4][c3] = rand(activeColors());
             var a3 = cellAnim[r4][c3];
             a3.dy = -1; a3.scale = 0.6; a3.alpha = 0;
             filled = true;
@@ -473,11 +478,11 @@
   }
 
   // ---- lifecycle ----
-  document.getElementById('new').addEventListener('click', reset);
+  document.getElementById('new').addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
   document.getElementById('mute').addEventListener('click', function () {
-    this.textContent = Juice.Audio.toggleMute() ? '🔇' : '🔊';
+    var _m = Juice.Audio.toggleMute(); Retention.set(GAME, 'muted', _m); Portal.mute(_m); this.textContent = _m ? '🔇' : '🔊';
   });
-  ovAgain.addEventListener('click', reset);
+  ovAgain.addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
 
   function boot() {
     layout();
@@ -526,5 +531,27 @@
     reset: reset
   };
 
+
+  // gameplayStop when the game-over/result overlay appears
+  (function () {
+    var _ov = document.getElementById('overlay');
+    if (_ov && window.MutationObserver) {
+      new MutationObserver(function () {
+        if (!_ov.classList.contains('hidden')) Portal.gameStop();
+      }).observe(_ov, { attributes: true, attributeFilter: ['class'] });
+    }
+  })();
+
+  // ---- portal (CrazyGames SDK) lifecycle ----
+  if (Retention.get(GAME, 'muted', false)) {
+    Juice.Audio.setMuted(true);
+    var _mb = document.getElementById('mute'); if (_mb) _mb.textContent = '🔇';
+  }
+  Portal.loadingStart();
   boot();
+  Portal.init().then(function () {
+    Portal.loadingStop();
+    var _L = document.getElementById('loader'); if (_L) _L.classList.add('hidden');
+    Portal.gameStart();
+  });
 })();

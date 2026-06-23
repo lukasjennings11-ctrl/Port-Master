@@ -36,10 +36,7 @@ html, body {
 .brand {
   font-weight: 900; font-size: clamp(22px, 6.5vw, 34px); letter-spacing: 3px;
   color: var(--accent);
-  text-decoration: none;
-  transition: opacity 100ms ease;
 }
-.brand:hover { opacity: .75; }
 .scores { display: flex; gap: 8px; }
 .score {
   background: rgba(255,255,255,.06);
@@ -98,3 +95,34 @@ html, body {
 
 .hint { text-align: center; color: var(--muted); font-size: 13px; margin: 0; }
 .hint b { color: var(--text); }
+
+/* secondary CTA (rewarded continue / share) */
+.cta.secondary {
+  margin-top: 10px;
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text); box-shadow: none;
+}
+.cta.secondary:hover { filter: brightness(1.15); background: rgba(255,255,255,.04); }
+
+/* how-to-play list inside the intro panel */
+.howto { text-align: left; color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 18px; padding-left: 18px; }
+.howto li { margin: 4px 0; }
+.howto b { color: var(--text); }
+
+/* loading screen — shown until Portal.init() resolves */
+#loader {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  background: radial-gradient(130% 120% at 50% 0%, var(--bg2) 0%, var(--bg) 60%);
+  transition: opacity .35s ease;
+}
+#loader.hidden { opacity: 0; pointer-events: none; }
+#loader .logo { font-weight: 900; font-size: clamp(30px, 10vw, 52px); letter-spacing: 4px; color: var(--accent); }
+#loader .spinner {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.12); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #loader .spinner { animation: none; } }

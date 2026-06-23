@@ -16,6 +16,7 @@ Output:
     dist/<slug>/SUBMISSION.md   copy-paste metadata for the portal forms
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -23,6 +24,10 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# CrazyGames SDK v3 — loaded in <head> so window.CrazyGames.SDK exists before
+# shared/portal.js runs. (Verify the URL against docs.crazygames.com.)
+SDK_TAG = '  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>'
 
 
 def main():
@@ -59,25 +64,46 @@ def main():
         base = os.path.basename(ref.split("?", 1)[0])
         shutil.copy2(os.path.join(ROOT, "shared", base), os.path.join(out, "shared", base))
     html = html.replace("../../shared/", "shared/")
+    # inject the CrazyGames SDK so window.CrazyGames.SDK is available to portal.js
+    if "sdk.crazygames.com" not in html:
+        html = html.replace("</head>", SDK_TAG + "\n</head>", 1)
     with open(os.path.join(out, "index.html"), "w") as f:
         f.write(html)
 
-    # submission metadata template
-    title = slug.capitalize()
+    # pull real metadata from meta.json when present
+    meta = {}
+    mpath = os.path.join(src, "meta.json")
+    if os.path.isfile(mpath):
+        try:
+            with open(mpath) as mf:
+                meta = json.load(mf)
+        except Exception:
+            meta = {}
+    title = meta.get("title", slug.capitalize())
+    tagline = meta.get("tagline", "<one punchy line — fill in>")
+    controls = meta.get("controls", "Mobile + desktop (touch / mouse / keys)")
+    tags = ", ".join(meta.get("tags", ["casual", "mobile", "highscore"]))
+
     sub = os.path.join(out, "SUBMISSION.md")
     with open(sub, "w") as f:
-        f.write("# %s — portal submission\n\n" % title)
+        f.write("# %s — CrazyGames submission\n\n" % title)
         f.write("**Title:** %s\n\n" % title)
-        f.write("**Tagline:** <one punchy line — fill in>\n\n")
-        f.write("**Controls:** Swipe / arrow keys (mobile + desktop).\n\n")
-        f.write("**Tags:** puzzle, casual, mobile, hypercasual, highscore\n\n")
+        f.write("**Tagline / short description:** %s\n\n" % tagline)
+        f.write("**Instructions (how to play):** %s\n\n" % controls)
+        f.write("**Controls:** %s\n\n" % controls)
+        f.write("**Orientation:** responsive — portrait + landscape, plays at 375px width and on desktop.\n\n")
+        f.write("**Tags:** %s\n\n" % tags)
         f.write("**Description:**\n<2-3 sentences. What you do, the one-more-go hook, the goal.>\n\n")
+        f.write("## Compliance (baked into this build)\n")
+        f.write("- [x] CrazyGames SDK v3 injected in <head>; shared/portal.js wires init + loading + gameplay + ad calls.\n")
+        f.write("- [x] No external links (no portal back-link, no competitor/itch.io links, no cross-promo links).\n")
+        f.write("- [x] Loading screen (#loader) paired with the SDK loading callbacks.\n")
+        f.write("- [x] Mute persists; ads pause game audio.\n")
+        f.write("- [ ] Verify in the CrazyGames QA tool that gameplayStart/Stop + ad requests fire.\n\n")
         f.write("## Where to upload\n")
-        f.write("- itch.io  (Kind: HTML, check 'mobile friendly', set viewport ~520x720, upload %s.zip)\n" % slug)
-        f.write("- CrazyGames developer portal (HTML5; add their SDK for rev-share before submitting)\n")
-        f.write("- GameDistribution / Playgama Bridge (one build to many portals)\n\n")
-        f.write("> Reminder: integrate a portal SDK's rewarded-video before monetized submission; "
-                "itch.io accepts the plain zip as-is for the first real-world signal.\n")
+        f.write("- CrazyGames developer portal (HTML5 zip; SDK already included for rev-share).\n")
+        f.write("- itch.io (same zip — SDK no-ops off-platform; Kind: HTML, 'mobile friendly').\n")
+        f.write("- GameDistribution / Playgama Bridge (one build to many portals).\n")
 
     # zip it
     os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)

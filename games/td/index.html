@@ -11,9 +11,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="loader"><div class="logo">OUTPOST</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">OUTPOST</a>
+      <span class="brand">OUTPOST</span>
       <div class="scores">
         <div class="score-box"><span class="label">WAVE</span><span id="wave">1</span></div>
         <div class="score-box"><span class="label">COINS</span><span id="coins">50</span></div>
@@ -40,7 +41,6 @@
           </div>
           <button id="ov-again" class="cta">Play again</button>
           <button id="ov-share" class="cta secondary" style="display:none">Share score</button>
-          <p style="margin-top:10px;font-size:.85rem"><a href="/" style="color:var(--accent);text-decoration:none">&larr; All 10 Prism Play games</a></p>
         </div>
       </div>
     </div>
@@ -48,6 +48,7 @@
   </div>
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
+  <script src="../../shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
   <script>
   (function(){
@@ -60,9 +61,9 @@
     }).observe(overlay, {attributes:true, attributeFilter:['class']});
     btn.addEventListener('click', function(){
       var sc = (document.getElementById('ov-score')||{}).textContent || '?';
-      var text = 'Outpost — ' + sc + ' pts on Prism Play!';
-      if (navigator.share) { navigator.share({title:'Outpost',text:text,url:'https://ljennings11.itch.io/outpost'}); }
-      else if (navigator.clipboard) { navigator.clipboard.writeText(text+' https://ljennings11.itch.io/outpost').then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
+      var text = 'Outpost — ' + sc + ' pts!';
+      if (navigator.share) { navigator.share({title:'Outpost',text:text}); }
+      else if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
     });
   })();
   </script>

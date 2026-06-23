@@ -27,6 +27,7 @@ Shared libraries (never copy, always reference from root):
 ```html
 <script src="../../shared/juice.js?v=1"></script>
 <script src="../../shared/retention.js?v=1"></script>
+<script src="../../shared/portal.js?v=1"></script>
 <script src="game.js?v=1"></script>
 ```
 
@@ -52,9 +53,10 @@ Use this exact structure:
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="loader"><div class="logo">GAME TITLE</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">GAME TITLE</a>
+      <span class="brand">GAME TITLE</span>
       <!-- scores / HUD stats here -->
     </header>
 
@@ -92,7 +94,11 @@ Use this exact structure:
 ```
 
 **Critical rules:**
-- `.brand` is always an `<a>` linking to `../../` — this is the back-to-portal link
+- `.brand` is a plain `<span>` — **never a link**. CrazyGames rejects any game
+  with links that leave the page (portal back-links, competitor/itch.io links,
+  cross-promo to other sites). No `href="../../"`, no `href="/"`, no external
+  `<a>`/`window.open`/share URLs anywhere in the game.
+- Every game includes `shared/portal.js` and a `#loader` screen.
 - Title copy: action verbs, no clichés ("addictive", "epic", "amazing")
 - Hint: describes the primary action only, max 12 words
 
@@ -319,6 +325,29 @@ Pick a fresh color. Good available territory: coral `#ff6b5b`, gold `#ffd700`, r
 
 ---
 
+## portal.js Integration Checklist (CrazyGames SDK)
+
+`shared/portal.js` wraps the CrazyGames SDK and **no-ops when the SDK is absent**
+(itch.io / local dev), so one build runs everywhere. `ship.py` injects the SDK
+`<script>` into the built `index.html`.
+
+| Lifecycle point | Call | Where |
+|---|---|---|
+| Boot | `Portal.loadingStart()` then `Portal.init().then(...)` | top of boot; resolve hides `#loader` |
+| Round begins | `Portal.gameStart()` | after init resolves + on every restart |
+| Round ends | `Portal.gameStop()` | in game-over / when the overlay shows |
+| Restart (New / Play again) | `Portal.commercialBreak(restart)` | wrap restart so an interstitial can run |
+| Revive / double | `Portal.rewardedAd(onReward, onSkip)` | optional rewarded button on game over |
+| Mute toggle | `Portal.mute(isMuted)` + persist via `Retention.set(GAME,'muted',...)` | mute button + restore on boot |
+| Big win | `Portal.happytime()` | optional |
+
+**Minimum portal requirements per game:**
+- [ ] `Portal.init()` called once; `#loader` hidden when it resolves
+- [ ] `Portal.gameStart()` / `gameStop()` bracket each round
+- [ ] Restart routes through `Portal.commercialBreak()`
+- [ ] Mute persists across reloads
+- [ ] Zero external links (verified by `playtest.py`)
+
 ## Portal Registration
 
 After building a game, add it to `~/games/index.html`:
@@ -345,7 +374,9 @@ After building a game, add it to `~/games/index.html`:
 - [ ] Mute button works and persists
 - [ ] New/Restart button always works
 - [ ] Game over state is clear and recoverable
-- [ ] `playtest.py` passes (no headless errors)
+- [ ] `playtest.py` passes (includes: no external links, portal.js, #loader, SDK calls)
+- [ ] `Portal.init` / `gameStart` / `gameStop` wired; mute persists
+- [ ] No external links anywhere (brand is a `<span>`, no itch.io/portal links)
 - [ ] `meta.json` is complete and accurate
 - [ ] Portal card is added to `index.html`
 

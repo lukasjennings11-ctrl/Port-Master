@@ -19,7 +19,7 @@
   var RADIUS_FRAC = [0.052, 0.064, 0.079, 0.098, 0.121, 0.149, 0.184, 0.228, 0.281, 0.347, 0.429];
   var VALUE = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66];
   var MAXTIER = TIERS.length - 1;
-  var SPAWN = [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4]; // weighted bag -> mostly small
+  // SPAWN bag is now dynamic — see bagTier()
   var POP = 0.2, DROP_CD = 0.42;
 
   // physics tunables
@@ -86,7 +86,14 @@
     if (o.y + r > jarBottom) o.y = jarBottom - r;
   }
 
-  function bagTier() { return SPAWN[(Math.random() * SPAWN.length) | 0]; }
+  function bagTier() {
+    var bag;
+    if (score < 50)       bag = [0,0,0,0,0,1,1,1,2,2,3,4];
+    else if (score < 150) bag = [0,0,0,1,1,1,2,2,3,3,4,5];
+    else if (score < 400) bag = [0,0,1,1,2,2,3,3,4,4,5,5];
+    else                  bag = [1,1,2,2,3,3,4,4,5,5,6,6];
+    return bag[(Math.random() * bag.length) | 0];
+  }
 
   // ---- physics ----
   function stepPhysics(h) {
@@ -322,9 +329,9 @@
     else if (e.key === ' ' || e.key === 'ArrowDown' || e.key === 'Enter') { dropOrb(); e.preventDefault(); }
   }, { passive: false });
 
-  document.getElementById('new').addEventListener('click', reset);
-  document.getElementById('mute').addEventListener('click', function () { this.textContent = Juice.Audio.toggleMute() ? '🔇' : '🔊'; });
-  ovAgain.addEventListener('click', reset);
+  document.getElementById('new').addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
+  document.getElementById('mute').addEventListener('click', function () { var _m = Juice.Audio.toggleMute(); Retention.set(GAME, 'muted', _m); Portal.mute(_m); this.textContent = _m ? '🔇' : '🔊'; });
+  ovAgain.addEventListener('click', function () { Portal.commercialBreak(function () { Portal.gameStop(); reset(); Portal.gameStart(); }); });
 
   // ---- boot ----
   function boot() {
@@ -363,5 +370,27 @@
     reset: reset, settled: function () { return cooldown; }
   };
 
+
+  // gameplayStop when the game-over/result overlay appears
+  (function () {
+    var _ov = document.getElementById('overlay');
+    if (_ov && window.MutationObserver) {
+      new MutationObserver(function () {
+        if (!_ov.classList.contains('hidden')) Portal.gameStop();
+      }).observe(_ov, { attributes: true, attributeFilter: ['class'] });
+    }
+  })();
+
+  // ---- portal (CrazyGames SDK) lifecycle ----
+  if (Retention.get(GAME, 'muted', false)) {
+    Juice.Audio.setMuted(true);
+    var _mb = document.getElementById('mute'); if (_mb) _mb.textContent = '🔇';
+  }
+  Portal.loadingStart();
   boot();
+  Portal.init().then(function () {
+    Portal.loadingStop();
+    var _L = document.getElementById('loader'); if (_L) _L.classList.add('hidden');
+    Portal.gameStart();
+  });
 })();

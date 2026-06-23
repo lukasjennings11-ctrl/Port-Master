@@ -11,9 +11,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="loader"><div class="logo">COIN FORGE</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">COIN FORGE</a>
+      <span class="brand">COIN FORGE</span>
       <div class="controls">
         <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
         <button id="new"  class="text-btn">Reset</button>
@@ -40,12 +41,12 @@
         <b class="big" id="ov-amount">+0 coins</b>
         <p id="ov-sub">Your helpers kept mining while you were away.</p>
         <button id="ov-close" class="cta">Collect</button>
-      <p style="margin-top:10px;font-size:.85rem"><a href="/" style="color:var(--accent);text-decoration:none">&larr; All 10 Prism Play games</a></p>
       </div>
     </div>
   </div>
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
+  <script src="../../shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
 </body>
 </html>

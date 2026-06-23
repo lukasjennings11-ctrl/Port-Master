@@ -47,6 +47,15 @@ def main():
         check("viewport" in html, "has viewport meta (mobile)")
         check("shared/juice.js" in html, "includes shared/juice.js")
         check("shared/retention.js" in html, "includes shared/retention.js")
+        check("shared/portal.js" in html, "includes shared/portal.js (CrazyGames SDK adapter)")
+        check('id="loader"' in html, "has a loading screen (#loader)")
+
+        # portal compliance: NO external links anywhere (instant CrazyGames reject)
+        ext_links = re.findall(r'(?:src|href)="(https?://[^"]+)"', html)
+        check(not ext_links, "no external http(s) links" + (" -- found %s" % ext_links if ext_links else ""))
+        check("itch.io" not in html, "no itch.io references (competitor portal)")
+        check('href="/"' not in html, 'no portal-root link (href="/")')
+        check('href="../../"' not in html, 'no portal back-link (href="../../")')
 
         # every referenced local src/href resolves on disk
         refs = re.findall(r'(?:src|href)="([^"]+)"', html)
@@ -66,6 +75,9 @@ def main():
             js = f.read()
         check(re.search(r"window\.__\w+\s*=", js) is not None,
               "exposes a window.__<slug> test hook")
+        check("Portal.init" in js, "calls Portal.init() (SDK boot)")
+        check("Portal.gameStart" in js, "calls Portal.gameStart() (gameplay event)")
+        check("itch.io" not in js, "no itch.io references in game.js")
 
     # --- HTTP smoke (only if the dev server is running) ---
     base = "http://localhost:%d" % args.port

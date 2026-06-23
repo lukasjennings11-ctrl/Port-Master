@@ -9,11 +9,13 @@
   <meta property="og:description" content="Tap to drop. Each floor narrows your margin." />
   <title>Stack — tower arcade · Prism Play</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 </head>
 <body>
+  <div id="loader"><div class="logo">STACK</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">STACK</a>
+      <span class="brand">STACK</span>
       <div class="scores">
         <div class="score-box"><span class="label">SCORE</span><span id="score">0</span></div>
         <div class="score-box"><span class="label">BEST</span><span id="best">0</span></div>
@@ -39,6 +41,7 @@
             <div><span class="label">Floor</span><b id="ov-floor">1</b></div>
           </div>
           <button id="ov-again" class="cta">Play again</button>
+          <button id="ov-share" class="cta secondary" style="display:none">Share score</button>
         </div>
       </div>
     </div>
@@ -46,6 +49,24 @@
   </div>
   <script src="shared/juice.js?v=1"></script>
   <script src="shared/retention.js?v=1"></script>
+  <script src="shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
+  <script>
+  (function(){
+    var btn = document.getElementById('ov-share');
+    var overlay = document.getElementById('overlay');
+    if (!btn || !overlay) return;
+    new MutationObserver(function(){
+      if (!overlay.classList.contains('hidden')) btn.style.display = '';
+      else { btn.style.display = 'none'; btn.textContent = 'Share score'; }
+    }).observe(overlay, {attributes:true, attributeFilter:['class']});
+    btn.addEventListener('click', function(){
+      var sc = (document.getElementById('ov-score')||{}).textContent || '?';
+      var text = 'Stack — ' + sc + ' pts!';
+      if (navigator.share) { navigator.share({title:'Stack',text:text}); }
+      else if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){ btn.textContent='Copied ✓'; setTimeout(function(){ btn.textContent='Share score'; },2000); }); }
+    });
+  })();
+  </script>
 </body>
 </html>

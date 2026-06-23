@@ -11,9 +11,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="loader"><div class="logo">EQUATE</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">EQUATE</a>
+      <span class="brand">EQUATE</span>
       <div class="controls">
         <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
         <button id="practice" class="text-btn">Practice</button>
@@ -41,13 +42,13 @@
         <div class="ov-actions">
           <button id="ov-share" class="cta secondary">Copy result</button>
           <button id="ov-close" class="cta">Close</button>
-          <p style="margin-top:10px;font-size:.85rem"><a href="/" style="color:var(--accent);text-decoration:none">&larr; All 10 Prism Play games</a></p>
         </div>
       </div>
     </div>
   </div>
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
+  <script src="../../shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
 </body>
 </html>

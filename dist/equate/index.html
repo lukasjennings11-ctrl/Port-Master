@@ -9,11 +9,13 @@
   <meta property="og:description" content="Guess the hidden 8-character equation in 6 tries. New puzzle every day." />
   <title>Equate — daily equation puzzle · Prism Play</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 </head>
 <body>
+  <div id="loader"><div class="logo">EQUATE</div><div class="spinner" aria-label="Loading"></div></div>
   <div id="app">
     <header class="hud">
-      <a class="brand" href="../../" aria-label="Back to Prism Play">EQUATE</a>
+      <span class="brand">EQUATE</span>
       <div class="controls">
         <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
         <button id="practice" class="text-btn">Practice</button>
@@ -47,6 +49,7 @@
   </div>
   <script src="shared/juice.js?v=1"></script>
   <script src="shared/retention.js?v=1"></script>
+  <script src="shared/portal.js?v=1"></script>
   <script src="game.js?v=1"></script>
 </body>
 </html>
