@@ -2,8 +2,8 @@
   "slug": "prism",
   "title": "PRISM",
   "genre": "arcade",
-  "tagline": "Spin the prism so every beam of light meets its matching color.",
-  "controls": "Drag left/right or arrow keys to spin the prism",
-  "tags": ["arcade", "reflex", "neon", "highscore", "casual", "mobile", "one-button"],
+  "tagline": "Drag to move. Your prism auto-fires light that refracts into more weapons. Outlast the swarm.",
+  "controls": "Drag to move (or WASD / arrows) — firing is automatic",
+  "tags": ["arcade", "survivor", "roguelite", "neon", "highscore", "mobile", "one-thumb"],
   "created": "2026-06-24"
 }

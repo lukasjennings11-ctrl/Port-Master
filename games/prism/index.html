@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#05030f" />
-  <meta name="description" content="PRISM — spin the prism so each beam of light meets its matching color. A neon refraction reflex arcade game. Free, no install." />
+  <meta name="description" content="PRISM — a one-thumb neon arena survivor. Drag to move; your prism auto-fires light that refracts into more weapons. Outlast the swarm. Free, no install." />
   <meta property="og:title" content="PRISM" />
-  <meta property="og:description" content="Spin the prism. Match the light. Don't crack." />
+  <meta property="og:description" content="Drag to move. Refract light into weapons. Survive the swarm." />
   <title>PRISM — neon refraction arcade</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -21,8 +21,8 @@
       </div>
     </header>
     <div class="subbar">
-      <div class="stat" id="shields" aria-label="Shields">◆ ◆ ◆</div>
-      <div class="stat wave" id="wave">WAVE 1</div>
+      <div class="stat" id="lvl" aria-label="Level">LV 1</div>
+      <div class="stat wave" id="time">0:00</div>
       <div class="controls">
         <button id="menu" class="icon-btn" aria-label="Missions">☰</button>
         <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
@@ -45,7 +45,7 @@
         </div>
       </div>
     </div>
-    <p class="hint">Drag <b>left / right</b> (or <b>← →</b>) to spin the prism — meet each beam with its color.</p>
+    <p class="hint">Drag to <b>move</b> (or <b>WASD</b>). Your prism auto-fires — survive the swarm and level up.</p>
   </div>
   <script src="../../shared/juice.js?v=1"></script>
   <script src="../../shared/retention.js?v=1"></script>
