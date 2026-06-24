@@ -98,14 +98,17 @@
     },
     // increment a mission's progress; awards coins once on completion. Returns
     // the mission if it just completed (for a popup), else null.
-    bumpMission: function (game, id, amount) {
+    // `absolute`: treat `amount` as a high-water value (prog = max(prog, amount))
+    // instead of an increment — for "reach combo N / wave N / score N" goals.
+    bumpMission: function (game, id, amount, absolute) {
       var store = get(game, 'missions', null);
       if (!store || !store.list) return null;
       var completed = null;
       for (var i = 0; i < store.list.length; i++) {
         var m = store.list[i];
         if (m.id === id && !m.done) {
-          m.prog += (amount == null ? 1 : amount);
+          if (absolute) m.prog = Math.max(m.prog, amount == null ? 0 : amount);
+          else m.prog += (amount == null ? 1 : amount);
           if (m.prog >= m.target) { m.prog = m.target; m.done = true; this.addCoins(game, m.reward); completed = m; }
         }
       }

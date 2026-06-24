@@ -408,12 +408,12 @@
         <span class="logo-wordmark">Prism Play</span>
       </div>
 
-      <h1>Ten games.<br><em>One tab.</em></h1>
+      <h1>Eleven games.<br><em>One tab.</em></h1>
 
       <p class="hero-sub">Browser-native arcade. No installs, no accounts — pick a game and go. A new puzzle resets every day.</p>
 
       <div class="hero-pills" aria-label="Quick facts">
-        <span class="pill"><span class="pill-dot" style="background:#5b8cff"></span>10 games live</span>
+        <span class="pill"><span class="pill-dot" style="background:#ff2d9b"></span>11 games live</span>
         <span class="pill"><span class="pill-dot" style="background:#ffb347"></span>Daily puzzle</span>
         <span class="pill"><span class="pill-dot" style="background:#7af0d0"></span>Works on any device</span>
       </div>
@@ -435,10 +435,21 @@
     </div>
 
     <!-- Count label -->
-    <p class="section-label" id="count-label">10 games</p>
+    <p class="section-label" id="count-label">11 games</p>
 
     <!-- Grid -->
     <div class="grid" id="grid">
+
+      <a class="card" href="games/prism/"
+         data-genre="arcade"
+         style="--gc:#ff2d9b; --i:0;">
+        <div class="badge-daily">New</div>
+        <div class="card-icon">🔺</div>
+        <span class="card-genre">Arcade</span>
+        <div class="card-title">PRISM</div>
+        <div class="card-tag">Spin the prism so every beam of light meets its matching color. A neon refraction reflex arcade.</div>
+        <span class="card-play">Play →</span>
+      </a>
 
       <a class="card" href="games/fuse/"
          data-genre="puzzle"
@@ -446,7 +457,7 @@
         <div class="card-icon">🧩</div>
         <span class="card-genre">Puzzle</span>
         <div class="card-title">Fuse</div>
-        <div class="card-tag">Swipe tiles into each other. When two match, they fuse. Chase 2048.</div>
+        <div class="card-tag">Drag a tile across its matching neighbours to fuse a whole chain in one move.</div>
         <span class="card-play">Play →</span>
       </a>
 
@@ -476,7 +487,7 @@
         <div class="card-icon">💎</div>
         <span class="card-genre">Puzzle</span>
         <div class="card-title">Gem Drop</div>
-        <div class="card-tag">Swap adjacent gems to line up three or more. Chains score bigger. No timer, pure logic.</div>
+        <div class="card-tag">Tilt the board — every gem slides at once. Line up 3+ and cascade. Don't let it fill.</div>
         <span class="card-play">Play →</span>
       </a>
 
@@ -516,7 +527,7 @@
         <div class="card-icon">🏎️</div>
         <span class="card-genre">Arcade</span>
         <div class="card-title">Dash Lanes</div>
-        <div class="card-tag">Three lanes, one survivor. Tap left or right. The traffic doesn't slow down.</div>
+        <div class="card-tag">One thumb. Switch your color to slip through matching gates — miss and you're out.</div>
         <span class="card-play">Play →</span>
       </a>
 
@@ -582,7 +593,7 @@
         if (show) visible++;
       });
 
-      label.textContent = visible === 10 ? '10 games' : visible + (visible === 1 ? ' game' : ' games');
+      label.textContent = visible === 11 ? '11 games' : visible + (visible === 1 ? ' game' : ' games');
       empty.style.display = visible === 0 ? 'block' : 'none';
     });
   });

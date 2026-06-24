@@ -1,0 +1,9 @@
+{
+  "slug": "prism",
+  "title": "PRISM",
+  "genre": "arcade",
+  "tagline": "Spin the prism so every beam of light meets its matching color.",
+  "controls": "Drag left/right or arrow keys to spin the prism",
+  "tags": ["arcade", "reflex", "neon", "highscore", "casual", "mobile", "one-button"],
+  "created": "2026-06-24"
+}
