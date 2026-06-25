@@ -29,18 +29,23 @@
   }
   function fbm(x, z) { var s = 0, a = 0.5, f = 1; for (var i = 0; i < 4; i++) { s += a * vnoise(x * f, z * f); f *= 2; a *= 0.5; } return s; }
 
+  // a rounded ISLAND surrounded by water: high interior dropping below sea level all around,
+  // with a noise-warped (irregular) coastline + a few small offshore islets.
+  var ISLAND = { cx: 0, cz: 150, ax: 540, az: 255 };
   function genField(biome, seed) {
     var nx = Math.round(WORLD.W / WORLD.cell) + 1, nz = Math.round((WORLD.z1 - WORLD.z0) / WORLD.cell) + 1;
     var H = new Float32Array(nx * nz), hilly = biome.hilliness || 1;
+    var islets = [[-900, 170, 150], [880, 205, 120], [-280, -95, 85]];        // x, z, radius
     for (var j = 0; j < nz; j++) {
       var z = WORLD.z0 + j * WORLD.cell;
       for (var i = 0; i < nx; i++) {
         var x = -WORLD.W / 2 + i * WORLD.cell;
-        var coast = 44 + (fbm(x * 0.010 + seed, 7.7 + seed) - 0.5) * 2 * 82;   // coastline z wanders ±82 → bays/headlands
-        var d = z - coast;                                                     // <0 sea, >0 land
-        var land = clamp(d * 0.02, 0, 1);
-        var h = d * (d > 0 ? 0.05 : 0.07);                                     // gentle land rise / sea floor drop
-        h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 13 * hilly * land; // inland hills
+        var rad = Math.hypot((x - ISLAND.cx) / ISLAND.ax, (z - ISLAND.cz) / ISLAND.az);
+        var warp = (fbm(x * 0.006 + seed, z * 0.006 + seed) - 0.5) * 0.5;       // irregular coast (bays/headlands)
+        var e = (1 + warp) - rad;                                              // >0 land, <0 sea
+        for (var k = 0; k < islets.length; k++) { var ir = Math.hypot((x - islets[k][0]) / islets[k][2], (z - islets[k][1]) / islets[k][2]); var ie = (1 - ir) * 0.7; if (ie > e) e = ie; }
+        var h = e > 0 ? Math.min(e * 26, 14) : Math.max(e * 30, -4);           // gentle interior / sea floor
+        h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 13 * hilly * clamp(e * 3, 0, 1); // interior hills
         if (h < -4) h = -4;
         H[j * nx + i] = h;
       }
@@ -117,12 +122,14 @@
     }
   }
   function landforms(flat, b, rng) {
-    var span = WORLD.W * 0.46, n = Math.round(WORLD.W / 95);   // spread across the long coast
-    for (var i = 0; i < n; i++) {
-      var cx = -span + (i + rng()) / n * span * 2;
-      var cz = 150 + rng() * 170, s = 0.9 + rng() * 1.3;       // inland band, varied size
-      var tmp = new g.HGL.Builder(); landform(tmp, b, s, rng);
-      flat.addXform(tmp, cx, Math.max(0, heightAt(cx, cz)) - 1, cz, rng() * TAU);
+    var target = Math.round(WORLD.W / 170), placed = 0, tries = 0;   // scatter peaks on the island's interior highs
+    while (placed < target && tries < target * 10) {
+      tries++;
+      var cx = (rng() - 0.5) * (ISLAND.ax * 2.0), cz = ISLAND.cz + (rng() - 0.5) * (ISLAND.az * 1.7);
+      var y = heightAt(cx, cz);
+      if (y < 5) continue;                                           // only on dry inland highs
+      var s = 0.8 + rng() * 1.1, tmp = new g.HGL.Builder(); landform(tmp, b, s, rng);
+      flat.addXform(tmp, cx, y - 1, cz, rng() * TAU); placed++;
     }
   }
 
@@ -219,8 +226,8 @@
     var here = heightAt(x, z), onCoast = here > -2.2 && here < 1.8;
     var score = shelter * 0.6 + navigable * 0.4;
     var stars = !onCoast ? 0 : score > 0.62 ? 3 : score > 0.38 ? 2 : 1;
-    var label = !onCoast ? (here >= 1.8 ? 'Too far inland — tap the coast' : 'Open water — tap nearer the shore')
-      : stars === 3 ? 'Sheltered natural harbour' : stars === 2 ? 'Workable harbour' : 'Exposed coast';
+    var label = !onCoast ? (here >= 1.8 ? 'Inland — move to the coast' : 'Open water — move closer')
+      : stars === 3 ? 'Sheltered harbour' : stars === 2 ? 'Workable harbour' : 'Exposed coast';
     return { shelter: shelter, depth: depth, score: score, stars: stars, label: label, onCoast: onCoast, y: here };
   }
 
@@ -234,7 +241,7 @@
     if (biome.veg !== 'none') {
       var nv = Math.round((biome.vegN + 14) * WORLD.W / 760), hw = WORLD.W * 0.48;
       for (var v = 0; v < nv; v++) {
-        var x = -hw + rng() * hw * 2, z = 40 + rng() * 300, y = heightAt(x, z);
+        var x = -hw + rng() * hw * 2, z = -110 + rng() * 530, y = heightAt(x, z);
         if (y < 1.0 || y > 16) continue;                 // only on dry, non-peak land
         if (port && Math.abs(x - port.x) < 50 && Math.abs(z - port.z) < 50) continue;
         tree(B.flat, x, z, rng, biome.veg, y);

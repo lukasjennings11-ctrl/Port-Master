@@ -267,9 +267,9 @@
     if (foundMode()) { foundPanel.classList.add('show'); if (foundBtn) foundBtn.disabled = !pendingFound; if (!pendingFound && foundLabel) foundLabel.textContent = 'Tap the coast to scout a harbour'; }
     else { foundPanel.classList.remove('show'); pendingFound = null; }
   }
-  function autoFound() { // QA/deterministic: scan the coast, found the best-rated spot
-    var best = null, W = HARBOR_MODELS.WORLD;
-    for (var x = -160; x <= 160; x += 16) for (var z = -20; z <= 90; z += 10) { var r = HARBOR_MODELS.rate(x, z); if (r.onCoast && (!best || r.score > best.score)) best = { x: x, z: z, score: r.score }; }
+  function autoFound() { // QA/deterministic: scan the island coast, found the best-rated spot
+    var best = null;
+    for (var x = -500; x <= 500; x += 40) for (var z = -150; z <= 80; z += 12) { var r = HARBOR_MODELS.rate(x, z); if (r.onCoast && (!best || r.score > best.score)) best = { x: x, z: z, score: r.score }; }
     if (best) foundHere(best.x, best.z);
   }
 
@@ -277,7 +277,10 @@
   // 2-finger twist (or right-drag / Shift+drag) = rotate; tap = scout; arrow keys / WASD pan. ----
   var ptrs = new Map(), pinchPrev = 0, panPrev = null, twistPrev = null, lastTap = 0, downPt = null, moved = false, multi = false, orbitMode = false;
   function pxy(e) { var b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
-  function defaultView() { C.azT = 2.42; C.elT = 0.52; C.distT = Math.min(190, Math.max(120, CH * 0.24)); C.txT = founded[biomeId] ? founded[biomeId].x : 0; C.tzT = founded[biomeId] ? founded[biomeId].z : 6; }
+  function defaultView() {
+    if (founded[biomeId]) { C.azT = 2.42; C.elT = 0.5; C.distT = 150; C.txT = founded[biomeId].x; C.tzT = founded[biomeId].z; }
+    else { C.azT = 2.42; C.elT = 0.56; C.distT = 360; C.txT = 0; C.tzT = 120; }   // frame the whole island
+  }
   // screen drag (px) -> world pan of the focus point, along the camera azimuth basis ("grab the world")
   function panBy(mx, my) {
     var scl = C.dist * 0.0016, ce = Math.cos(C.az), se = Math.sin(C.az);
