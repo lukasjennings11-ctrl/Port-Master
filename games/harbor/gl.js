@@ -122,7 +122,7 @@
   precision highp float;
   in vec3 vN; in vec3 vW; in vec2 vUV; in vec4 vLP; in vec3 vCol;
   uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin;
-  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime;
+  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon;
   uniform sampler2D uShadow; uniform sampler2D uTex;
   out vec4 frag;
   float shadow(vec4 lp){
@@ -141,10 +141,17 @@
     if(uTexMix>0.0){ vec4 t=texture(uTex,vUV); base=mix(base, base*(0.55+0.9*t.r), uTexMix); emiss=t.a; }
     float ndl=max(dot(N,uSunDir),0.0);
     float sh=shadow(vLP);
-    vec3 amb=mix(uAmbBot,uAmbTop,N.y*0.5+0.5);
     vec3 V=normalize(uCam-vW); vec3 H=normalize(uSunDir+V);
-    float spec=pow(max(dot(N,H),0.0), mix(8.0,80.0,1.0-uRough))*(1.0-uRough)*sh*ndl;
-    vec3 col = base*(amb + uSunCol*ndl*sh) + uSunCol*spec*0.5;
+    // cartoon banded diffuse (stepped with soft edges) + soft rim highlight
+    float diff = ndl;
+    float rim = 0.0;
+    if(uToon>0.5){ float n=4.0; diff=(floor(ndl*n)+smoothstep(0.25,0.75,fract(ndl*n)))/n;
+                   rim = pow(1.0-max(dot(N,V),0.0),3.0)*ndl*0.28; }
+    diff*=sh;
+    float specK = (uToon>0.5?0.22:0.5)*(1.0-uRough);
+    float spec=pow(max(dot(N,H),0.0), mix(8.0,80.0,1.0-uRough))*specK*sh*ndl;
+    vec3 amb=mix(uAmbBot,uAmbTop,N.y*0.5+0.5);
+    vec3 col = base*(amb + uSunCol*diff) + uSunCol*spec + uSunCol*rim;
     // night-lit windows: tex alpha mask, flickering warm glow
     float flick = 0.7+0.3*sin(uTime*3.0 + vW.x*1.7 + vW.y*2.3);
     col += uWin * emiss * uNight * flick;
@@ -181,10 +188,12 @@
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   void main(){ vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
-    float fres=pow(1.0-max(dot(N,V),0.0),3.0);
-    vec3 water=mix(uDeep,uShallow,clamp(N.y*0.5+0.3,0.0,1.0));
-    vec3 col=mix(water,uSky,clamp(fres*0.9,0.0,1.0));
-    vec3 H=normalize(uSunDir+V); col+=uSunCol*pow(max(dot(N,H),0.0),200.0)*1.8;
+    float fres=pow(1.0-max(dot(N,V),0.0),3.0); fres=floor(fres*3.0+0.2)/3.0;   // banded reflection
+    float depthMix=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;             // banded shallow/deep
+    vec3 water=mix(uDeep,uShallow,clamp(depthMix,0.0,1.0));
+    vec3 col=mix(water,uSky,clamp(fres*0.78,0.0,1.0));
+    vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),120.0); col+=uSunCol*step(0.45,gl)*1.5; // crisp toon glint
+    float foam=smoothstep(0.985,0.93,N.y); col+=vec3(0.92,0.97,1.0)*foam*0.18;  // foam on wave faces
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
     frag=vec4(aces(col),1.0); }`;

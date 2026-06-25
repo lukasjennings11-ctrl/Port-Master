@@ -88,12 +88,17 @@ html, body {
   display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; padding: 0 8px; z-index: 6;
 }
 .biome-btn {
+  display: inline-flex; align-items: center; gap: 5px;
   font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: .02em;
   color: var(--text); background: rgba(8,18,24,.62); border: 1px solid rgba(255,255,255,.14);
   border-radius: 999px; padding: 6px 11px; cursor: pointer; backdrop-filter: blur(4px);
-  transition: background .12s, border-color .12s, transform .08s;
+  transition: background .12s, border-color .12s, transform .08s, opacity .12s;
 }
 .biome-btn:active { transform: scale(.95); }
 .biome-btn.on { background: var(--brass); color: #20140a; border-color: var(--brass); }
+.biome-btn.locked { opacity: .5; color: rgba(255,255,255,.7); cursor: not-allowed; }
+.biome-btn.locked .bn { text-decoration: none; }
+.biome-btn .lock { display: inline-flex; opacity: .85; }
+.biome-btn .lock svg { display: block; }
 
 @media (prefers-reduced-motion: reduce) { #loader .spinner { animation: none; } }

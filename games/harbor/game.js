@@ -13,8 +13,8 @@
 
   var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false;
   // camera: current + targets + fling velocity
-  var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4 };
-  var biomeId = 'green', biome = null;
+  var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4, txT: 0, tzT: 4 };
+  var biomeId = 'green', biome = null, unlocked = ['green'];
 
   function resize() {
     var bw = wrap.clientWidth || 360, bh = wrap.clientHeight || 560;
@@ -130,12 +130,12 @@
     var M = E.P_main; gl.useProgram(M.p);
     gl.uniformMatrix4fv(M.u.uVP, false, mVP); gl.uniformMatrix4fv(M.u.uLightVP, false, mLVP);
     gl.uniform3fv(M.u.uSunDir, sd); gl.uniform3fv(M.u.uSunCol, en.sun);
-    gl.uniform3fv(M.u.uAmbTop, [0.45 * (0.4 + en.day), 0.5 * (0.4 + en.day), 0.62 * (0.4 + en.day)]);
+    gl.uniform3fv(M.u.uAmbTop, [0.40 * (0.5 + en.day * 0.8), 0.45 * (0.5 + en.day * 0.8), 0.56 * (0.5 + en.day * 0.8)]);
     gl.uniform3fv(M.u.uAmbBot, [0.16, 0.17, 0.2]);
-    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0019);
+    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0014);
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
-    gl.uniform1f(M.u.uExposure, 1.5); gl.uniform1f(M.u.uSat, 1.14); gl.uniform1f(M.u.uShadowOn, 1);
-    gl.uniform1f(M.u.uVCol, 1);
+    gl.uniform1f(M.u.uExposure, 1.58); gl.uniform1f(M.u.uSat, 1.25); gl.uniform1f(M.u.uShadowOn, 1);
+    gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1);
     gl.uniformMatrix4fv(M.u.uModel, false, mI);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, E.shadowTex); gl.uniform1i(M.u.uShadow, 0);
     gl.activeTexture(gl.TEXTURE1); gl.uniform1i(M.u.uTex, 1);
@@ -151,50 +151,99 @@
     var W = E.P_water; gl.useProgram(W.p); gl.uniformMatrix4fv(W.u.uVP, false, mVP); gl.uniform1f(W.u.uTime, clock);
     gl.uniform3fv(W.u.uCam, ev); gl.uniform3fv(W.u.uSunDir, sd); gl.uniform3fv(W.u.uSunCol, en.sun);
     gl.uniform3fv(W.u.uDeep, biome.deep); gl.uniform3fv(W.u.uShallow, biome.shallow);
-    gl.uniform3fv(W.u.uSky, en.bot); gl.uniform3fv(W.u.uFog, en.bot); gl.uniform1f(W.u.uFogD, 0.0019);
-    gl.uniform1f(W.u.uExposure, 1.5); gl.uniform1f(W.u.uSat, 1.14);
+    gl.uniform3fv(W.u.uSky, en.bot); gl.uniform3fv(W.u.uFog, en.bot); gl.uniform1f(W.u.uFogD, 0.0014);
+    gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
   }
 
-  // ---- input: orbit + inertial + pinch ----
-  var drag = false, lx = 0, ly = 0, pinch = 0, lastTap = 0, rot = clamp;
+  // ---- input: unified pointer gestures (1 finger = orbit, 2 fingers = pinch-zoom + pan) ----
+  // One handler tracks all active pointers so a pinch never doubles as an orbit (the spin-out bug).
+  var ptrs = new Map(), pinchPrev = 0, panPrev = null, lastTap = 0;
   function pxy(e) { var b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
-  function defaultView() { C.azT = 2.42; C.elT = 0.5; C.distT = Math.min(140, Math.max(90, CH * 0.18)); }
+  function defaultView() { C.azT = 2.42; C.elT = 0.5; C.distT = Math.min(140, Math.max(90, CH * 0.18)); C.txT = 0; C.tzT = 4; }
   if (canvas.addEventListener) {
-    canvas.addEventListener('pointerdown', function (e) { drag = true; var p = pxy(e); lx = p.x; ly = p.y; C.vAz = C.vEl = 0;
-      var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; });
-    canvas.addEventListener('pointermove', function (e) {
-      if (!drag) return; var p = pxy(e), dx = p.x - lx, dy = p.y - ly; lx = p.x; ly = p.y;
-      C.azT -= dx * 0.007; C.elT = clamp(C.elT - dy * 0.005, 0.14, 1.3); C.vAz = -dx * 0.007; C.vEl = -dy * 0.005;
-      if (hintEl) hintEl.classList.add('gone');
+    canvas.addEventListener('pointerdown', function (e) {
+      if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
+      ptrs.set(e.pointerId, pxy(e)); C.vAz = C.vEl = 0;
+      if (ptrs.size === 1) { var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; }
+      else { pinchPrev = 0; panPrev = null; }            // entering multi-touch — reset gesture refs
     });
-    window.addEventListener('pointerup', function () { drag = false; });
-    canvas.addEventListener('wheel', function (e) { e.preventDefault(); C.distT = clamp(C.distT * (1 + e.deltaY * 0.0012), 42, 230); }, { passive: false });
-    canvas.addEventListener('touchmove', function (e) {
-      if (e.touches.length === 2) { e.preventDefault(); var d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); if (pinch) C.distT = clamp(C.distT * (pinch / d), 42, 230); pinch = d; }
-    }, { passive: false });
-    canvas.addEventListener('touchend', function () { pinch = 0; });
+    canvas.addEventListener('pointermove', function (e) {
+      if (!ptrs.has(e.pointerId)) return;
+      var p = pxy(e), prev = ptrs.get(e.pointerId); ptrs.set(e.pointerId, p);
+      if (hintEl) hintEl.classList.add('gone');
+      if (ptrs.size === 1) {                              // orbit — calmer sensitivity + inertia
+        var dx = p.x - prev.x, dy = p.y - prev.y;
+        C.azT -= dx * 0.0045; C.elT = clamp(C.elT - dy * 0.0035, 0.14, 1.3);
+        C.vAz = -dx * 0.0045; C.vEl = -dy * 0.0035;
+      } else if (ptrs.size >= 2) {                        // pinch-zoom + pan, orbit disabled
+        var pts = Array.from(ptrs.values()), a = pts[0], b = pts[1];
+        var d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.5, 1.5); C.distT = clamp(C.distT * f, 42, 230); }
+        pinchPrev = d;
+        if (panPrev) {                                    // two-finger drag pans the focus point
+          var scl = C.dist * 0.0016, ce = Math.cos(C.az), se = Math.sin(C.az);
+          var mx = mid.x - panPrev.x, my = mid.y - panPrev.y;
+          C.txT = clamp(C.txT - mx * scl * ce + my * scl * se, -120, 120);
+          C.tzT = clamp(C.tzT + mx * scl * se + my * scl * ce, -40, 120);
+        }
+        panPrev = mid; C.vAz = C.vEl = 0;
+      }
+    });
+    function up(e) {
+      if (ptrs.delete(e.pointerId) && canvas.releasePointerCapture) try { canvas.releasePointerCapture(e.pointerId); } catch (x) {}
+      if (ptrs.size < 2) { pinchPrev = 0; panPrev = null; }
+    }
+    window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 42, 230); }, { passive: false });
   }
 
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
-    if (!drag) { C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0; }
+    if (ptrs.size === 0) { C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0; }
     var k = Math.min(1, dt * 11); C.az += (C.azT - C.az) * k; C.el += (C.elT - C.el) * k; C.dist += (C.distT - C.dist) * Math.min(1, dt * 9);
+    C.tx += (C.txT - C.tx) * k; C.tz += (C.tzT - C.tz) * k;
     if (clockEl) { var hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 % 1) * 60); clockEl.textContent = ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2); }
     render(); requestAnimationFrame(frame);
   }
 
-  // ---- biome selector UI ----
+  // ---- unlockable worlds ----
+  var LOCK = '<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M7 10V7a5 5 0 0110 0v3" fill="none" stroke="currentColor" stroke-width="2"/><rect x="5" y="10" width="14" height="10" rx="2" fill="currentColor"/></svg>';
+  function isUnlocked(id) { return unlocked.indexOf(id) >= 0; }
+  function loadUnlocked() {
+    var saved = window.Retention && Retention.get(GAME, 'worlds', null);
+    if (saved && saved.length) unlocked = saved.slice();
+    if (unlocked.indexOf('green') < 0) unlocked.unshift('green');
+  }
+  function saveUnlocked() { if (window.Retention) Retention.set(GAME, 'worlds', unlocked); }
+  function unlockWorld(id) { if (HARBOR_BIOMES[id] && unlocked.indexOf(id) < 0) { unlocked.push(id); saveUnlocked(); if (buildSelector._set) buildSelector._set(); } }
+  function showHint(msg) { if (!hintEl) return; hintEl.textContent = msg; hintEl.classList.remove('gone'); clearTimeout(showHint._t); showHint._t = setTimeout(function () { hintEl.classList.add('gone'); }, 1900); }
+
+  // ---- world-select UI (unlocked = playable, locked = shows unlock condition) ----
   function buildSelector() {
     var bar = document.createElement('div'); bar.id = 'biomebar';
     HARBOR_BIOME_ORDER.forEach(function (id) {
-      var btn = document.createElement('button'); btn.className = 'biome-btn'; btn.textContent = HARBOR_BIOMES[id].name;
-      btn.addEventListener('click', function () { buildBiome(id); setActive(); });
+      var w = HARBOR_BIOMES[id], btn = document.createElement('button');
+      btn.className = 'biome-btn'; btn.setAttribute('data-world', id);
+      btn.innerHTML = '<span class="bn">' + w.name + '</span>';
+      btn.addEventListener('click', function () {
+        if (isUnlocked(id)) { buildBiome(id); setActive(); }
+        else showHint(w.unlockLabel || 'Locked');
+      });
       bar.appendChild(btn);
     });
     wrap.appendChild(bar);
-    function setActive() { var bs = bar.querySelectorAll('.biome-btn'); for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', HARBOR_BIOME_ORDER[i] === biomeId); }
+    function setActive() {
+      var bs = bar.querySelectorAll('.biome-btn');
+      for (var i = 0; i < bs.length; i++) {
+        var id = bs[i].getAttribute('data-world'), lk = !isUnlocked(id), badge = bs[i].querySelector('.lock');
+        bs[i].classList.toggle('on', id === biomeId);
+        bs[i].classList.toggle('locked', lk);
+        if (lk && !badge) { badge = document.createElement('span'); badge.className = 'lock'; badge.innerHTML = LOCK; bs[i].appendChild(badge); }
+        else if (!lk && badge) badge.parentNode.removeChild(badge);
+      }
+    }
     setActive(); buildSelector._set = setActive;
   }
 
@@ -205,9 +254,11 @@
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
     waterMesh = E.mesh(E.plane(620, 150)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture());
+    loadUnlocked();
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
+    if (saved && !isUnlocked(saved)) saved = null;
     buildBiome(saved || 'green');
-    resize(); defaultView(); C.dist = C.distT; buildSelector();
+    resize(); defaultView(); C.dist = C.distT; C.tx = C.txT; C.tz = C.tzT; buildSelector();
     try { var q = window.location.search; var m;
       if ((m = /[?&]biome=(\w+)/.exec(q))) { buildBiome(m[1]); buildSelector._set && buildSelector._set(); }
       if ((m = /[?&]tod=([0-9.]+)/.exec(q))) tod = +m[1] % 1;
@@ -223,8 +274,10 @@
   }
 
   window.__harbor = {
-    state: function () { return { biome: biomeId, tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist) }, webgl: !!gl, phase: 'look-2' }; },
-    setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; }
+    state: function () { return { biome: biomeId, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist) }, webgl: !!gl, phase: 'look-2.1' }; },
+    setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
+    unlockWorld: function (id) { unlockWorld(id); },
+    unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 
   if (canvas && canvas.getContext) boot();
