@@ -122,7 +122,7 @@
   precision highp float;
   in vec3 vN; in vec3 vW; in vec2 vUV; in vec4 vLP; in vec3 vCol;
   uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin;
-  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon;
+  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo;
   uniform sampler2D uShadow; uniform sampler2D uTex;
   out vec4 frag;
   float shadow(vec4 lp){
@@ -138,7 +138,8 @@
     vec3 N=normalize(vN);
     vec3 base = uVCol>0.5 ? vCol : uBase;
     float emiss=0.0;
-    if(uTexMix>0.0){ vec4 t=texture(uTex,vUV); base=mix(base, base*(0.55+0.9*t.r), uTexMix); emiss=t.a; }
+    if(uAlbedo>0.5){ vec4 t=texture(uTex,vUV); base = t.rgb * uBase; }   // asset albedo atlas, tinted by uBase
+    else if(uTexMix>0.0){ vec4 t=texture(uTex,vUV); base=mix(base, base*(0.55+0.9*t.r), uTexMix); emiss=t.a; }
     float ndl=max(dot(N,uSunDir),0.0);
     float sh=shadow(vLP);
     vec3 V=normalize(uCam-vW); vec3 H=normalize(uSunDir+V);
@@ -179,7 +180,7 @@
   var V_WATER = `#version 300 es
   layout(location=0) in vec3 aPos; uniform mat4 uVP; uniform float uTime; out vec3 vW; out vec3 vN;
   void main(){ vec3 p=aPos; float t=uTime;
-    float h=sin(p.x*0.18+t*1.1)*0.10+sin(p.z*0.23-t*0.9)*0.09+sin((p.x+p.z)*0.4+t*1.7)*0.04; p.y+=h;
+    float h=sin(p.x*0.18+t*1.1)*0.06+sin(p.z*0.23-t*0.9)*0.05+sin((p.x+p.z)*0.4+t*1.7)*0.025; p.y+=h-0.30; // sit below the land plate so crests never poke through
     float dx=cos(p.x*0.18+t*1.1)*0.018+cos((p.x+p.z)*0.4+t*1.7)*0.016;
     float dz=cos(p.z*0.23-t*0.9)*0.021+cos((p.x+p.z)*0.4+t*1.7)*0.016;
     vN=normalize(vec3(-dx,1.0,-dz)); vW=p; gl_Position=uVP*vec4(p,1.0); }`;

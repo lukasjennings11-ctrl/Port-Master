@@ -49,14 +49,38 @@
 
   // ---- scene ----
   var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex;
+  var era = 0, scene = { city: [], crane: false, era: 0 };
+  var cityModels = null, atlasTex = null;   // glTF buildings (async) + shared atlas
   function buildBiome(id) {
     if (!HARBOR_BIOMES[id]) id = 'green';
     biomeId = id; biome = HARBOR_BIOMES[id];
-    var rng = mulberry(hash('harbor:' + id));
+    var rng = mulberry(hash('harbor:' + id + ':e' + era));
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
-    HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng);
+    scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era) || { city: [], crane: false, era: era };
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
     if (window.Retention) Retention.set(GAME, 'biome', id);
+  }
+
+  // ---- glTF city assets (loaded once, async; procedural scene renders meanwhile) ----
+  function uploadAtlas(bytes) {
+    var blob = new Blob([bytes], { type: 'image/png' }), url = URL.createObjectURL(blob), img = new Image();
+    img.onload = function () { atlasTex = E.texture(img); URL.revokeObjectURL(url); };
+    img.src = url;
+  }
+  function loadAssets() {
+    if (!window.HGLTF || !window.HARBOR_ASSETS) return;
+    var urls = HARBOR_ASSETS.buildings; cityModels = new Array(urls.length);
+    urls.forEach(function (u, bi) {
+      HGLTF.load(u).then(function (model) {
+        cityModels[bi] = {
+          prims: model.primitives.map(function (p) {
+            return { mesh: E.mesh({ positions: p.positions, normals: p.normals, uvs: p.uvs, colors: p.colors, indices: p.indices }), textured: p.image != null, baseColor: p.baseColor };
+          }),
+          h: (model.max[1] - model.min[1]) || 1
+        };
+        if (!atlasTex) for (var i = 0; i < model.primitives.length; i++) { var im = model.primitives[i].image; if (im != null && model.images[im]) { uploadAtlas(model.images[im]); break; } }
+      }).catch(function () { cityModels[bi] = null; });
+    });
   }
 
   // ---- day/night ----
@@ -80,7 +104,25 @@
   var mView = mat4 && mat4.create(), mProj = mat4 && mat4.create(), mVP = mat4 && mat4.create(),
     mLV = mat4 && mat4.create(), mLP = mat4 && mat4.create(), mLVP = mat4 && mat4.create(), mModel = mat4 && mat4.create(), mI = mat4 && mat4.create();
   function compose(o, tx, ty, tz, sx, sy, sz) { o[0] = sx; o[1] = 0; o[2] = 0; o[3] = 0; o[4] = 0; o[5] = sy; o[6] = 0; o[7] = 0; o[8] = 0; o[9] = 0; o[10] = sz; o[11] = 0; o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1; }
+  function composeRY(o, tx, ty, tz, s, ry) { var c = Math.cos(ry), sn = Math.sin(ry); o[0] = c * s; o[1] = 0; o[2] = -sn * s; o[3] = 0; o[4] = 0; o[5] = s; o[6] = 0; o[7] = 0; o[8] = sn * s; o[9] = 0; o[10] = c * s; o[11] = 0; o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1; }
   function eye() { var ce = Math.cos(C.el), se = Math.sin(C.el); return [C.tx + C.dist * ce * Math.sin(C.az), C.ty + C.dist * se, C.tz + C.dist * ce * Math.cos(C.az)]; }
+
+  // draw the modern skyline (glTF buildings) — textured prim uses the shared atlas, flat "lit" prims use baseColor
+  function drawCity(M) {
+    if (!atlasTex || !cityModels || !scene.city.length) return;
+    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uRough, 0.5);
+    for (var i = 0; i < scene.city.length; i++) {
+      var c = scene.city[i], cm = cityModels[c.bi]; if (!cm) continue;
+      composeRY(mModel, c.x, 0, c.z, c.s, c.rot); gl.uniformMatrix4fv(M.u.uModel, false, mModel);
+      for (var pi = 0; pi < cm.prims.length; pi++) {
+        var pr = cm.prims[pi];
+        if (pr.textured) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1f(M.u.uAlbedo, 1); gl.uniform3fv(M.u.uBase, c.tint); }
+        else { gl.uniform1f(M.u.uAlbedo, 0); gl.uniform3fv(M.u.uBase, [pr.baseColor[0] * c.tint[0], pr.baseColor[1] * c.tint[1], pr.baseColor[2] * c.tint[2]]); }
+        drawMesh(M, pr.mesh);
+      }
+    }
+    gl.uniform1f(M.u.uAlbedo, 0);
+  }
 
   // ---- crane dynamic parts ----
   function craneParts() {
@@ -101,23 +143,14 @@
 
   function render() {
     if (!gl) return;
-    var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz], parts = craneParts();
+    var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
+    var parts = scene.crane ? craneParts() : [];
 
-    // shadow pass
-    var sp = [target[0] + sd[0] * 90, target[1] + sd[1] * 90, target[2] + sd[2] * 90];
-    mat4.lookAt(mLV, sp, target, [0, 1, 0]); mat4.ortho(mLP, -110, 110, -110, 110, 1, 260); mat4.mul(mLVP, mLP, mLV);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, E.shadowFB); gl.viewport(0, 0, E.SH, E.SH); gl.clear(gl.DEPTH_BUFFER_BIT);
-    gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
-    var D = E.P_depth; gl.useProgram(D.p); gl.uniformMatrix4fv(D.u.uLightVP, false, mLVP);
-    compose(mI, 0, 0, 0, 1, 1, 1); gl.uniformMatrix4fv(D.u.uModel, false, mI);
-    drawMesh(D, meshFac); drawMesh(D, meshGrit); drawMesh(D, meshFlat);
-    for (var i = 0; i < parts.length; i++) { compose(mModel, parts[i].t[0], parts[i].t[1], parts[i].t[2], parts[i].s[0], parts[i].s[1], parts[i].s[2]); gl.uniformMatrix4fv(D.u.uModel, false, mModel); drawMesh(D, boxMesh); }
-    gl.cullFace(gl.BACK);
-
-    // main
+    // main (shadows removed — cleaner cartoon look)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(en.bot[0], en.bot[1], en.bot[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    mat4.perspective(mProj, 0.82, canvas.width / canvas.height, 0.5, 900); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
+    mat4.perspective(mProj, 0.82, canvas.width / canvas.height, 0.5, 1600); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
+    var i;
 
     // sky
     gl.depthMask(false); gl.disable(gl.CULL_FACE);
@@ -128,23 +161,24 @@
 
     // scene meshes
     var M = E.P_main; gl.useProgram(M.p);
-    gl.uniformMatrix4fv(M.u.uVP, false, mVP); gl.uniformMatrix4fv(M.u.uLightVP, false, mLVP);
+    gl.uniformMatrix4fv(M.u.uVP, false, mVP);
     gl.uniform3fv(M.u.uSunDir, sd); gl.uniform3fv(M.u.uSunCol, en.sun);
-    gl.uniform3fv(M.u.uAmbTop, [0.40 * (0.5 + en.day * 0.8), 0.45 * (0.5 + en.day * 0.8), 0.56 * (0.5 + en.day * 0.8)]);
-    gl.uniform3fv(M.u.uAmbBot, [0.16, 0.17, 0.2]);
-    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0014);
+    gl.uniform3fv(M.u.uAmbTop, [0.42 * (0.5 + en.day * 0.8), 0.47 * (0.5 + en.day * 0.8), 0.58 * (0.5 + en.day * 0.8)]);
+    gl.uniform3fv(M.u.uAmbBot, [0.18, 0.19, 0.22]);
+    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0011);
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
-    gl.uniform1f(M.u.uExposure, 1.58); gl.uniform1f(M.u.uSat, 1.25); gl.uniform1f(M.u.uShadowOn, 1);
-    gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1);
+    gl.uniform1f(M.u.uExposure, 1.62); gl.uniform1f(M.u.uSat, 1.3); gl.uniform1f(M.u.uShadowOn, 0);
+    gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1); gl.uniform1f(M.u.uAlbedo, 0);
     gl.uniformMatrix4fv(M.u.uModel, false, mI);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, E.shadowTex); gl.uniform1i(M.u.uShadow, 0);
     gl.activeTexture(gl.TEXTURE1); gl.uniform1i(M.u.uTex, 1);
     // flat (no tex), grit (grit tex), fac (window tex)
     gl.uniform1f(M.u.uTexMix, 0); drawMesh(M, meshFlat);
     gl.bindTexture(gl.TEXTURE_2D, gritTex); gl.uniform1f(M.u.uTexMix, 0.5); drawMesh(M, meshGrit);
     gl.bindTexture(gl.TEXTURE_2D, facTex); gl.uniform1f(M.u.uTexMix, 0.8); drawMesh(M, meshFac);
+    // modern skyline (glTF assets)
+    gl.uniform1f(M.u.uTexMix, 0); drawCity(M);
     // dynamic crane parts (flat colour)
-    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uRough, 0.5);
+    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uAlbedo, 0); gl.uniform1f(M.u.uRough, 0.5);
     for (i = 0; i < parts.length; i++) { gl.uniform3fv(M.u.uBase, parts[i].c); compose(mModel, parts[i].t[0], parts[i].t[1], parts[i].t[2], parts[i].s[0], parts[i].s[1], parts[i].s[2]); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh); }
 
     // water
@@ -160,7 +194,7 @@
   // One handler tracks all active pointers so a pinch never doubles as an orbit (the spin-out bug).
   var ptrs = new Map(), pinchPrev = 0, panPrev = null, lastTap = 0;
   function pxy(e) { var b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
-  function defaultView() { C.azT = 2.42; C.elT = 0.5; C.distT = Math.min(140, Math.max(90, CH * 0.18)); C.txT = 0; C.tzT = 4; }
+  function defaultView() { C.azT = 2.42; C.elT = 0.52; C.distT = Math.min(190, Math.max(120, CH * 0.24)); C.txT = 0; C.tzT = 6; }
   if (canvas.addEventListener) {
     canvas.addEventListener('pointerdown', function (e) {
       if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
@@ -179,7 +213,7 @@
       } else if (ptrs.size >= 2) {                        // pinch-zoom + pan, orbit disabled
         var pts = Array.from(ptrs.values()), a = pts[0], b = pts[1];
         var d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.5, 1.5); C.distT = clamp(C.distT * f, 42, 230); }
+        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.5, 1.5); C.distT = clamp(C.distT * f, 42, 360); }
         pinchPrev = d;
         if (panPrev) {                                    // two-finger drag pans the focus point
           var scl = C.dist * 0.0016, ce = Math.cos(C.az), se = Math.sin(C.az);
@@ -195,7 +229,7 @@
       if (ptrs.size < 2) { pinchPrev = 0; panPrev = null; }
     }
     window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
-    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 42, 230); }, { passive: false });
+    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 42, 360); }, { passive: false });
   }
 
   function frame(now) {
@@ -253,14 +287,18 @@
     E = HGL.createEngine(gl);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
-    waterMesh = E.mesh(E.plane(620, 150)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture());
+    waterMesh = E.mesh(E.plane(1100, 200)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture());
+    loadAssets();
     loadUnlocked();
+    era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
     if (saved && !isUnlocked(saved)) saved = null;
     buildBiome(saved || 'green');
     resize(); defaultView(); C.dist = C.distT; C.tx = C.txT; C.tz = C.tzT; buildSelector();
     try { var q = window.location.search; var m;
+      if ((m = /[?&]era=(\d+)/.exec(q))) { era = +m[1] | 0; }
       if ((m = /[?&]biome=(\w+)/.exec(q))) { buildBiome(m[1]); buildSelector._set && buildSelector._set(); }
+      else if (/[?&]era=/.test(q)) buildBiome(biomeId);   // rebuild for forced era
       if ((m = /[?&]tod=([0-9.]+)/.exec(q))) tod = +m[1] % 1;
       if ((m = /[?&]az=(-?[0-9.]+)/.exec(q))) { C.az = C.azT = +m[1]; }
       if ((m = /[?&]el=([0-9.]+)/.exec(q))) { C.el = C.elT = +m[1]; }
@@ -274,8 +312,9 @@
   }
 
   window.__harbor = {
-    state: function () { return { biome: biomeId, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist) }, webgl: !!gl, phase: 'look-2.1' }; },
+    state: function () { return { biome: biomeId, era: era, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist) }, webgl: !!gl, phase: 'look-3.0' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
+    setEra: function (n) { era = Math.max(0, n | 0); if (window.Retention) Retention.set(GAME, 'era', era); if (E) buildBiome(biomeId); },
     unlockWorld: function (id) { unlockWorld(id); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
