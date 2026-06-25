@@ -82,6 +82,23 @@
 
   var RES_KEYS = ['food', 'wood', 'stone', 'gold', 'know'];
   var CAP_BASE = { food: 200, wood: 200, stone: 200, gold: 500, know: 100 };
+  var AGE_NAMES = ['Age I · Founding', 'Age II · Village', 'Age III · Roman City'];
+
+  // requirement to advance FROM the given age (knowledge is spent on advancing)
+  var ADV_REQ = [
+    { know: 40,  pop: 9,  prod: 3 },   // Age I  -> II
+    { know: 120, pop: 24, prod: 6 },   // Age II -> III
+    null                                // Age III is the summit (for now)
+  ];
+
+  var MISSIONS = [
+    { id: 'm_build',   text: 'Build 5 buildings',      target: 5,   reward: 30 },
+    { id: 'm_pop',     text: 'Reach 15 population',     target: 15,  reward: 35 },
+    { id: 'm_food',    text: 'Stockpile 150 food',      target: 150, reward: 30 },
+    { id: 'm_know',    text: 'Gather 60 knowledge',     target: 60,  reward: 35 },
+    { id: 'm_advance', text: 'Advance to a new age',    target: 1,   reward: 50 },
+    { id: 'm_upgrade', text: 'Upgrade 3 buildings',     target: 3,   reward: 30 }
+  ];
 
   // ---- DOM ----
   var canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
@@ -92,6 +109,7 @@
   var panel = document.getElementById('panel');
   var panelTitle = document.getElementById('panel-title');
   var panelBody = document.getElementById('panel-body');
+  var menuBtn = document.getElementById('menu');
 
   var particles = new Juice.Particles(), popups = new Juice.Popups();
 
@@ -241,7 +259,9 @@
   // recompute population, labour efficiency, and storage caps from placed buildings
   function recompute() {
     pop = 0; popUsed = 0;
-    var cap = { food: CAP_BASE.food, wood: CAP_BASE.wood, stone: CAP_BASE.stone, gold: CAP_BASE.gold, know: CAP_BASE.know };
+    var capMul = 1 + S.age * 0.6;   // caps grow each age
+    var cap = {};
+    for (var ci = 0; ci < RES_KEYS.length; ci++) cap[RES_KEYS[ci]] = Math.round(CAP_BASE[RES_KEYS[ci]] * capMul);
     eachBuilding(function (t, def) {
       var lvl = t.b.level || 1;
       if (def.pop) pop += def.pop * lvl;
@@ -294,7 +314,7 @@
     var c = def.cost || {};
     for (var k in c) S.res[k] -= c[k];
     t.b = { id: id, level: 1 };
-    recompute(); save();
+    recompute(); mission('m_build', 1); save();
     return true;
   }
 
@@ -528,6 +548,15 @@
       }
     }
     particles.draw(ctx); popups.draw(ctx);
+
+    if (sweep > 0) {
+      var x = CW * (1.4 * (1 - sweep) - 0.2);
+      var g = ctx.createLinearGradient(x - CW * 0.35, 0, x + CW * 0.35, 0);
+      g.addColorStop(0, 'rgba(224,177,90,0)');
+      g.addColorStop(0.5, 'rgba(255,242,205,' + (0.55 * sweep) + ')');
+      g.addColorStop(1, 'rgba(224,177,90,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, CW, CH);
+    }
   }
 
   // ---------- picking ----------
@@ -644,7 +673,7 @@
     var c = upgradeCost(t); if (!c || !affordableCost(c)) return false;
     for (var k in c) S.res[k] -= c[k];
     t.b.level = (t.b.level || 1) + 1;
-    recompute(); save(); return true;
+    recompute(); mission('m_upgrade', 1); save(); return true;
   }
   function demolish(t) {
     var d = defOf(t.b.id), base = d.cost || {};
@@ -672,8 +701,14 @@
   function grantReward(rw) { if (!rw) return; for (var k in rw) S.res[k] = clamp((S.res[k] || 0) + rw[k], 0, S.cap[k]); recompute(); }
   function rewardLabel(rw) { var p = []; for (var k in rw) p.push(RES_ICON[k] + rw[k]); return p.join(' '); }
   function renderAdvisor() {
+    if (canAdvance()) {
+      questText.innerHTML = '⭐ Ready to advance to <b>' + nextAgeName() + '</b> — tap ☰';
+      menuBtn.classList.add('ready');
+      return;
+    }
+    menuBtn.classList.remove('ready');
     var q = currentQuest();
-    questText.innerHTML = q ? q.text : 'Your city prospers — keep building toward the next age.';
+    questText.innerHTML = q ? q.text : 'Your city prospers — gather 📜 knowledge to advance the age (☰).';
   }
   function checkQuests() {
     var guard = 0, q;
@@ -684,6 +719,113 @@
       save();
     }
     renderAdvisor();
+  }
+
+  // ---------- ages / advancement ----------
+  function sumLevels() { var n = 0; eachBuilding(function (t) { n += t.b.level || 1; }); return n; }
+  function cityRating() { return S.age * 200 + pop * 4 + sumLevels() * 8 + countBuildings() * 6; }
+
+  function advanceReq() { return ADV_REQ[Math.min(S.age, ADV_REQ.length - 1)]; }
+  function canAdvance() {
+    var r = advanceReq(); if (!r) return false;
+    return S.res.know >= r.know && pop >= r.pop && countProducing() >= (r.prod || 0);
+  }
+  function advanceAge() {
+    if (!canAdvance()) return false;
+    var r = advanceReq();
+    S.res.know -= r.know;
+    S.age++;
+    var stars = 1 + (pop >= r.pop * 1.5 ? 1 : 0) + (pop >= r.pop * 2.2 ? 1 : 0);
+    recompute(); layout();                       // bigger caps + zoom out to reveal new land
+    Progress.completeLevel(GAME, S.age, stars);
+    Progress.addCoins(GAME, 30 * S.age);
+    Retention.submitScore(GAME, cityRating());
+    mission('m_advance', 1);
+    Juice.Audio.play('win'); Juice.vibrate([20, 40, 20]); ageSweep();
+    Stage.card({
+      kicker: 'The city grows', title: AGE_NAMES[Math.min(S.age, AGE_NAMES.length - 1)],
+      body: 'New land is settled and new buildings are available. Storage expands. +' + (30 * S.age) + ' 🪙',
+      actions: [{ label: 'Continue', onClick: function () {} }]
+    });
+    renderHUD(); renderAdvisor(); save();
+    return true;
+  }
+  function nextAgeName() { return AGE_NAMES[Math.min(S.age + 1, AGE_NAMES.length - 1)]; }
+
+  // golden sweep across the board when an age advances
+  var sweep = 0;
+  function ageSweep() { sweep = 1; }
+
+  // ---------- daily missions / coins ----------
+  function mission(id, amt, abs) {
+    var m = Progress.bumpMission(GAME, id, amt, abs);
+    if (m) Stage.toast(wrap, '★ ' + m.text + '  +' + m.reward + ' 🪙', 1900);
+  }
+  function bumpAbsMissions() {
+    mission('m_pop', pop, true);
+    mission('m_food', Math.floor(S.res.food), true);
+    mission('m_know', Math.floor(S.res.know), true);
+  }
+
+  // ---------- City Hall menu ----------
+  function showMenu() {
+    var missions = Progress.dailyMissions(GAME, MISSIONS, 3);
+    var r = advanceReq();
+    var advHtml;
+    if (!r) advHtml = '<div class="panel-note" style="text-align:center">You\'ve reached the height of the age. 🏛️</div>';
+    else {
+      var rows = [
+        reqRow('📜 Knowledge', S.res.know, r.know),
+        reqRow('👥 Population', pop, r.pop),
+        reqRow('🏭 Producers', countProducing(), r.prod)
+      ].join('');
+      advHtml = '<div style="text-align:left;font-size:13px;margin:2px 0 4px;color:var(--muted)">Advance to <b style="color:var(--accent)">' + nextAgeName() + '</b> (spends 📜' + r.know + ')</div>' + rows;
+    }
+    var body =
+      '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin:-4px 0 8px">'
+      + '<span>🏅 Rating <b style="color:var(--text)">' + cityRating() + '</b></span>'
+      + '<span>🪙 ' + Progress.coins(GAME) + '</span>'
+      + '<span>🔥 ' + Retention.streak(GAME) + 'd</span></div>'
+      + advHtml
+      + '<div style="font-size:11px;letter-spacing:.12em;color:var(--muted);text-align:left;margin:12px 0 2px">DAILY MISSIONS</div>'
+      + Stage.missionsHTML(missions);
+    var actions = [];
+    if (canAdvance()) actions.push({ label: 'Advance the Age ▲', onClick: advanceAge });
+    actions.push({ label: 'New city', ghost: true, onClick: confirmReset });
+    actions.push({ label: 'Close', ghost: true, onClick: function () {} });
+    Stage.card({ kicker: 'City Hall', title: AGE_NAMES[Math.min(S.age, AGE_NAMES.length - 1)], body: body, actions: actions });
+  }
+  function reqRow(label, have, need) {
+    var ok = have >= need;
+    return '<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0">'
+      + '<span>' + label + '</span><span style="color:' + (ok ? 'var(--good)' : 'var(--muted)') + '">'
+      + Math.floor(have) + ' / ' + need + (ok ? ' ✓' : '') + '</span></div>';
+  }
+  function confirmReset() {
+    Stage.card({
+      kicker: 'Start over', title: 'Found a new city?',
+      body: 'Your current city will be lost.',
+      actions: [
+        { label: 'Yes, start fresh', onClick: function () { Retention.set(GAME, 'save', null); newGame(); renderHUD(); renderAdvisor(); S.questIdx = 0; } },
+        { label: 'Keep my city', ghost: true, onClick: showMenu }
+      ]
+    });
+  }
+
+  // ---------- offline ("while you were away") ----------
+  function offlineWelcome() {
+    var now = Date.now(), dt = clamp((now - (S.lastSeen || now)) / 1000, 0, 8 * 3600);
+    if (dt < 30) return;
+    var gains = accrue(dt); recompute();
+    var parts = [];
+    for (var k in gains) { var g = Math.floor(gains[k]); if (g > 0) parts.push(RES_ICON[k] + ' +' + g); }
+    if (!parts.length) return;
+    var mins = Math.round(dt / 60);
+    Stage.card({
+      kicker: 'Welcome back', title: 'While you were away',
+      body: 'Over ' + (mins >= 60 ? Math.round(mins / 60) + 'h' : mins + ' min') + ' your city produced<br><b style="font-size:17px;color:var(--text)">' + parts.join('&nbsp; ') + '</b>',
+      actions: [{ label: 'Collect', onClick: function () {} }]
+    });
   }
 
   // ---------- save / load ----------
@@ -699,15 +841,27 @@
     catch (e) { return null; }
   }
   function urlHas(name) { try { return new RegExp('[?&]' + name + '\\b').test(window.location.search); } catch (e) { return false; } }
-  // dev showcase: populate a city and open the build menu (for screenshots only; behind ?demo)
+  // dev showcase: populate a city (for screenshots only; behind ?demo[&age=N][&hall])
   function demoSetup() {
-    S.res = { food: 120, wood: 220, stone: 90, gold: 320, know: 30 }; recompute();
-    var spots = [];
-    for (var i = 2; i <= 6; i++) for (var j = 2; j <= 6; j++) { var t = S.tiles[i][j]; if (t.type === 'grass' && !t.b) spots.push(t); }
-    var plan = ['hut', 'farm', 'hut', 'lumber', 'farm', 'hut'];
-    for (var k = 0; k < plan.length && k < spots.length; k++) build(spots[k].gx, spots[k].gy, plan[k]);
-    accrue(20); renderHUD(); checkQuests();
-    for (var m = plan.length; m < spots.length; m++) if (isBuildable(spots[m])) { openPanel(spots[m]); break; }
+    var ap = /[?&]age=(\d)/.exec(window.location.search);
+    if (ap) { S.age = +ap[1]; recompute(); layout(); }
+    S.res = { food: 150, wood: 320, stone: 160, gold: 420, know: 70 }; recompute();
+    var ur = unlockR(), spots = [];
+    for (var i = 0; i < GRID; i++) for (var j = 0; j < GRID; j++) {
+      var t = S.tiles[i][j];
+      if (Math.max(Math.abs(i - CENTER), Math.abs(j - CENTER)) <= ur && t.type === 'grass' && !t.b) spots.push(t);
+    }
+    var plan = S.age >= 2 ? ['hut', 'farm', 'house', 'market', 'library', 'house', 'farm', 'insula', 'forum', 'hut', 'house', 'colosseum']
+      : S.age >= 1 ? ['hut', 'farm', 'house', 'market', 'lumber', 'house', 'farm', 'library', 'hut']
+      : ['hut', 'farm', 'hut', 'lumber', 'farm', 'hut'];
+    var k = 0;
+    for (var p = 0; p < plan.length && k < spots.length; p++) {
+      while (k < spots.length && !build(spots[k].gx, spots[k].gy, plan[p])) k++;
+      k++;
+    }
+    accrue(30); recompute(); renderHUD(); checkQuests(); renderAdvisor();
+    if (urlHas('hall')) showMenu();
+    else for (var m = 0; m < spots.length; m++) if (isBuildable(spots[m])) { openPanel(spots[m]); break; }
   }
   function newGame(sd) {
     seed = (sd == null) ? (Date.now() >>> 0) : (sd >>> 0);
@@ -759,7 +913,7 @@
     else { closePanel(); }
   });
   document.getElementById('panel-close').addEventListener('click', closePanel);
-  document.getElementById('menu').addEventListener('click', function () { /* City Hall menu — Phase 4 */ });
+  menuBtn.addEventListener('click', showMenu);
   var muteBtn = document.getElementById('mute');
   muteBtn.addEventListener('click', function () {
     var m = Juice.Audio.toggleMute(); Retention.set(GAME, 'muted', m); Portal.mute(m);
@@ -767,26 +921,30 @@
   });
 
   // ---------- loop ----------
-  var questT = 0;
+  var questT = 0, saveT = 0;
   function update(dt) {
     particles.update(dt); popups.update(dt);
-    if (S) {
-      accrue(dt);                 // live production into the store (capped)
-      questT -= dt;
-      if (questT <= 0) { questT = 0.5; checkQuests(); }  // catches accrual-based quests
-    }
+    if (sweep > 0) sweep = Math.max(0, sweep - dt * 0.7);
+    if (!S) return;
+    accrue(dt);                 // live production into the store (capped)
+    questT -= dt;
+    if (questT <= 0) { questT = 0.5; checkQuests(); bumpAbsMissions(); }
+    saveT -= dt;
+    if (saveT <= 0) { saveT = 5; save(); }   // periodic autosave keeps lastSeen fresh for offline calc
   }
 
   // ---------- boot ----------
   function boot() {
     Portal.loadingStart();
     if (Retention.get(GAME, 'muted', false)) { Juice.Audio.setMuted(true); muteBtn.textContent = '🔇'; }
-    var us = urlSeed();
+    Progress.dailyMissions(GAME, MISSIONS, 3);
+    Retention.touchStreak(GAME);
+    var us = urlSeed(), loaded = false;
     if (us != null) newGame(us);
-    else if (!load()) newGame();
+    else loaded = load() || (newGame(), false);
     if (urlHas('demo')) demoSetup();
     layout(); renderHUD(); renderAdvisor();
-    Retention.touchStreak(GAME);
+    if (loaded && !urlHas('demo')) offlineWelcome();
 
     if (window.ResizeObserver) new ResizeObserver(function () { layout(); }).observe(wrap);
     window.addEventListener('resize', layout);
@@ -829,8 +987,13 @@
     rates: ratesPerSec,
     accrue: function (sec) { var g = accrue(sec); recompute(); return g; },
     recompute: recompute,
+    canAdvance: canAdvance,
+    advanceAge: advanceAge,
+    rating: cityRating,
     setRes: function (o) { for (var k in o) S.res[k] = o[k]; recompute(); },  // test helper
-    setAge: function (a) { S.age = a; layout(); },                            // test helper
+    setAge: function (a) { S.age = a; recompute(); layout(); },               // test helper
+    setLastSeen: function (ms) { S.lastSeen = ms; },                          // test helper (offline)
+    offline: offlineWelcome,
     pick: function (gx, gy) { var t = tileAt(gx, gy); if (t) openPanel(t); return t; },
     save: save, load: load,
     _S: function () { return S; }
