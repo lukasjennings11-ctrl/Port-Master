@@ -1,0 +1,85 @@
+/* HARBOR — nautical-industrial chrome over a hand-drawn side-on port. */
+@font-face {
+  font-family: 'BigShoulders';
+  src: url('fonts/BigShoulders-Bold.ttf') format('truetype');
+  font-weight: 700; font-display: swap;
+}
+@font-face {
+  font-family: 'Outfit';
+  src: url('fonts/Outfit-Regular.ttf') format('truetype');
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'Outfit';
+  src: url('fonts/Outfit-Bold.ttf') format('truetype');
+  font-weight: 700; font-display: swap;
+}
+
+:root {
+  --brass:  #f2b35e;
+  --teal:   #4fd6c4;
+  --panel:  #0e2230;
+  --panel2: #143246;
+  --text:   #eaf4f7;
+  --muted:  #8fb0bd;
+  --sea:    #0c1c26;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  color: var(--text); background: var(--sea);
+  user-select: none; -webkit-user-select: none; touch-action: none;
+}
+
+#loader {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+  background: radial-gradient(120% 90% at 50% 30%, #16384a, #07141c 80%);
+}
+#loader.hidden { display: none; }
+#loader .logo {
+  font-family: 'BigShoulders', sans-serif; font-weight: 700; font-size: 56px;
+  letter-spacing: .12em; color: var(--brass); padding-left: .12em;
+  text-shadow: 0 2px 24px rgba(242,179,94,.35);
+}
+#loader .spinner {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid rgba(79,214,196,.25); border-top-color: var(--teal);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+.hud {
+  display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+  padding-top: calc(9px + env(safe-area-inset-top));
+  background: linear-gradient(180deg, rgba(8,18,24,.92), rgba(8,18,24,.55) 80%, transparent);
+  z-index: 5; pointer-events: none;
+}
+.hud .brand {
+  font-family: 'BigShoulders', sans-serif; font-weight: 700; font-size: 24px;
+  letter-spacing: .14em; color: var(--brass);
+}
+.hud .era {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--text);
+  background: rgba(79,214,196,.14); border: 1px solid rgba(79,214,196,.3);
+  padding: 3px 10px; border-radius: 999px;
+}
+.hud .clock { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); }
+
+.board-wrap { position: relative; flex: 1 1 auto; overflow: hidden; }
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.hint {
+  position: absolute; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom));
+  transform: translateX(-50%); margin: 0; z-index: 5; pointer-events: none;
+  font-size: 12px; color: var(--muted); background: rgba(8,18,24,.5);
+  padding: 5px 12px; border-radius: 999px; white-space: nowrap;
+  transition: opacity .4s ease;
+}
+.hint.gone { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) { #loader .spinner { animation: none; } }
