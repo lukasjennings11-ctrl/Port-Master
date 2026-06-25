@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#2a2118" />
+  <meta name="description" content="POLIS — found a village and grow it into a Roman city across the ages. Build, harvest, research, and watch your world transform. Free, no install." />
+  <meta property="og:title" content="POLIS" />
+  <meta property="og:description" content="Build a village into a Roman city across the ages." />
+  <title>POLIS — build a city through the ages</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="loader"><div class="logo">POLIS</div><div class="spinner" aria-label="Loading"></div></div>
+  <div id="app">
+    <header class="hud" id="resbar">
+      <div class="res" id="r-food"><span class="ri">🌾</span><span class="rv">0</span></div>
+      <div class="res" id="r-wood"><span class="ri">🪵</span><span class="rv">0</span></div>
+      <div class="res" id="r-stone"><span class="ri">⛏️</span><span class="rv">0</span></div>
+      <div class="res" id="r-gold"><span class="ri">🪙</span><span class="rv">0</span></div>
+      <div class="res" id="r-know"><span class="ri">📜</span><span class="rv">0</span></div>
+      <div class="hud-btns">
+        <button id="menu" class="icon-btn" aria-label="City Hall">☰</button>
+        <button id="mute" class="icon-btn" aria-label="Toggle sound">🔊</button>
+      </div>
+    </header>
+
+    <div class="board-wrap">
+      <canvas id="game" aria-label="POLIS city board"></canvas>
+
+      <!-- advisor / objective banner -->
+      <div id="advisor" class="advisor">
+        <span class="age" id="age-pill">Age I · Founding</span>
+        <span class="quest" id="quest-text">Tap a tile to build.</span>
+      </div>
+
+      <!-- build / inspect panel (slides up from bottom) -->
+      <div id="panel" class="panel hidden" role="dialog" aria-modal="true">
+        <div class="panel-head">
+          <span id="panel-title">Build</span>
+          <button id="panel-close" class="icon-btn" aria-label="Close">✕</button>
+        </div>
+        <div id="panel-body" class="panel-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../../shared/juice.js?v=1"></script>
+  <script src="../../shared/retention.js?v=1"></script>
+  <script src="../../shared/portal.js?v=1"></script>
+  <script src="../../shared/progression.js?v=1"></script>
+  <script src="../../shared/stage.js?v=1"></script>
+  <script src="game.js?v=1"></script>
+</body>
+</html>
