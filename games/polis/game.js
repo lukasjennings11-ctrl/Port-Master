@@ -437,8 +437,9 @@
     ctx.lineTo(cx - half, cy);          // L
     ctx.closePath();
     if (type === 'water') {
+      var sh = REDUCED ? 0 : (Math.sin(clock * 1.5 + (t.gx + t.gy) * 0.7) * 0.5 + 0.5);
       var g = ctx.createLinearGradient(cx, cy - quart, cx, cy + quart);
-      g.addColorStop(0, '#8fd0e6'); g.addColorStop(1, '#5aa6c8');
+      g.addColorStop(0, shade('#8fd0e6', 0.95 + sh * 0.10)); g.addColorStop(1, '#5aa6c8');
       ctx.fillStyle = g;
     } else {
       ctx.fillStyle = topCol;
@@ -754,7 +755,7 @@
 
   // golden sweep across the board when an age advances
   var sweep = 0;
-  function ageSweep() { sweep = 1; }
+  function ageSweep() { sweep = REDUCED ? 0 : 1; }
 
   // ---------- daily missions / coins ----------
   function mission(id, amt, abs) {
@@ -921,8 +922,13 @@
   });
 
   // ---------- loop ----------
-  var questT = 0, saveT = 0;
+  var REDUCED = false;
+  try { REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+  var clock = 0;
+
+  var questT = 0, saveT = 0, fxT = 0;
   function update(dt) {
+    clock += dt;
     particles.update(dt); popups.update(dt);
     if (sweep > 0) sweep = Math.max(0, sweep - dt * 0.7);
     if (!S) return;
@@ -931,6 +937,15 @@
     if (questT <= 0) { questT = 0.5; checkQuests(); bumpAbsMissions(); }
     saveT -= dt;
     if (saveT <= 0) { saveT = 5; save(); }   // periodic autosave keeps lastSeen fresh for offline calc
+    fxT -= dt;
+    if (fxT <= 0) { fxT = REDUCED ? 2.6 : 1.1; emitProducerFx(); }   // a living city: drifting resource motes
+  }
+  function emitProducerFx() {
+    var prods = [];
+    eachBuilding(function (t, d) { if (d.prod && rateOf(t) > 0) prods.push({ t: t, res: d.prod.res }); });
+    if (!prods.length) return;
+    var pk = prods[(Math.random() * prods.length) | 0], p = isoOf(pk.t);
+    popups.add(p.x, p.y - TW * 0.55, RES_ICON[pk.res], { color: '#fff7ea', size: TW * 0.26, life: 1.1 });
   }
 
   // ---------- boot ----------
@@ -962,6 +977,14 @@
       Portal.loadingStop(); Portal.mute(Juice.Audio.isMuted());
       if (loader) loader.classList.add('hidden');
       Portal.gameStart();
+      if (!urlHas('demo') && !Retention.get(GAME, 'taught', false)) {
+        Retention.set(GAME, 'taught', true);
+        Stage.card({
+          kicker: 'Welcome to POLIS', title: 'Build through the ages',
+          body: 'Tap a tile to <b>build</b>. Farms, lumber camps and houses produce over time — even while you’re away. Gather <b>📜 knowledge</b> to <b>advance the age</b> and watch your village grow into a Roman city.',
+          actions: [{ label: 'Begin ▶', onClick: function () {} }]
+        });
+      }
     });
   }
 
