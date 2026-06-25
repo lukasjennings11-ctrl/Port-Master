@@ -112,6 +112,10 @@ html, body {
 .bcard .bg-cost { font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.3; }
 .bcard .bg-out { font-size: 10px; color: var(--good); margin-top: 2px; font-weight: 700; }
 
+.panel-note { grid-column: 1/-1; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.panel-note b { color: var(--text); }
+.panel-actions { grid-column: 1/-1; display: flex; flex-direction: column; }
+
 /* full-width action button inside panel (collect / upgrade / advance) */
 .pbtn {
   font-family: inherit; cursor: pointer; border: none; border-radius: 12px; width: 100%;

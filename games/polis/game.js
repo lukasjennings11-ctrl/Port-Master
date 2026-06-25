@@ -472,18 +472,46 @@
     ctx.beginPath(); ctx.ellipse(cx - TW * 0.04, cy - TW * 0.03, TW * 0.09, TW * 0.05, 0, 0, 6.28); ctx.fill();
   }
 
-  // building rendering stub (fleshed out with the catalog in later phases)
+  // a small extruded iso block per building, topped with its glyph
   function drawBuilding(t, cx, cy, half, quart) {
-    var b = t.b;
-    ctx.fillStyle = 'rgba(0,0,0,.15)';
-    ctx.beginPath(); ctx.ellipse(cx, cy + quart * 0.3, half * 0.5, quart * 0.5, 0, 0, 6.28); ctx.fill();
-    var h = TW * 0.5;
-    ctx.fillStyle = b.color || '#c9772f';
-    ctx.fillRect(cx - half * 0.4, cy - h * 0.5, half * 0.8, h * 0.6);
-    if (b.glyph) {
-      ctx.font = (TW * 0.32) + 'px system-ui';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(b.glyph, cx, cy - h * 0.2);
+    var b = t.b, d = defOf(b.id), lvl = b.level || 1;
+    var col = (d && d.color) || '#c9772f';
+    var hw = half * 0.52, q2 = quart * 0.52;
+    var h = TW * (0.40 + 0.10 * (lvl - 1)) + (d && d.landmark ? TW * 0.18 : 0);
+
+    // contact shadow
+    ctx.fillStyle = 'rgba(0,0,0,.18)';
+    ctx.beginPath(); ctx.ellipse(cx, cy + q2 * 0.5, hw * 1.05, q2 * 1.05, 0, 0, 6.28); ctx.fill();
+
+    // left face
+    ctx.fillStyle = shade(col, 0.66);
+    ctx.beginPath();
+    ctx.moveTo(cx - hw, cy); ctx.lineTo(cx, cy + q2);
+    ctx.lineTo(cx, cy + q2 - h); ctx.lineTo(cx - hw, cy - h); ctx.closePath(); ctx.fill();
+    // right face
+    ctx.fillStyle = shade(col, 0.82);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + q2); ctx.lineTo(cx + hw, cy);
+    ctx.lineTo(cx + hw, cy - h); ctx.lineTo(cx, cy + q2 - h); ctx.closePath(); ctx.fill();
+    // roof (top diamond)
+    ctx.fillStyle = shade(col, 1.08 > 1 ? 1 : 1.08);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - q2 - h); ctx.lineTo(cx + hw, cy - h);
+    ctx.lineTo(cx, cy + q2 - h); ctx.lineTo(cx - hw, cy - h); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.15)'; ctx.lineWidth = 1; ctx.stroke();
+
+    // glyph on the front
+    ctx.font = (TW * 0.30) + 'px system-ui';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(d ? d.glyph : '🏠', cx, cy - h * 0.42);
+
+    // level pips
+    if (lvl > 1) {
+      for (var i = 0; i < lvl; i++) {
+        ctx.fillStyle = '#fff7ea';
+        ctx.beginPath(); ctx.arc(cx - hw * 0.5 + i * (TW * 0.10), cy + q2 - h - TW * 0.06, TW * 0.028, 0, 6.28); ctx.fill();
+      }
     }
   }
 
@@ -517,17 +545,146 @@
     return null;
   }
 
-  // ---------- panel (Phase 1: tile inspector; build menu added in Phase 3) ----------
+  // ---------- panel: build menu / inspector / tile info ----------
+  var MAXLVL = 3;
+  var RES_ICON = { food: '🌾', wood: '🪵', stone: '⛏️', gold: '🪙', know: '📜' };
+
+  function fmtCost(cost) {
+    var parts = []; for (var k in cost) parts.push(RES_ICON[k] + cost[k]);
+    return parts.join('  ') || 'free';
+  }
+  function perMin(rate) { return Math.round(rate * 60 * 10) / 10; }
+  function blockLabel(b) {
+    return ({ cost: 'Need resources', terrain: 'Wrong ground', occupied: 'Occupied', water: 'On water',
+      'locked age': 'Later age', 'locked tile': 'Locked' })[b] || (b && b.indexOf('needs') === 0 ? 'Needs hills' : b);
+  }
+
   function openPanel(t) {
     sel = { gx: t.gx, gy: t.gy };
-    panelTitle.textContent = TER[t.type].name + (t.forest ? ' · Forest' : '');
-    var lines = [];
-    lines.push('Tile (' + t.gx + ',' + t.gy + ')');
-    lines.push(isUnlocked(t) ? (isBuildable(t) ? 'Buildable' : (t.b ? 'Occupied' : 'Not buildable')) : 'Locked — unlocks in a later age');
-    panelBody.innerHTML = '<div style="grid-column:1/-1;color:var(--muted);font-size:13px;line-height:1.6">' + lines.join('<br>') + '</div>';
+    if (t.b) renderInspector(t);
+    else if (isUnlocked(t) && t.type !== 'water') renderBuildMenu(t);
+    else renderTileInfo(t);
     panel.classList.remove('hidden');
   }
+  function refreshPanel() { if (sel) { var t = tileAt(sel.gx, sel.gy); if (t) openPanel(t); } }
   function closePanel() { panel.classList.add('hidden'); sel = null; }
+
+  function renderTileInfo(t) {
+    panelTitle.textContent = TER[t.type].name + (t.forest ? ' · Forest' : '');
+    var msg = !isUnlocked(t) ? 'Locked land — a later age will reveal and settle it.'
+      : (t.type === 'water' ? 'Open water. Docks and fishing come later.' : 'Nothing can be built here.');
+    panelBody.innerHTML = '<div class="panel-note">' + msg + '</div>';
+  }
+
+  function renderBuildMenu(t) {
+    panelTitle.textContent = 'Build';
+    var html = '';
+    for (var i = 0; i < CATALOG.length; i++) {
+      var d = CATALOG[i];
+      if (d.age > S.age) continue;
+      var pv = buildPreview(t.gx, t.gy, d.id), dis = !pv.ok;
+      var out;
+      if (d.prod) out = RES_ICON[d.prod.res] + ' ' + perMin(pv.rate) + '/min';
+      else if (d.pop) out = '👥 +' + d.pop;
+      else if (d.cap) { var ck = Object.keys(d.cap)[0]; out = '📦 +' + d.cap[ck] + ' ' + RES_ICON[ck]; }
+      else out = '';
+      var note = dis ? blockLabel(pv.block) : out;
+      html += '<div class="bcard' + (dis ? ' disabled' : '') + '" data-id="' + d.id + '">'
+        + '<div class="bg-ico">' + d.glyph + '</div>'
+        + '<div class="bg-name">' + d.name + '</div>'
+        + '<div class="bg-cost">' + fmtCost(d.cost) + '</div>'
+        + '<div class="bg-out" style="' + (dis ? 'color:var(--bad)' : '') + '">' + note + '</div>'
+        + '</div>';
+    }
+    panelBody.innerHTML = html;
+    var cards = panelBody.querySelectorAll('.bcard');
+    for (var c = 0; c < cards.length; c++) (function (card) {
+      card.addEventListener('click', function () {
+        var id = card.getAttribute('data-id');
+        if (build(t.gx, t.gy, id)) {
+          Juice.Audio.play('pop'); Juice.vibrate(12); buildFx(t);
+          renderHUD(); checkQuests(); refreshPanel();
+        }
+      });
+    })(cards[c]);
+  }
+
+  function upgradeCost(t) {
+    var d = defOf(t.b.id), lvl = t.b.level || 1;
+    if (lvl >= MAXLVL) return null;
+    var c = {}, base = d.cost || {};
+    for (var k in base) c[k] = Math.ceil(base[k] * lvl * 1.2);
+    return c;
+  }
+  function affordableCost(c) { for (var k in c) if ((S.res[k] || 0) < c[k]) return false; return true; }
+
+  function renderInspector(t) {
+    var d = defOf(t.b.id), lvl = t.b.level || 1;
+    panelTitle.textContent = d.name + (lvl > 1 ? ' · Lv ' + lvl : '');
+    var rows = [];
+    if (d.prod) rows.push(RES_ICON[d.prod.res] + ' <b>' + perMin(rateOf(t)) + '/min</b>' + (d.popCost && eff < 1 ? ' <span style="color:var(--bad)">(short on workers)</span>' : ''));
+    if (d.pop) rows.push('👥 +' + (d.pop * lvl) + ' population');
+    if (d.popCost) rows.push('👷 needs ' + d.popCost + ' workers');
+    if (d.cap) { var ck = Object.keys(d.cap)[0]; rows.push('📦 +' + (d.cap[ck] * lvl) + ' ' + RES_ICON[ck] + ' storage'); }
+    var up = upgradeCost(t);
+    var html = '<div class="panel-note">' + rows.join('<br>') + '</div><div class="panel-actions">';
+    if (up) html += '<button class="pbtn" id="pb-up"' + (affordableCost(up) ? '' : ' disabled') + '>Upgrade → Lv ' + (lvl + 1) + ' &nbsp;·&nbsp; ' + fmtCost(up) + '</button>';
+    else html += '<div class="panel-note" style="text-align:center">Max level reached</div>';
+    html += '<button class="pbtn ghost" id="pb-demo">Demolish</button></div>';
+    panelBody.innerHTML = html;
+    var ub = document.getElementById('pb-up');
+    if (ub) ub.addEventListener('click', function () {
+      if (upgrade(t)) { Juice.Audio.play('score'); buildFx(t); renderHUD(); checkQuests(); refreshPanel(); }
+    });
+    var db = document.getElementById('pb-demo');
+    if (db) db.addEventListener('click', function () { demolish(t); Juice.Audio.play('tap'); renderHUD(); closePanel(); });
+  }
+
+  function upgrade(t) {
+    var c = upgradeCost(t); if (!c || !affordableCost(c)) return false;
+    for (var k in c) S.res[k] -= c[k];
+    t.b.level = (t.b.level || 1) + 1;
+    recompute(); save(); return true;
+  }
+  function demolish(t) {
+    var d = defOf(t.b.id), base = d.cost || {};
+    for (var k in base) if (k === 'wood' || k === 'stone' || k === 'gold') S.res[k] = clamp((S.res[k] || 0) + Math.floor(base[k] * 0.5), 0, S.cap[k]);
+    t.b = null; recompute(); save();
+  }
+
+  function buildFx(t) {
+    var p = isoOf(t);
+    particles.burst(p.x, p.y - TW * 0.2, { count: 16, colors: ['#e0b15a', '#fff7ea', '#7cc28a'], speed: 150, life: 0.55, size: 4 });
+  }
+
+  // ---------- advisor quest chain (onboarding spine) ----------
+  function countId(id) { var n = 0; eachBuilding(function (t, d) { if (d.id === id) n++; }); return n; }
+  function countProducing() { var n = 0; eachBuilding(function (t, d) { if (d.prod && rateOf(t) > 0) n++; }); return n; }
+  var QUESTS = [
+    { id: 'hut', text: 'Tap the green plaza and build a Hut 🛖', short: 'First home', check: function () { return countId('hut') >= 1; }, reward: { wood: 15, gold: 10 } },
+    { id: 'farm', text: 'Build a Farm 🌾 for food', short: 'Farming', check: function () { return countId('farm') >= 1; }, reward: { gold: 15 } },
+    { id: 'food', text: 'Stockpile 50 🌾 food', short: 'Stockpile', check: function () { return S.res.food >= 50; }, reward: { wood: 20 } },
+    { id: 'lumber', text: 'Build a Lumber Camp 🪵', short: 'Timber', check: function () { return countId('lumber') >= 1; }, reward: { gold: 20 } },
+    { id: 'pop', text: 'Grow to 9 population 👥', short: 'A village', check: function () { return pop >= 9; }, reward: { gold: 30 } },
+    { id: 'prod', text: 'Run 3 producing buildings', short: 'Industry', check: function () { return countProducing() >= 3; }, reward: { know: 10, gold: 20 } }
+  ];
+  function currentQuest() { return (S.questIdx < QUESTS.length) ? QUESTS[S.questIdx] : null; }
+  function grantReward(rw) { if (!rw) return; for (var k in rw) S.res[k] = clamp((S.res[k] || 0) + rw[k], 0, S.cap[k]); recompute(); }
+  function rewardLabel(rw) { var p = []; for (var k in rw) p.push(RES_ICON[k] + rw[k]); return p.join(' '); }
+  function renderAdvisor() {
+    var q = currentQuest();
+    questText.innerHTML = q ? q.text : 'Your city prospers — keep building toward the next age.';
+  }
+  function checkQuests() {
+    var guard = 0, q;
+    while ((q = currentQuest()) && q.check() && guard++ < 12) {
+      grantReward(q.reward); S.questIdx++;
+      Juice.Audio.play('score');
+      Stage.toast(wrap, '✓ ' + q.short + '  +' + rewardLabel(q.reward), 1900);
+      save();
+    }
+    renderAdvisor();
+  }
 
   // ---------- save / load ----------
   function save() { if (S) { S.lastSeen = Date.now(); Retention.set(GAME, 'save', S); } }
@@ -541,6 +698,17 @@
     try { var m = /[?&]seed=(\d+)/.exec(window.location.search); return m ? (+m[1] >>> 0) : null; }
     catch (e) { return null; }
   }
+  function urlHas(name) { try { return new RegExp('[?&]' + name + '\\b').test(window.location.search); } catch (e) { return false; } }
+  // dev showcase: populate a city and open the build menu (for screenshots only; behind ?demo)
+  function demoSetup() {
+    S.res = { food: 120, wood: 220, stone: 90, gold: 320, know: 30 }; recompute();
+    var spots = [];
+    for (var i = 2; i <= 6; i++) for (var j = 2; j <= 6; j++) { var t = S.tiles[i][j]; if (t.type === 'grass' && !t.b) spots.push(t); }
+    var plan = ['hut', 'farm', 'hut', 'lumber', 'farm', 'hut'];
+    for (var k = 0; k < plan.length && k < spots.length; k++) build(spots[k].gx, spots[k].gy, plan[k]);
+    accrue(20); renderHUD(); checkQuests();
+    for (var m = plan.length; m < spots.length; m++) if (isBuildable(spots[m])) { openPanel(spots[m]); break; }
+  }
   function newGame(sd) {
     seed = (sd == null) ? (Date.now() >>> 0) : (sd >>> 0);
     S = defaultState(seed);
@@ -553,19 +721,29 @@
   // ---------- HUD ----------
   function renderHUD() {
     if (!S) return;
-    setRes('food', S.res.food, S.cap.food);
-    setRes('wood', S.res.wood, S.cap.wood);
-    setRes('stone', S.res.stone, S.cap.stone);
-    setRes('gold', S.res.gold, S.cap.gold);
-    setRes('know', S.res.know, S.cap.know);
+    var rt = ratesPerSec();
+    for (var i = 0; i < RES_KEYS.length; i++) { var k = RES_KEYS[i]; setRes(k, S.res[k], S.cap[k], rt[k]); }
+    setPopChip();
     var ageNames = ['Age I · Founding', 'Age II · Village', 'Age III · Roman City'];
     agePill.textContent = ageNames[Math.min(S.age, ageNames.length - 1)];
   }
-  function setRes(key, v, cap) {
+  function setRes(key, v, cap, rate) {
     var el = document.getElementById('r-' + key);
     if (!el) return;
     var rv = el.querySelector('.rv');
     if (rv) rv.textContent = Math.floor(v) + '';
+    var pct = clamp(v / (cap || 1), 0, 1) * 100;
+    el.style.background = 'linear-gradient(90deg, rgba(224,177,90,.30) ' + pct + '%, rgba(0,0,0,.22) ' + pct + '%)';
+    el.title = Math.floor(v) + ' / ' + Math.floor(cap) + (rate ? '  (+' + perMin(rate) + '/min)' : '');
+  }
+  function setPopChip() {
+    var el = document.getElementById('r-pop');
+    if (!el) return;
+    var rv = el.querySelector('.rv');
+    var short = popUsed > pop;
+    if (rv) rv.textContent = pop + (short ? ' ⚠' : '');
+    el.style.background = short ? 'rgba(255,90,90,.30)' : 'rgba(0,0,0,.22)';
+    el.title = 'population ' + pop + ' · workers needed ' + popUsed;
   }
 
   // ---------- input ----------
@@ -589,9 +767,14 @@
   });
 
   // ---------- loop ----------
+  var questT = 0;
   function update(dt) {
     particles.update(dt); popups.update(dt);
-    if (S) accrue(dt);   // live production into the store (capped)
+    if (S) {
+      accrue(dt);                 // live production into the store (capped)
+      questT -= dt;
+      if (questT <= 0) { questT = 0.5; checkQuests(); }  // catches accrual-based quests
+    }
   }
 
   // ---------- boot ----------
@@ -601,7 +784,8 @@
     var us = urlSeed();
     if (us != null) newGame(us);
     else if (!load()) newGame();
-    layout(); renderHUD();
+    if (urlHas('demo')) demoSetup();
+    layout(); renderHUD(); renderAdvisor();
     Retention.touchStreak(GAME);
 
     if (window.ResizeObserver) new ResizeObserver(function () { layout(); }).observe(wrap);
