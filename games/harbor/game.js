@@ -77,9 +77,10 @@
   var cityModels = null, atlasTex = null, blobTex = null;   // glTF buildings (async) + shared atlas + shadow decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
   var sites = [], selSite = -1;                              // curated harbour candidates + selected index
+  var ambient = null;                                        // living port: sailing boats + wheeling gulls
   function buildBiome(id) {
     if (!HARBOR_BIOMES[id]) id = 'green';
-    biomeId = id; biome = HARBOR_BIOMES[id];
+    biomeId = id; biome = HARBOR_BIOMES[id]; ambient = null;
     if (simReady() && founded[id]) era = SIM.raw().era;            // sim is the authority on era when founded
     var rng = mulberry(hash('harbor:' + id + ':e' + era));
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
@@ -197,8 +198,57 @@
 
   function drawMesh(P, m) { gl.bindVertexArray(m.vao); gl.drawElements(gl.TRIANGLES, m.count, m.itype, 0); }
 
+  // ---- ambient port life (boats sailing the bay, gulls wheeling above) ----
+  // Built once per founded scene; population scales with era so the port feels busier as it grows.
+  function buildAmbient() {
+    var p = scene.port; if (!p) { ambient = { boats: [], gulls: [], cx: 0, cz: 0 }; return; }
+    // find the deepest water offshore to anchor the boat traffic so they never sail over land
+    var bestA = 0, bestDepth = 1e9;
+    for (var a = 0; a < Math.PI * 2; a += Math.PI / 12) {
+      var dx = Math.sin(a), dz = Math.cos(a), sum = 0, ok = true;
+      for (var d = 45; d <= 120; d += 15) { var h = HARBOR_MODELS.heightAt(p.x + dx * d, p.z + dz * d); if (h > 0.4) ok = false; sum += h; }
+      if (ok && sum < bestDepth) { bestDepth = sum; bestA = a; }
+    }
+    var cx = p.x + Math.sin(bestA) * 78, cz = p.z + Math.cos(bestA) * 78;
+    var rng = mulberry(hash('amb:' + biomeId + ':' + Math.round(cx) + ':' + era));
+    var nBoats = 2 + Math.min(7, era * 2), nGulls = 4 + era * 2, boats = [], gulls = [], i;
+    for (i = 0; i < nBoats; i++) {
+      boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20, hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: rng() < 0.4 });
+    }
+    for (i = 0; i < nGulls; i++) {
+      gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
+    }
+    ambient = { boats: boats, gulls: gulls, cx: cx, cz: cz };
+  }
+  // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
+  function drawAmbient(M) {
+    if (!ambient) return;
+    var p = scene.port, by = p ? p.by : 0, b, i, t, ang, x, z, nx, nz, yaw;
+    for (i = 0; i < ambient.boats.length; i++) {
+      b = ambient.boats[i]; ang = b.a0 + clock * b.sp;
+      x = ambient.cx + Math.cos(ang) * b.rx; z = ambient.cz + Math.sin(ang) * b.rz;
+      // heading = tangent of the ellipse
+      nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1); nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
+      yaw = Math.atan2(nx, nz);
+      var sc = b.big ? 1.5 : 1, bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
+      gl.uniform3fv(M.u.uBase, b.hull);
+      composeRYS(mModel, x, 0.5 + bob, z, 6 * sc, 1.8, 2.4 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      gl.uniform3fv(M.u.uBase, [0.93, 0.93, 0.9]);                         // sail / cabin
+      composeRYS(mModel, x, 3.2 + bob, z, 0.5, 4.2, 3.0 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+    }
+    gl.uniform3fv(M.u.uBase, [0.97, 0.97, 0.95]);
+    for (i = 0; i < ambient.gulls.length; i++) {
+      var g = ambient.gulls[i], ga = g.a0 + clock * g.sp;
+      x = (p ? p.x : ambient.cx) + Math.cos(ga) * g.r; z = (p ? p.z : ambient.cz) + Math.sin(ga) * g.r;
+      var gy = by + g.h + Math.sin(clock * 2 + g.bob) * 3;
+      var flap = 1 + Math.sin(clock * 9 + g.bob) * 0.4;                    // wing-flap shimmer
+      composeRYS(mModel, x, gy, z, 2.4 * flap, 0.4, 0.9, ga); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+    }
+  }
+
   function render() {
     if (!gl) return;
+    if (scene.port && !ambient) buildAmbient();
     var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
     var parts = scene.crane ? craneParts() : [];
 
@@ -241,6 +291,8 @@
       var wx = pf ? lx * pc + lz * psn + pf.x : lx, wz = pf ? -lx * psn + lz * pc + pf.z : lz, wy = t[1] + (pf ? pf.by : 0);
       gl.uniform3fv(M.u.uBase, parts[i].c); composeRYS(mModel, wx, wy, wz, parts[i].s[0], parts[i].s[1], parts[i].s[2], pf ? pf.yaw : 0); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
     }
+    // living port: sailing boats + wheeling gulls (flat-colour, same program state as crane parts)
+    if (scene.port) drawAmbient(M);
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
     if (foundMode() && sites.length) {
@@ -717,6 +769,7 @@
     foundPort: function (x, z) { if (E) foundHere(x, z); }, autoFound: function () { if (E) autoFound(); }, rate: function (x, z) { return HARBOR_MODELS.rate(x, z); },
     sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },
+    ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 
