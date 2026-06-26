@@ -39,20 +39,20 @@
   var RIVERS = null;
   function isleCoves(seed) {
     var coves = [[BAY.x, BAY.z, BAY.r, BAY.depth]];                           // big harbour bay first
-    for (var c = 0; c < 3; c++) {                                            // a few smaller natural coves
-      var a = c * 2.3999 + seed * 1.7 + 1.6;
-      var rr = 0.78 + (fbm(c * 3.3 + seed, 1.1) - 0.5) * 0.18;
-      coves.push([ISLAND.cx + Math.cos(a) * ISLAND.ax * rr, ISLAND.cz + Math.sin(a) * ISLAND.az * rr, 50 + fbm(c * 1.7 + seed, 2.2) * 55, 0.5 + fbm(c + seed, 4.0) * 0.4]);
+    for (var c = 0; c < 2; c++) {                                            // a couple of smaller natural coves
+      var a = c * 2.7 + seed * 1.7 + 1.7;
+      var rr = 0.80 + (fbm(c * 3.3 + seed, 1.1) - 0.5) * 0.14;
+      coves.push([ISLAND.cx + Math.cos(a) * ISLAND.ax * rr, ISLAND.cz + Math.sin(a) * ISLAND.az * rr, 52 + fbm(c * 1.7 + seed, 2.2) * 48, 0.5 + fbm(c + seed, 4.0) * 0.35]);
     }
     return coves;
   }
-  function genRivers(seed) {                                                  // winding rivers from the mountain to the sea
-    var rivers = [], n = 3;
+  function genRivers(seed) {                                                  // rivers from the FOOTHILLS, winding AROUND the massif to the sea
+    var rivers = [], n = 2;
     for (var r = 0; r < n; r++) {
-      var ang = r * 2.1 + seed * 0.9 - 0.4, dirx = Math.cos(ang), dirz = Math.sin(ang), pts = [];
-      for (var t = 0; t <= 13; t++) {
-        var f = t / 13, wob = (fbm(r * 7 + t * 0.5 + seed, t * 0.3) - 0.5) * 130 * f, perpx = -dirz, perpz = dirx;
-        pts.push([MTN.x + dirx * ISLAND.ax * 0.92 * f + perpx * wob, MTN.z + dirz * ISLAND.az * 0.92 * f + perpz * wob, 7 + f * 15]);
+      var ang = r * 2.7 + seed * 0.9 + 0.7, dirx = Math.cos(ang), dirz = Math.sin(ang), pts = [];
+      for (var t = 0; t <= 11; t++) {
+        var f = 0.36 + (t / 11) * 0.66, wob = (fbm(r * 7 + t * 0.5 + seed, t * 0.3) - 0.5) * 150 * (f - 0.3), perpx = -dirz, perpz = dirx;
+        pts.push([MTN.x + dirx * ISLAND.ax * f + perpx * wob, MTN.z + dirz * ISLAND.az * f + perpz * wob, 6 + (f - 0.36) * 15]);
       }
       rivers.push(pts);
     }
@@ -71,7 +71,7 @@
   function genField(biome, seed) {
     var nx = Math.round(WORLD.W / WORLD.cell) + 1, nz = Math.round((WORLD.z1 - WORLD.z0) / WORLD.cell) + 1;
     var H = new Float32Array(nx * nz), RM = new Uint8Array(nx * nz), hilly = biome.hilliness || 1;
-    var islets = [[-940, 150, 150], [900, 215, 120], [-300, -120, 85], [520, -150, 95]];
+    var islets = [[-880, 120, 110], [840, 250, 95], [-160, -260, 80]];        // a few clean, rounded offshore isles in open water
     var coves = isleCoves(seed); RIVERS = genRivers(seed);
     for (var j = 0; j < nz; j++) {
       var z = WORLD.z0 + j * WORLD.cell;
@@ -84,7 +84,7 @@
         var e = (1 + warp) - rad;
         for (var cc = 0; cc < coves.length; cc++) {
           var dd = Math.hypot(x - coves[cc][0], z - coves[cc][1]) / coves[cc][2];
-          dd *= 1 + (fbm(x * 0.026 + cc * 5 + seed, z * 0.026 - cc * 3) - 0.5) * 0.55;
+          dd *= 1 + (fbm(x * 0.022 + cc * 5 + seed, z * 0.022 - cc * 3) - 0.5) * 0.32;   // gentler, rounder cove edge (no slivers)
           if (dd < 1.2) { var ev = (dd - 0.58) * coves[cc][3] * 1.5; if (ev < e) e = ev; }
         }
         for (var k = 0; k < islets.length; k++) { var ir = Math.hypot((x - islets[k][0]) / islets[k][2], (z - islets[k][1]) / islets[k][2]); var ie = (1 - ir) * 0.7; if (ie > e) e = ie; }
@@ -100,8 +100,10 @@
           h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 11 * hilly * clamp(e * 3, 0, 1); // rolling hills
           var pr = Math.hypot((x - PLAIN.x) / PLAIN.ax, (z - PLAIN.z) / PLAIN.az);   // flatten the harbour expansion apron
           if (pr < 1) { var pk = (1 - pr); pk = pk * pk * 0.92; h = h * (1 - pk) + PLAIN.h * pk; }
-          var rv = riverDist(x, z);                                                  // carve winding rivers
-          if (rv.d < rv.w) { var rt = rv.d / rv.w; h = Math.min(h, -0.5 + rt * rt * 4); RM[j * nx + i] = 1; }
+          if (h < 24) {                                                              // rivers only run through the lowlands — never over the massif
+            var rv = riverDist(x, z);
+            if (rv.d < rv.w) { var rt = rv.d / rv.w; h = Math.min(h, -0.5 + rt * rt * 4); RM[j * nx + i] = 1; }
+          }
         }
         if (h < -4) h = -4;
         H[j * nx + i] = h;
