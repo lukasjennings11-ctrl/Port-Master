@@ -293,10 +293,12 @@
     if (founded[biomeId]) { C.azT = 2.42; C.elT = 0.5; C.distT = 150; C.txT = founded[biomeId].x; C.tzT = founded[biomeId].z; }
     else { C.azT = 2.42; C.elT = 0.56; C.distT = 360; C.txT = 0; C.tzT = 120; }   // frame the whole island
   }
-  // screen drag (px) -> world pan of the focus point, along the camera azimuth basis ("grab the world")
-  function panBy(mx, my) {
-    var scl = C.dist * 0.0016, ce = Math.cos(C.az), se = Math.sin(C.az);
-    var ddx = -mx * scl * ce + my * scl * se, ddz = mx * scl * se + my * scl * ce;
+  // content-follows-finger pan: move the focus so the world point grabbed at (ax,ay) ends up
+  // under (bx,by). Uses real ground-ray hits, so it's never inverted at any angle/zoom.
+  function panDrag(ax, ay, bx, by) {
+    var g0 = screenToGround(ax, ay), g1 = screenToGround(bx, by);
+    if (!g0 || !g1) return;
+    var ddx = g0.x - g1.x, ddz = g0.z - g1.z;
     C.txT = clamp(C.txT + ddx, -PANX, PANX); C.tzT = clamp(C.tzT + ddz, PANZ0, PANZ1);
     C.vTx = ddx; C.vTz = ddz;
   }
@@ -315,7 +317,7 @@
         var dx = p.x - prev.x, dy = p.y - prev.y;
         if (downPt && Math.hypot(p.x - downPt.x, p.y - downPt.y) > 8) { moved = true; if (hintEl) hintEl.classList.add('gone'); }
         if (orbitMode) { C.azT -= dx * 0.0045; C.elT = clamp(C.elT - dy * 0.0035, 0.14, 1.3); C.vAz = -dx * 0.0045; C.vEl = -dy * 0.0035; }
-        else panBy(dx, dy);                                  // pan-first: drag travels along the coast
+        else panDrag(prev.x, prev.y, p.x, p.y);              // pan-first: drag travels along the coast (natural)
       } else if (ptrs.size >= 2) {
         var pts = Array.from(ptrs.values()), a = pts[0], b = pts[1];
         var d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -324,7 +326,7 @@
         var ang = Math.atan2(a.y - b.y, a.x - b.x);          // twist -> rotate
         if (twistPrev != null) { var da = ang - twistPrev; if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI; C.azT += da; C.vAz = da; }
         twistPrev = ang;
-        if (panPrev) panBy(mid.x - panPrev.x, mid.y - panPrev.y);
+        if (panPrev) panDrag(panPrev.x, panPrev.y, mid.x, mid.y);
         panPrev = mid;
       }
     });
@@ -337,13 +339,13 @@
     window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
     canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 40, 520); }, { passive: false });
     window.addEventListener('keydown', function (e) {
-      var k = e.key, m = 46;
-      if (k === 'ArrowRight' || k === 'd' || k === 'D') panBy(-m, 0);
-      else if (k === 'ArrowLeft' || k === 'a' || k === 'A') panBy(m, 0);
-      else if (k === 'ArrowUp' || k === 'w' || k === 'W') panBy(0, m);
-      else if (k === 'ArrowDown' || k === 's' || k === 'S') panBy(0, -m);
+      var k = e.key, step = C.dist * 0.06, dx = 0, dz = 0;
+      if (k === 'ArrowRight' || k === 'd' || k === 'D') dx = step;
+      else if (k === 'ArrowLeft' || k === 'a' || k === 'A') dx = -step;
+      else if (k === 'ArrowUp' || k === 'w' || k === 'W') dz = -step;
+      else if (k === 'ArrowDown' || k === 's' || k === 'S') dz = step;
       else return;
-      C.vTx = C.vTz = 0; e.preventDefault();
+      C.txT = clamp(C.txT + dx, -PANX, PANX); C.tzT = clamp(C.tzT + dz, PANZ0, PANZ1); C.vTx = C.vTz = 0; e.preventDefault();
     });
   }
 
@@ -461,7 +463,7 @@
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     setEra: function (n) { era = Math.max(0, n | 0); if (window.Retention) Retention.set(GAME, 'era', era); if (E) buildBiome(biomeId); },
     foundPort: function (x, z) { if (E) foundHere(x, z); }, autoFound: function () { if (E) autoFound(); }, rate: function (x, z) { return HARBOR_MODELS.rate(x, z); },
-    sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); },
+    sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };

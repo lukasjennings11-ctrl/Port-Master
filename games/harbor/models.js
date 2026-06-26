@@ -231,28 +231,36 @@
     return { shelter: shelter, depth: depth, score: score, stars: stars, label: label, onCoast: onCoast, y: here };
   }
 
-  // curated harbour candidates: scan the island coast, keep the best, well-spaced spots, name them
-  var SH_NAMES = ['Sheltered Cove', 'Calm Bay', 'Hidden Harbour'], DP_NAMES = ['Deep-water Inlet', 'Deepwater Reach', "Trader's Landing"], GN_NAMES = ['Harbour Bay', "Fisher's Bay", 'Anchorage'];
+  // curated harbour candidates: scan the island coast for many natural DEEP-WATER harbours,
+  // keep the best, well-spaced spots, and give each a distinct name.
+  var DP_NAMES = ['Deep-water Inlet', 'Deepwater Reach', 'Deep Anchorage', "Mariner's Inlet", "Trader's Deep", 'Fathom Bay', 'Keelhaven', 'Lowtide Reach'];
+  var SH_NAMES = ['Sheltered Cove', 'Calm Bay', 'Hidden Harbour', 'Quiet Cove', 'Stillwater Bay'];
+  var GN_NAMES = ['Harbour Bay', "Fisher's Bay", 'Anchorage', 'Tidewater', 'Saltmarsh Landing'];
   function sites() {
     if (!FIELD) return [];
     var cand = [], x, z;
-    for (x = -ISLAND.ax * 1.4; x <= ISLAND.ax * 1.4; x += 36)
-      for (z = ISLAND.cz - ISLAND.az * 1.5; z <= ISLAND.cz + ISLAND.az * 1.5; z += 36) {
+    for (x = -ISLAND.ax * 1.45; x <= ISLAND.ax * 1.45; x += 30)
+      for (z = ISLAND.cz - ISLAND.az * 1.6; z <= ISLAND.cz + ISLAND.az * 1.6; z += 30) {
         var r = rate(x, z);
-        if (r.onCoast && r.stars >= 1) cand.push({ x: x, z: z, score: r.score, shelter: r.shelter, depth: r.depth, stars: r.stars });
+        if (r.onCoast && r.depth > 1.5) {                              // natural deep-water harbours only
+          var dscore = r.shelter * 0.4 + clamp(r.depth / 2.2, 0, 1) * 0.6;  // weight toward depth
+          cand.push({ x: x, z: z, score: dscore, shelter: r.shelter, depth: r.depth, stars: r.stars });
+        }
       }
     cand.sort(function (a, b) { return b.score - a.score; });
-    var picked = [], i, j, minD = 280;
-    for (var pass = 0; pass < 2 && picked.length < 3; pass++) {        // relax spacing on a 2nd pass if needed
-      var dmin = pass ? 130 : minD;
-      for (i = 0; i < cand.length && picked.length < 3; i++) {
+    var picked = [], i, j, want = 8;
+    for (var pass = 0; pass < 2 && picked.length < want; pass++) {     // relax spacing on a 2nd pass if needed
+      var dmin = pass ? 120 : 175;
+      for (i = 0; i < cand.length && picked.length < want; i++) {
         var c = cand[i], ok = picked.indexOf(c) < 0;
         for (j = 0; ok && j < picked.length; j++) if (Math.hypot(c.x - picked[j].x, c.z - picked[j].z) < dmin) ok = false;
         if (ok) picked.push(c);
       }
     }
-    return picked.map(function (c, idx) {
-      var name = c.shelter > 0.6 ? SH_NAMES[idx % 3] : c.depth > 2.2 ? DP_NAMES[idx % 3] : GN_NAMES[idx % 3];
+    var used = {}, dR = { i: 0 }, sR = { i: 0 }, gR = { i: 0 };
+    function uniq(pool, ref) { var n; do { n = pool[ref.i % pool.length]; ref.i++; } while (used[n] && ref.i < pool.length * 2); used[n] = 1; return n; }
+    return picked.map(function (c) {
+      var name = c.depth > 2.0 ? uniq(DP_NAMES, dR) : c.shelter > 0.6 ? uniq(SH_NAMES, sR) : uniq(GN_NAMES, gR);
       return { x: Math.round(c.x), z: Math.round(c.z), yaw: portYaw(c.x, c.z), stars: c.stars, name: name, score: +c.score.toFixed(2) };
     });
   }
