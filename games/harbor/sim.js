@@ -120,11 +120,12 @@
   function counts() { var c = {}, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var t = B[i].type; c[t] = (c[t] || 0) + 1; } return c; }
   function countOf(type) { var n = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) if (B[i].type === type) n++; return n; }
   function empireCounts() { var c = {}; for (var id in S.ports) { var B = S.ports[id].buildings; for (var i = 0; i < B.length; i++) { var t = B[i].type; c[t] = (c[t] || 0) + 1; } } return c; }
-  function caps() {
-    var cap = { fish: BASE_CAP.fish, timber: BASE_CAP.timber, goods: BASE_CAP.goods }, B = CUR.buildings;
+  function capsOf(port) {
+    var cap = { fish: BASE_CAP.fish, timber: BASE_CAP.timber, goods: BASE_CAP.goods }, B = port.buildings;
     for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.cap) for (var r in t.cap) cap[r] += t.cap[r] * lvlMul(t, b.level); }
     return cap;
   }
+  function caps() { return capsOf(CUR); }
   function pop() { var p = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.pop) p += t.pop * lvlMul(t, b.level); } return p; }
   // jobs scale with level (bigger buildings need more crew) — keeps housing meaningful late game
   function jobs() { var j = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.jobs) j += t.jobs * (1 + 0.5 * ((b.level || 1) - 1)); } return j; }
@@ -172,6 +173,57 @@
   }
   function rerollContract(id) { if (!CUR) return false; var i = findContract(id); if (i < 0) return false; CUR.contracts.splice(i, 1); ensureContracts(); save(); return true; }
 
+  // ---- trade network (routes ship surplus between ports + pay a tariff; volume levels the net) ----
+  var ROUTE_BASE_CAP = 0.5, NET_XP_PER_UNIT = 0.4;
+  function routeCap(level) { return ROUTE_BASE_CAP * level * (1 + 0.12 * ((S.network.level || 1) - 1)); }   // units/s
+  function routeTariff(res) { return basePrice(res) * 0.06 * (1 + 0.05 * ((S.network.level || 1) - 1)); }    // money/unit
+  function routeCost(level) { return Math.round(250 * Math.pow(1.7, level || 0)); }   // level=current; cost to reach level+1 (0=create)
+  function maxRoutes() { return 2 + (S.network.level || 1); }
+  function netNeed(level) { return Math.round(120 * Math.pow(1.5, (level || 1) - 1)); }
+  function addNetXP(a) { S.network.xp = (S.network.xp || 0) + a; while (S.network.xp >= netNeed(S.network.level)) { S.network.xp -= netNeed(S.network.level); S.network.level++; } }
+  function findRoute(id) { var rs = S.network.routes; for (var i = 0; i < rs.length; i++) if (rs[i].id === id) return i; return -1; }
+  function hasRoute(a, b, res) { var rs = S.network.routes; for (var i = 0; i < rs.length; i++) if (rs[i].a === a && rs[i].b === b && rs[i].res === res) return true; return false; }
+  function canAddRoute(a, b, res) {
+    return !!(S.ports[a] && S.ports[b] && a !== b && BASE_CAP.hasOwnProperty(res) &&
+      !hasRoute(a, b, res) && S.network.routes.length < maxRoutes() && S.money >= routeCost(0));
+  }
+  function addRoute(a, b, res) {
+    if (!canAddRoute(a, b, res)) return false;
+    S.money -= routeCost(0);
+    S.network.routes.push({ id: 'r' + (S.network.seq = (S.network.seq || 0) + 1), a: a, b: b, res: res, level: 1 });
+    save(); return true;
+  }
+  function upgradeRoute(id) {
+    var i = findRoute(id); if (i < 0) return false; var r = S.network.routes[i];
+    var c = routeCost(r.level); if (S.money < c) return false;
+    S.money -= c; r.level++; save(); return true;
+  }
+  function removeRoute(id) { var i = findRoute(id); if (i < 0) return false; S.network.routes.splice(i, 1); save(); return true; }
+  // ship resources along every route; returns tariff income to fold into the empire treasury
+  function tickRoutes(dt) {
+    var rs = S.network.routes, income = 0, shipped = 0;
+    for (var i = 0; i < rs.length; i++) {
+      var r = rs[i], pa = S.ports[r.a], pb = S.ports[r.b]; if (!pa || !pb) continue;
+      var want = routeCap(r.level) * dt;
+      var space = Math.max(0, capsOf(pb)[r.res] - (pb.res[r.res] || 0));
+      var amt = Math.min(want, pa.res[r.res] || 0, space);
+      if (amt <= 0) continue;
+      pa.res[r.res] -= amt; pb.res[r.res] += amt;
+      shipped += amt; income += amt * routeTariff(r.res);
+    }
+    if (shipped > 0) addNetXP(shipped * NET_XP_PER_UNIT);
+    return income;
+  }
+  function networkView() {
+    return {
+      level: S.network.level, xp: Math.floor(S.network.xp || 0), need: netNeed(S.network.level),
+      maxRoutes: maxRoutes(), routeCreateCost: routeCost(0),
+      routes: (S.network.routes || []).map(function (r) {
+        return { id: r.id, a: r.a, b: r.b, res: r.res, level: r.level, cap: +(routeCap(r.level)).toFixed(2), tariff: +(routeTariff(r.res)).toFixed(2), up: routeCost(r.level) };
+      })
+    };
+  }
+
   // ---- core tick ----
   // Advance one port; mutate its res/demand/pop; return the money delta it contributed to the empire.
   function tickPort(dt) {
@@ -214,6 +266,7 @@
     var delta = 0;
     for (var id in S.ports) { CUR = S.ports[id]; delta += tickPort(dt); }
     setActive(S.active);                                            // restore scope to the active port
+    delta += tickRoutes(dt);                                        // trade routes ship cargo + pay tariffs
     if (delta > 0) S.lifetimeMoney = (S.lifetimeMoney || 0) + delta;
     S.money = Math.max(0, (S.money + delta) || 0);
   }
@@ -281,7 +334,7 @@
       founded: S.founded, portFounded: !!port,
       canAdvance: canAdvance(), nextEra: ERAS[S.era + 1] || null,
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
-      network: { level: S.network.level, xp: Math.floor(S.network.xp || 0), routes: (S.network.routes || []).length },
+      network: networkView(),
       ports: portList()
     };
     if (port) {
@@ -302,6 +355,7 @@
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS, WORLD_SPEC: WORLD_SPEC, WORLD_ORDER: WORLD_ORDER,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
+    addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     newGame: function () { S = fresh(); setActive('green'); save(); return snapshot(); },
     load: function () { load(); return snapshot(); },
     state: function (id) { return S ? snapshot(id) : null; },

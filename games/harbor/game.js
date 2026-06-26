@@ -32,6 +32,7 @@
     canvas.width = Math.round(CW * DPR); canvas.height = Math.round(CH * DPR);
     canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
     if (fxCanvas) { fxCanvas.width = Math.round(CW * DPR); fxCanvas.height = Math.round(CH * DPR); fxCanvas.style.width = CW + 'px'; fxCanvas.style.height = CH + 'px'; }
+    if (tradeOpen && typeof sizeTrade === 'function') sizeTrade();
   }
   // project a world point to overlay pixel coords (uses the last frame's view-projection)
   function worldToScreen(x, y, z) {
@@ -507,7 +508,151 @@
       drawCine(fxCtx); FX.p.draw(fxCtx); FX.pop.draw(fxCtx);
       canvas.style.transform = (sh.x || sh.y) ? ('translate(' + sh.x.toFixed(1) + 'px,' + sh.y.toFixed(1) + 'px)') : '';
     }
+    if (tradeOpen) drawTradeMap();
     requestAnimationFrame(frame);
+  }
+
+  // ---- Trade Network map (full-screen 2D overlay over the 3D scene) ----
+  // Islands are fixed nodes on a stylised sea; routes are animated lines that ship cargo between
+  // your ports. Tap two founded ports to open a route; tap a route to upgrade/remove it.
+  var tradeMap = null, tradeCanvas = null, tradeCtx = null, tradeOpen = false, tradeAct = null, tradeBar = null;
+  var tradeSel = { node: null, route: null };
+  var NODES = { green: [0.24, 0.66], tropical: [0.40, 0.40], mountain: [0.58, 0.23], nordic: [0.70, 0.70], desert: [0.84, 0.46] };
+  var RESCOL = { fish: '#57c7e0', timber: '#cf9a52', goods: '#b884f0' };
+  function portFounded(id) { return !!(SIM && SIM.port && SIM.port(id)); }
+  function ensureTradeMap() {
+    if (tradeMap) return;
+    tradeMap = document.createElement('div'); tradeMap.id = 'trademap';
+    tradeMap.innerHTML = '<div class="tm-top"><span class="tm-title">Trade Network</span><span class="tm-lvl" id="tm-lvl"></span><button class="tm-close" id="tm-close">✕</button></div>' +
+      '<div class="tm-xp"><i id="tm-xpfill"></i></div>' +
+      '<canvas id="tradecanvas"></canvas>' +
+      '<div class="tm-act" id="tm-act"></div>';
+    wrap.appendChild(tradeMap);
+    tradeCanvas = tradeMap.querySelector('#tradecanvas'); tradeCtx = tradeCanvas.getContext('2d');
+    tradeAct = tradeMap.querySelector('#tm-act'); tradeBar = tradeMap.querySelector('#tm-xpfill');
+    tradeMap.querySelector('#tm-close').addEventListener('click', closeTrade);
+    tradeCanvas.addEventListener('pointerdown', function (e) { var r = tradeCanvas.getBoundingClientRect(); tradeTap(e.clientX - r.left, e.clientY - r.top); });
+    sizeTrade();
+  }
+  function sizeTrade() {
+    if (!tradeCanvas) return;
+    var r = tradeMap.getBoundingClientRect();
+    tradeCanvas.width = Math.max(2, r.width * DPR); tradeCanvas.height = Math.max(2, (r.height - 0) * DPR);
+    tradeCanvas.style.width = r.width + 'px'; tradeCanvas.style.height = r.height + 'px';
+  }
+  function openTrade() {
+    if (!SIM || !SIM.raw()) return;
+    ensureTradeMap(); tradeOpen = true; tradeSel = { node: null, route: null };
+    tradeMap.classList.add('show'); sizeTrade(); renderTradeAct(); sfx('tap'); haptic(10);
+  }
+  function closeTrade() { tradeOpen = false; if (tradeMap) tradeMap.classList.remove('show'); }
+  function nodeXY(id) { var p = NODES[id] || [0.5, 0.5], w = tradeCanvas.width, h = tradeCanvas.height; return [p[0] * w, p[1] * h]; }
+  function tradeTap(sx, sy) {
+    sx *= DPR; sy *= DPR;
+    var net = SIM.network(), hitR = null;
+    // routes first (thin targets) — midpoint hit
+    for (var i = 0; i < net.routes.length; i++) {
+      var rt = net.routes[i], A = nodeXY(rt.a), B = nodeXY(rt.b);
+      if (segDist(sx, sy, A[0], A[1], B[0], B[1]) < 18 * DPR) { hitR = rt; break; }
+    }
+    var hitN = null;
+    for (var id in NODES) { var c = nodeXY(id); if (Math.hypot(sx - c[0], sy - c[1]) < 30 * DPR) { hitN = id; break; } }
+    if (hitN) {
+      tradeSel.route = null;
+      if (!portFounded(hitN)) { showTradeMsg('Found this harbour first'); tradeSel.node = null; }
+      else if (!tradeSel.node) { tradeSel.node = hitN; sfx('tap'); }
+      else if (tradeSel.node === hitN) { tradeSel.node = null; }
+      else { tradeSel.dest = hitN; renderTradeAct(); sfx('tap'); return; }   // src+dest chosen -> builder
+    } else if (hitR) {
+      tradeSel.node = null; tradeSel.dest = null; tradeSel.route = hitR.id; sfx('tap');
+    } else { tradeSel.node = null; tradeSel.dest = null; tradeSel.route = null; }
+    renderTradeAct();
+  }
+  function showTradeMsg(m) { if (tradeAct) { tradeAct.innerHTML = '<div class="ta-msg">' + m + '</div>'; } }
+  function wname(id) { return (window.HARBOR_BIOMES[id] && HARBOR_BIOMES[id].name) || id; }
+  function renderTradeAct() {
+    if (!tradeAct) return;
+    var net = SIM.network();
+    var lvlEl = document.getElementById('tm-lvl'); if (lvlEl) lvlEl.textContent = 'Lv ' + net.level + ' · ' + net.routes.length + '/' + net.maxRoutes + ' routes';
+    if (tradeBar) tradeBar.style.width = Math.round(100 * net.xp / Math.max(1, net.need)) + '%';
+    // building a route (source + dest selected)
+    if (tradeSel.node && tradeSel.dest) {
+      var a = tradeSel.node, b = tradeSel.dest, html = '<div class="ta-head">Ship from <b>' + wname(a) + '</b> → <b>' + wname(b) + '</b></div><div class="ta-res">';
+      ['fish', 'timber', 'goods'].forEach(function (res) {
+        var can = SIM.canAddRoute(a, b, res), cost = net.routeCreateCost;
+        html += '<button class="ta-rbtn" data-res="' + res + '"' + (can ? '' : ' disabled') + ' style="border-color:' + RESCOL_(res) + '"><span>' + res + '</span><span class="ta-cost">£' + fmt(cost) + '</span></button>';
+      });
+      html += '</div><button class="ta-cancel" data-cancel="1">Cancel</button>';
+      tradeAct.innerHTML = html;
+      tradeAct.querySelectorAll('[data-res]').forEach(function (el) { el.addEventListener('click', function () { var res = el.getAttribute('data-res'); if (SIM.addRoute(a, b, res)) { tradeSel = { node: null, route: null }; sfx('merge'); haptic(18); renderTradeAct(); } else sfx('lose'); }); });
+      tradeAct.querySelector('[data-cancel]').addEventListener('click', function () { tradeSel = { node: null, route: null }; renderTradeAct(); });
+      return;
+    }
+    // inspecting a route
+    if (tradeSel.route) {
+      var rt = null; for (var i = 0; i < net.routes.length; i++) if (net.routes[i].id === tradeSel.route) rt = net.routes[i];
+      if (rt) {
+        tradeAct.innerHTML = '<div class="ta-head"><span class="ta-dot" style="background:' + RESCOL_(rt.res) + '"></span>' + wname(rt.a) + ' → ' + wname(rt.b) + ' · ' + rt.res + ' L' + rt.level + '</div>' +
+          '<div class="ta-stat">' + rt.cap.toFixed(1) + '/s · £' + rt.tariff.toFixed(2) + '/unit tariff</div>' +
+          '<div class="ta-row"><button class="ta-up" data-up="1">Upgrade £' + fmt(rt.up) + '</button><button class="ta-rm" data-rm="1">Remove</button></div>';
+        tradeAct.querySelector('[data-up]').addEventListener('click', function () { if (SIM.upgradeRoute(rt.id)) { sfx('merge'); haptic(16); renderTradeAct(); } else sfx('lose'); });
+        tradeAct.querySelector('[data-rm]').addEventListener('click', function () { SIM.removeRoute(rt.id); tradeSel.route = null; sfx('pop'); renderTradeAct(); });
+        return;
+      }
+    }
+    // default hint
+    var founded = 0; for (var id in NODES) if (portFounded(id)) founded++;
+    tradeAct.innerHTML = '<div class="ta-msg">' + (founded < 2 ? 'Found a second harbour to open trade routes.' : (tradeSel.node ? 'Now tap another port to ship to.' : 'Tap a port, then another, to build a route.')) + '</div>';
+  }
+  function RESCOL_(res) { return RESCOL[res] || '#9fb0bd'; }
+  function segDist(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy; if (l2 === 0) return Math.hypot(px - ax, py - ay);
+    var t = clamp(((px - ax) * dx + (py - ay) * dy) / l2, 0, 1);
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+  function drawTradeMap() {
+    if (!tradeCtx) return;
+    var w = tradeCanvas.width, h = tradeCanvas.height, ctx = tradeCtx, t = clock, net = SIM.network();
+    var grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#0a2230'); grd.addColorStop(1, '#06151f');
+    ctx.fillStyle = grd; ctx.fillRect(0, 0, w, h);
+    // faint grid swell
+    ctx.strokeStyle = 'rgba(120,200,220,.05)'; ctx.lineWidth = 1;
+    for (var gx = 0; gx < w; gx += 46 * DPR) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
+    for (var gy = 0; gy < h; gy += 46 * DPR) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+    // routes
+    for (var i = 0; i < net.routes.length; i++) {
+      var rt = net.routes[i], A = nodeXY(rt.a), B = nodeXY(rt.b), col = RESCOL_(rt.res), sel = tradeSel.route === rt.id;
+      ctx.strokeStyle = col; ctx.globalAlpha = sel ? 1 : 0.7; ctx.lineWidth = (sel ? 5 : 3) * DPR;
+      ctx.setLineDash([10 * DPR, 8 * DPR]); ctx.lineDashOffset = -(t * 40 * DPR) % (18 * DPR);
+      ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.setLineDash([]);
+      // moving ship dots (one per level, capacity feel)
+      var ships = Math.min(4, rt.level);
+      for (var sN = 0; sN < ships; sN++) {
+        var f = ((t * 0.18 + sN / ships) % 1), x = A[0] + (B[0] - A[0]) * f, y = A[1] + (B[1] - A[1]) * f;
+        ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 4.5 * DPR, 0, 6.283); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    // proposed link preview (src selected, awaiting dest)
+    if (tradeSel.node) { var c0 = nodeXY(tradeSel.node); ctx.fillStyle = 'rgba(255,220,120,.9)'; ctx.beginPath(); ctx.arc(c0[0], c0[1], 34 * DPR, 0, 6.283); ctx.globalAlpha = 0.18 + 0.06 * Math.sin(t * 4); ctx.fill(); ctx.globalAlpha = 1; }
+    // nodes
+    for (var id in NODES) {
+      var c = nodeXY(id), fnd = portFounded(id), unl = isUnlocked(id);
+      ctx.beginPath(); ctx.arc(c[0], c[1], 22 * DPR, 0, 6.283);
+      ctx.fillStyle = fnd ? '#163a4a' : 'rgba(20,40,52,.55)';
+      ctx.fill();
+      ctx.lineWidth = (tradeSel.node === id ? 4 : 2.5) * DPR;
+      ctx.strokeStyle = fnd ? (tradeSel.node === id ? '#ffd56a' : '#4fd6c4') : 'rgba(150,175,190,.4)';
+      ctx.stroke();
+      // label
+      ctx.fillStyle = fnd ? '#eaf4f7' : 'rgba(190,205,214,.7)';
+      ctx.font = '700 ' + (12 * DPR) + 'px Fredoka, system-ui, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(wname(id), c[0], c[1] - 30 * DPR);
+      if (!unl) { ctx.fillStyle = 'rgba(190,205,214,.8)'; ctx.font = (15 * DPR) + 'px system-ui'; ctx.fillText('🔒', c[0], c[1] + 5 * DPR); }
+      else if (!fnd) { ctx.fillStyle = 'rgba(190,205,214,.7)'; ctx.font = (10 * DPR) + 'px Fredoka, sans-serif'; ctx.fillText('unfounded', c[0], c[1] + 4 * DPR); }
+      else { ctx.fillStyle = '#cfe9f0'; ctx.font = '600 ' + (9.5 * DPR) + 'px Fredoka, sans-serif'; var hint = (SIM.WORLD_SPEC[id] || {}).hint || ''; ctx.fillText(hint.split(' ')[0], c[0], c[1] + 4 * DPR); }
+    }
+    ctx.textAlign = 'left';
   }
 
   // ---- unlockable worlds ----
@@ -630,8 +775,9 @@
     muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = '♪'; muteBtn.title = 'Sound';
     muteBtn.addEventListener('click', function () { muted = !muted; if (window.Juice) Juice.Audio.setMuted(muted); muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); });
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
+    var nBtn = document.createElement('button'); nBtn.id = 'netbtn'; nBtn.textContent = 'Trade network'; nBtn.addEventListener('click', openTrade);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(mBtn);
+    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
     wrap.appendChild(econHud);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -825,6 +971,9 @@
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: goalIdx < GOALS.length ? GOALS[goalIdx].t : 'done', shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
+    openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
+    tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
+    tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 

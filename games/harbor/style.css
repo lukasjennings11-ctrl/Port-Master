@@ -142,6 +142,33 @@ html, body {
 #econhud #advbtn { background: var(--brass); color: #20140a; margin-left: auto; animation: advpulse 1.6s ease-in-out infinite; }
 #econhud #advbtn + #managebtn { margin-left: 0; }
 @keyframes advpulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+#econhud #netbtn { font-family: 'Fredoka', system-ui, sans-serif; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 6px 11px; cursor: pointer; margin-left: 6px; background: rgba(8,18,24,.7); color: var(--text); border: 1px solid rgba(79,214,196,.4); }
+#econhud #advbtn ~ #netbtn { margin-left: 6px; }
+
+/* Trade Network full-screen map */
+#trademap { position: absolute; inset: 0; z-index: 11; display: none; flex-direction: column; background: #06151f; }
+#trademap.show { display: flex; }
+#trademap .tm-top { display: flex; align-items: center; gap: 10px; padding: calc(10px + env(safe-area-inset-top)) 14px 8px; }
+#trademap .tm-title { font-family: 'Lilita', cursive; font-weight: 400; font-size: 19px; color: var(--text); letter-spacing: .02em; }
+#trademap .tm-lvl { font-family: 'Fredoka', sans-serif; font-size: 11px; font-weight: 700; color: var(--teal); }
+#trademap .tm-close { margin-left: auto; width: 30px; height: 30px; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.08); color: var(--text); font-size: 14px; cursor: pointer; }
+#trademap .tm-xp { height: 5px; margin: 0 14px; border-radius: 999px; background: rgba(255,255,255,.1); overflow: hidden; }
+#trademap .tm-xp i { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, #2f8f7e, var(--teal)); transition: width .3s ease; }
+#trademap #tradecanvas { flex: 1; width: 100%; min-height: 0; touch-action: none; }
+#trademap .tm-act { padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(14,34,46,0), rgba(14,34,46,.9)); min-height: 64px; }
+.ta-msg { font-family: 'Fredoka', sans-serif; font-size: 12px; color: var(--muted); text-align: center; padding: 8px 0; }
+.ta-head { font-family: 'Fredoka', sans-serif; font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.ta-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+.ta-stat { font-family: 'Fredoka', sans-serif; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.ta-res { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.ta-rbtn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--muted); background: rgba(255,255,255,.06); color: var(--text); font-family: 'Fredoka', sans-serif; font-size: 11px; font-weight: 700; text-transform: capitalize; cursor: pointer; }
+.ta-rbtn:disabled { opacity: .4; cursor: default; }
+.ta-rbtn .ta-cost { font-size: 10px; font-weight: 800; color: var(--brass); }
+.ta-row { display: flex; gap: 8px; }
+.ta-up, .ta-rm, .ta-cancel { flex: 1; padding: 9px; border-radius: 10px; border: 0; font-family: 'Fredoka', sans-serif; font-size: 12px; font-weight: 800; cursor: pointer; }
+.ta-up { background: var(--brass); color: #20140a; }
+.ta-rm { background: rgba(220,90,80,.2); color: #ffb3ad; border: 1px solid rgba(220,90,80,.5); }
+.ta-cancel { background: rgba(255,255,255,.1); color: var(--text); width: 100%; }
 
 /* manage panel (compact bottom sheet) */
 #managepanel {
