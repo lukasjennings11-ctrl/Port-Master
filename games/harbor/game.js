@@ -206,7 +206,7 @@
     gl.uniform3fv(M.u.uAmbBot, [0.18, 0.19, 0.22]);
     gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0);  // no fog — crisp distance
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
-    gl.uniform1f(M.u.uExposure, 1.62); gl.uniform1f(M.u.uSat, 1.3); gl.uniform1f(M.u.uShadowOn, 0);
+    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.36); gl.uniform1f(M.u.uShadowOn, 0);
     gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1); gl.uniform1f(M.u.uAlbedo, 0);
     gl.uniformMatrix4fv(M.u.uModel, false, mI);
     gl.activeTexture(gl.TEXTURE1); gl.uniform1i(M.u.uTex, 1);

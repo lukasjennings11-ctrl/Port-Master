@@ -164,6 +164,9 @@
     float spec=pow(max(dot(N,H),0.0), mix(8.0,80.0,1.0-uRough))*specK*sh*ndl;
     vec3 amb=mix(uAmbBot,uAmbTop,N.y*0.5+0.5);
     vec3 col = base*(amb + uSunCol*diff) + uSunCol*spec + uSunCol*rim;
+    // soft dark silhouette edge for a hand-drawn / animated-cartoon outline feel
+    float edge = uToon>0.5 ? pow(1.0-max(dot(N,V),0.0),3.5) : 0.0;
+    col *= 1.0 - edge*0.30;
     // night-lit windows: tex alpha mask, flickering warm glow
     float flick = 0.7+0.3*sin(uTime*3.0 + vW.x*1.7 + vW.y*2.3);
     col += uWin * emiss * uNight * flick;
@@ -204,8 +207,8 @@
     float depthMix=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;             // banded shallow/deep
     vec3 water=mix(uDeep,uShallow,clamp(depthMix,0.0,1.0));
     vec3 col=mix(water,uSky,clamp(fres*0.78,0.0,1.0));
-    vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),120.0); col+=uSunCol*step(0.45,gl)*1.5; // crisp toon glint
-    float foam=smoothstep(0.985,0.93,N.y); col+=vec3(0.92,0.97,1.0)*foam*0.18;  // foam on wave faces
+    vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),140.0); col+=uSunCol*smoothstep(0.35,0.75,gl)*0.85; // soft toon glint
+    float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
     frag=vec4(aces(col),1.0); }`;
