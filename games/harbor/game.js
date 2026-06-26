@@ -725,9 +725,17 @@
   var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
-  function fmt(n) { n = n | 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return '' + n; }
+  // idle number notation: 1.2k, 3.40M, 5.7B … Td, then scientific. Stays readable as numbers explode.
+  var NUM_SUF = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc', 'Ud', 'Dd', 'Td'];
+  function fmt(n) {
+    n = +n || 0; var neg = n < 0; n = Math.abs(n);
+    if (n < 1000) return (neg ? '-' : '') + Math.round(n);
+    var tier = Math.floor(Math.log10(n) / 3);
+    if (tier < NUM_SUF.length) { var s = n / Math.pow(10, tier * 3); return (neg ? '-' : '') + (s < 10 ? s.toFixed(2) : s < 100 ? s.toFixed(1) : Math.round(s)) + NUM_SUF[tier]; }
+    return (neg ? '-' : '') + n.toExponential(2).replace('e+', 'e');
+  }
 
-  var eraBar = null, muteBtn = null, goalBanner = null;
+  var eraBar = null, muteBtn = null, goalBanner = null, legacyBtn = null;
   var statFlags = { orders: 0 };                              // session counters for objectives
   // guided objective ladder — each completes once, pays a small reward + juice, then reveals the next
   var GOALS = [
@@ -812,6 +820,92 @@
       }
     }
   }
+
+  // ---- Legacy / Prestige: meta progression persisted across runs (via Retention, survives a wipe) ----
+  var LEGACY_TREE = [
+    { id: 'prod', name: 'Master Shipwrights', desc: '+25% global production / lvl', base: 3, mul: 1.6, per: 0.25, max: 30, meta: 'prodMul' },
+    { id: 'sell', name: 'Trade Barons', desc: '+25% global sales / lvl', base: 3, mul: 1.6, per: 0.25, max: 30, meta: 'sellMul' },
+    { id: 'start', name: 'Inheritance', desc: '+£1k starting money / lvl', base: 2, mul: 1.5, per: 1000, max: 25, meta: 'startMoney' },
+    { id: 'offline', name: 'Standing Orders', desc: '+2h offline earnings / lvl', base: 5, mul: 1.8, per: 2, max: 8, meta: 'offlineHours' },
+    { id: 'cost', name: 'Bulk Charters', desc: '−4% build costs / lvl', base: 4, mul: 1.7, per: 0.04, max: 15, meta: 'costMul' },
+    { id: 'hazard', name: 'Storm Wardens', desc: '+6% storm resistance / lvl', base: 3, mul: 1.6, per: 0.06, max: 12, meta: 'hazardResist' },
+    { id: 'route', name: 'Trade Winds', desc: '+20% route capacity / lvl', base: 4, mul: 1.6, per: 0.20, max: 15, meta: 'routeMul' }
+  ];
+  function ln(id) { for (var i = 0; i < LEGACY_TREE.length; i++) if (LEGACY_TREE[i].id === id) return LEGACY_TREE[i]; return null; }
+  function legacyBal() { return (window.Retention ? (Retention.get(GAME, 'legacyBal', 0) | 0) : 0); }
+  function setLegacyBal(v) { if (window.Retention) Retention.set(GAME, 'legacyBal', Math.max(0, v | 0)); }
+  function legacyTreeMap() { return (window.Retention && Retention.get(GAME, 'legacyTree', {})) || {}; }
+  function legacyLvl(id) { return (legacyTreeMap()[id] || 0) | 0; }
+  function legacyNodeCost(node) { return Math.round(node.base * Math.pow(node.mul, legacyLvl(node.id))); }
+  function canBuyLegacy(node) { return legacyLvl(node.id) < node.max && legacyBal() >= legacyNodeCost(node); }
+  function buyLegacy(id) {
+    var node = ln(id); if (!node || !canBuyLegacy(node)) return false;
+    setLegacyBal(legacyBal() - legacyNodeCost(node));
+    var tr = legacyTreeMap(); tr[id] = (tr[id] || 0) + 1; Retention.set(GAME, 'legacyTree', tr);
+    computeMeta(); return true;
+  }
+  function computeMeta() {
+    var tr = legacyTreeMap(), M = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1 };
+    LEGACY_TREE.forEach(function (nd) {
+      var amt = nd.per * (tr[nd.id] || 0);
+      if (nd.meta === 'prodMul') M.prodMul = 1 + amt;
+      else if (nd.meta === 'sellMul') M.sellMul = 1 + amt;
+      else if (nd.meta === 'routeMul') M.routeMul = 1 + amt;
+      else if (nd.meta === 'startMoney') M.startMoney = amt;
+      else if (nd.meta === 'offlineHours') M.offlineHours = 8 + amt;
+      else if (nd.meta === 'hazardResist') M.hazardResist = amt;
+      else if (nd.meta === 'costMul') M.costMul = Math.max(0.2, 1 - amt);
+    });
+    if (SIM && SIM.applyMeta) SIM.applyMeta(M);
+    return M;
+  }
+  function doPrestige() {
+    if (!SIM || !SIM.canPrestige() || cine) { sfx('lose'); return; }
+    var gain = SIM.prestigeGain();
+    setLegacyBal(legacyBal() + gain);
+    if (window.Progress) Progress.addPrestige(GAME, gain);          // lifetime Legacy (achievements/leaderboard)
+    computeMeta();                                                  // META now includes any newly-bought-able bonuses
+    SIM.resetRun();                                                 // wipe the run; fresh() applies META start bonuses
+    founded = {}; saveFounded(); era = 0; if (window.Retention) Retention.set(GAME, 'era', 0);
+    closeLegacy();
+    buildBiome('green'); if (buildSelector._set) buildSelector._set();
+    autoFound();                                                   // re-found green so play continues immediately
+    updateHUD();
+    flashT = 0.9; shakeFX(6, 0.5); sfx('win'); haptic([10, 40, 20, 40]); confettiBurst();
+    showHint('New Charter signed — +' + fmt(gain) + ' Legacy banked. Multipliers are permanent!');
+  }
+
+  // Legacy panel (full-screen overlay; reuses the trade-map panel pattern)
+  var legacyPanel = null, legacyOpen = false;
+  function ensureLegacy() {
+    if (legacyPanel) return;
+    legacyPanel = document.createElement('div'); legacyPanel.id = 'legacypanel';
+    legacyPanel.innerHTML = '<div class="lg-top"><span class="lg-title">Legacy</span><span class="lg-bal" id="lg-bal"></span><button class="lg-close" id="lg-close">✕</button></div>' +
+      '<div class="lg-prestige" id="lg-prestige"></div><div class="lg-tree" id="lg-tree"></div>';
+    wrap.appendChild(legacyPanel);
+    legacyPanel.querySelector('#lg-close').addEventListener('click', closeLegacy);
+  }
+  function openLegacy() { ensureLegacy(); legacyOpen = true; legacyPanel.classList.add('show'); renderLegacy(); sfx('tap'); }
+  function closeLegacy() { legacyOpen = false; if (legacyPanel) legacyPanel.classList.remove('show'); }
+  function renderLegacy() {
+    if (!legacyPanel || !SIM) return;
+    var p = SIM.state().prestige || { gain: 0, can: false };
+    legacyPanel.querySelector('#lg-bal').textContent = '✦ ' + fmt(legacyBal()) + ' Legacy';
+    var pres = legacyPanel.querySelector('#lg-prestige');
+    pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
+      '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £1M lifetime to prestige') + '</button>';
+    var tree = legacyPanel.querySelector('#lg-tree'), html = '<div class="lg-sec">Permanent upgrades</div>';
+    LEGACY_TREE.forEach(function (nd) {
+      var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
+      html += '<button class="lg-node" data-leg="' + nd.id + '"' + ((can && !maxed) ? '' : ' disabled') + '>' +
+        '<span class="ln-n">' + nd.name + ' <i>L' + lv + '</i></span><span class="ln-d">' + nd.desc + '</span>' +
+        '<span class="ln-c">' + (maxed ? 'MAX' : '✦ ' + fmt(legacyNodeCost(nd))) + '</span></button>';
+    });
+    tree.innerHTML = html;
+    pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
+    tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+  }
+
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
@@ -820,8 +914,9 @@
     muteBtn.addEventListener('click', function () { muted = !muted; if (window.Juice) Juice.Audio.setMuted(muted); muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); });
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
     var nBtn = document.createElement('button'); nBtn.id = 'netbtn'; nBtn.textContent = 'Trade network'; nBtn.addEventListener('click', openTrade);
+    legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
+    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(legacyBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
     wrap.appendChild(econHud);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -869,6 +964,9 @@
     checkGoals(s);
     handleHazard(s);
     checkAchievements(s);
+    // reveal the Legacy button once prestige is relevant; pulse when a prestige is available
+    if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); }
+    if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
   }
   function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
@@ -995,8 +1093,9 @@
     waterMesh = E.mesh(E.plane(2900, 300)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture());
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
+    if (SIM) computeMeta();                                          // apply Legacy multipliers before offline accrual
     var offGain = 0, offSec = 0;
-    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(8 * 3600); offGain = SIM.raw().money - m0; era = SIM.raw().era; } }
+    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; } }
     if (SIM && SIM.raw()) { hudShownMoney = prevMoney = SIM.raw().money; }
     if (!(SIM && SIM.raw() && SIM.raw().founded)) era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
@@ -1048,6 +1147,9 @@
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
     forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
+    openLegacy: function () { openLegacy(); }, prestige: function () { doPrestige(); },
+    legacy: function () { return { bal: legacyBal(), tree: legacyTreeMap(), meta: SIM.meta(), gain: SIM.prestigeGain(), can: SIM.canPrestige() }; },
+    buyLegacy: function (id) { return buyLegacy(id); }, fmt: function (n) { return fmt(n); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 
