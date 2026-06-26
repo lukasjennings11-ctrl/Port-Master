@@ -27,7 +27,10 @@
     market:      { name: 'Fish Market', era: 1, cost: 160, costMul: 1.55, jobs: 3, cat: 'sales', sells: { from: 'fish', rate: 1.6, price: 4.5 }, lvlCost: 1.64, lvlGain: 1.38, max: 12 },
     sawmill:     { name: 'Sawmill', era: 2, cost: 320, costMul: 1.55, jobs: 4, cat: 'prod', prod: { timber: 0.8 }, lvlCost: 1.66, lvlGain: 1.4, max: 12 },
     factory:     { name: 'Goods Factory', era: 2, cost: 520, costMul: 1.58, jobs: 6, cat: 'prod', convert: { from: 'timber', to: 'goods', rate: 0.7 }, lvlCost: 1.68, lvlGain: 1.4, max: 12 },
-    dock:        { name: 'Cargo Dock', era: 2, cost: 800, costMul: 1.6, jobs: 5, cat: 'sales', sells: { from: 'goods', rate: 0.7, price: 22 }, lvlCost: 1.7, lvlGain: 1.42, max: 12 }
+    dock:        { name: 'Cargo Dock', era: 2, cost: 800, costMul: 1.6, jobs: 5, cat: 'sales', sells: { from: 'goods', rate: 0.7, price: 22 }, lvlCost: 1.7, lvlGain: 1.42, max: 12 },
+    // defenses (no output) — Sea Wall cuts storm damage to this port; Lighthouse cuts route cargo loss
+    seawall:     { name: 'Sea Wall', era: 1, cost: 200, costMul: 1.6, cat: 'defense', def: 'wall', lvlCost: 1.55, lvlGain: 1.0, max: 5 },
+    lighthouse:  { name: 'Lighthouse', era: 2, cost: 300, costMul: 1.7, cat: 'defense', def: 'light', lvlCost: 1.6, lvlGain: 1.0, max: 3 }
   };
   var BASE_CAP = { fish: 80, timber: 80, goods: 80 };
 
@@ -78,7 +81,8 @@
       era: 0, money: 120, lifetimeMoney: 0, lastSeen: now(), founded: false,
       managers: { fishing: 0, sales: 0, labour: 0 },
       active: 'green', ports: {},
-      network: { xp: 0, level: 1, routes: [] }
+      network: { xp: 0, level: 1, routes: [] },
+      hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null
     };
   }
   function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
@@ -111,8 +115,11 @@
       if (!pt.buildings) pt.buildings = [];
       if (!pt.contracts) pt.contracts = [];
       if (typeof pt.contractSeq !== 'number') pt.contractSeq = 0;
+      for (var bi = 0; bi < pt.buildings.length; bi++) if (pt.buildings[bi].hp == null) pt.buildings[bi].hp = 100;
       CUR = pt; ensureContracts();
     }
+    if (!S.hazard) S.hazard = { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null };
+    if (typeof S.crash === 'undefined') S.crash = null;
     setActive(S.active);
   }
 
@@ -224,6 +231,59 @@
     };
   }
 
+  // ---- hazards: storms damage a port's buildings + sink route cargo; market crashes floor a price.
+  // Meaningful but never wipes money/era — you pay to repair and invest in defenses to weather them.
+  var HAZARD = { green: 'Squall', mountain: 'Rockslide', desert: 'Sandstorm', tropical: 'Hurricane', nordic: 'Ice Storm' };
+  function hzRand(a, b) { return a + Math.random() * (b - a); }
+  function bhp(b) { return b.hp == null ? 100 : b.hp; }
+  function portDef(p) { var w = 0, l = 0, B = p.buildings; for (var i = 0; i < B.length; i++) { if (B[i].type === 'seawall') w += B[i].level; else if (B[i].type === 'lighthouse') l += B[i].level; } return { wall: w, light: l }; }
+  function strike(portId) {
+    var p = S.ports[portId]; if (!p) return;
+    var def = portDef(p);
+    var dmgF = Math.max(0.25, 1 - 0.16 * def.wall - 0.05 * ((S.network.level || 1) - 1));   // sea wall + network insurance
+    var pool = []; for (var i = 0; i < p.buildings.length; i++) if (BT[p.buildings[i].type].cat !== 'defense') pool.push(i);
+    var n = Math.min(pool.length, 1 + Math.floor(Math.random() * 2)), damaged = 0;     // hit 1–2 buildings
+    for (var k = 0; k < n && pool.length; k++) {
+      var pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0], b = p.buildings[pick];
+      b.hp = clamp(bhp(b) - (25 + Math.random() * 30) * dmgF, 0, 100); damaged++;
+    }
+    var lossMul = Math.max(0.2, 1 - 0.25 * def.light), sunk = 0;                        // lighthouse protects cargo
+    var rs = S.network.routes;
+    for (var r = 0; r < rs.length; r++) { if (rs[r].a === portId || rs[r].b === portId) { var res = rs[r].res, loss = (p.res[res] || 0) * 0.25 * lossMul; p.res[res] -= loss; sunk += loss; } }
+    S.hazard.strikeId = (S.hazard.strikeId || 0) + 1;
+    S.hazard.last = { id: S.hazard.strikeId, port: portId, kind: HAZARD[portId] || 'Storm', damaged: damaged, sunk: Math.round(sunk), crash: false };
+  }
+  function tickHazard(dt) {
+    if (dt >= 5 || !S.ports) return;                                                   // live-play only (offline stays a safe earn window)
+    if (S.crash) { S.crash.t -= dt; if (S.crash.t <= 0) S.crash = null; }
+    if (S.era < 1) return;                                                              // grace in the starter era
+    var hz = S.hazard || (S.hazard = { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null });
+    hz.t += dt;
+    if (hz.phase === 'idle') {
+      if (hz.t >= hz.next) {
+        var founded = Object.keys(S.ports);
+        if (!founded.length) { hz.t = 0; hz.next = hzRand(70, 150); return; }
+        hz.port = founded[Math.floor(Math.random() * founded.length)];
+        hz.crash = Math.random() < 0.22;
+        hz.kind = hz.crash ? 'Market Crash' : (HAZARD[hz.port] || 'Storm');
+        hz.phase = 'warn'; hz.warn = 6;
+      }
+    } else if (hz.phase === 'warn') {
+      hz.warn -= dt;
+      if (hz.warn <= 0) {
+        if (hz.crash) { var rr = ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)]; S.crash = { res: rr, t: 35 }; hz.strikeId = (hz.strikeId || 0) + 1; hz.last = { id: hz.strikeId, crash: true, res: rr, kind: 'Market Crash', port: hz.port }; }
+        else strike(hz.port);
+        hz.phase = 'idle'; hz.t = 0; hz.next = hzRand(110, 230);
+      }
+    }
+  }
+  function crashMul(res) { return (S.crash && S.crash.res === res) ? 0.45 : 1; }
+
+  // ---- repair / rebuild (the comeback money sink; salvage-discounted vs a fresh build) ----
+  function repairCost(b) { var t = BT[b.type], miss = (100 - bhp(b)) / 100; return Math.max(1, Math.round(t.cost * 0.5 * miss * Math.pow(1.3, (b.level || 1) - 1))); }
+  function canRepair(i) { var b = CUR && CUR.buildings[i]; return !!b && bhp(b) < 100 && S.money >= repairCost(b); }
+  function repair(i) { if (!canRepair(i)) return false; var b = CUR.buildings[i]; S.money -= repairCost(b); b.hp = 100; save(); return true; }
+
   // ---- core tick ----
   // Advance one port; mutate its res/demand/pop; return the money delta it contributed to the empire.
   function tickPort(dt) {
@@ -240,7 +300,8 @@
     var add = { fish: 0, timber: 0, goods: 0 }, money = 0;
     var soldR = { fish: 0, timber: 0, goods: 0 }, revR = { fish: 0, timber: 0, goods: 0 };
     for (var i = 0; i < port.buildings.length; i++) {
-      var b = port.buildings[i], t = BT[b.type], m = lvlMul(t, b.level);
+      var b = port.buildings[i], t = BT[b.type]; if (t.cat === 'defense') continue;
+      var m = lvlMul(t, b.level) * (bhp(b) / 100);                   // storm-damaged buildings produce less (wrecked = 0)
       if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * sp[r] * taper[r] * dt;
       if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
       if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sold = Math.min(have, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
@@ -252,7 +313,7 @@
       var rate = soldR[s] / dt;
       var target = DEMAND_SOFT / (DEMAND_SOFT + rate);
       port.demand[s] = clamp((port.demand[s] || 1) + (target - (port.demand[s] || 1)) * ease, 0.25, 1);
-      money += revR[s] * port.demand[s] * salesMul;
+      money += revR[s] * port.demand[s] * salesMul * crashMul(s);     // market crash temporarily floors a price
     }
     // wages: every working crew costs money/s; Foreman trims the bill
     money -= WAGE * Math.min(p, j) * dt * Math.max(0.2, 1 - 0.10 * (S.managers.labour || 0));
@@ -267,13 +328,14 @@
     for (var id in S.ports) { CUR = S.ports[id]; delta += tickPort(dt); }
     setActive(S.active);                                            // restore scope to the active port
     delta += tickRoutes(dt);                                        // trade routes ship cargo + pay tariffs
+    tickHazard(dt);                                                 // storms / market crashes (live play only)
     if (delta > 0) S.lifetimeMoney = (S.lifetimeMoney || 0) + delta;
     S.money = Math.max(0, (S.money + delta) || 0);
   }
 
   // ---- actions (operate on the active port) ----
   function canBuild(type) { var t = BT[type]; return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < t.max && S.money >= buildCost(type); }
-  function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1 }); save(); return true; }
+  function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
   function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < BT[b.type].max && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
 
@@ -335,12 +397,15 @@
       canAdvance: canAdvance(), nextEra: ERAS[S.era + 1] || null,
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       network: networkView(),
+      hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
+      crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
       ports: portList()
     };
     if (port) {
       v.res = { fish: Math.floor(port.res.fish), timber: Math.floor(port.res.timber), goods: Math.floor(port.res.goods) };
       v.caps = caps(); v.pop = Math.floor(pop()); v.jobs = jobs();
-      v.buildings = port.buildings.map(function (b, i) { return { i: i, type: b.type, name: BT[b.type].name, level: b.level, up: upCost(b) }; });
+      v.buildings = port.buildings.map(function (b, i) { return { i: i, type: b.type, name: BT[b.type].name, level: b.level, up: upCost(b), hp: Math.round(bhp(b)), rep: bhp(b) < 100 ? repairCost(b) : 0, def: BT[b.type].cat === 'defense' }; });
+      v.damaged = port.buildings.filter(function (b) { return bhp(b) < 100; }).length;
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
       v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
     } else {
@@ -356,6 +421,8 @@
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
+    repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },
+    strikePort: function (id) { if (S) { strike(id || S.active); save(); } },   // debug/test: force a storm strike now
     newGame: function () { S = fresh(); setActive('green'); save(); return snapshot(); },
     load: function () { load(); return snapshot(); },
     state: function (id) { return S ? snapshot(id) : null; },
