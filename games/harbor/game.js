@@ -17,11 +17,28 @@
   var PANX = 1140, PANZ0 = -90, PANZ1 = 280;   // pan clamp over the long coast
   var biomeId = 'green', biome = null, unlocked = ['green'];
 
+  // ---- 2D FX overlay (juice: particles / popups / screenshake), drawn over the WebGL canvas ----
+  var fxCanvas = null, fxCtx = null, FX = null;
+  function ensureFX() {
+    if (fxCanvas || !window.Juice) return;
+    fxCanvas = document.createElement('canvas'); fxCanvas.id = 'fx';
+    fxCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4';
+    wrap.appendChild(fxCanvas); fxCtx = fxCanvas.getContext('2d');
+    FX = { p: new Juice.Particles(), pop: new Juice.Popups(), shake: new Juice.Shake() };
+  }
   function resize() {
     var bw = wrap.clientWidth || 360, bh = wrap.clientHeight || 560;
     CW = Math.max(240, bw); CH = Math.max(320, bh); DPR = Math.min(window.devicePixelRatio || 1, 1.75);
     canvas.width = Math.round(CW * DPR); canvas.height = Math.round(CH * DPR);
     canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+    if (fxCanvas) { fxCanvas.width = Math.round(CW * DPR); fxCanvas.height = Math.round(CH * DPR); fxCanvas.style.width = CW + 'px'; fxCanvas.style.height = CH + 'px'; }
+  }
+  // project a world point to overlay pixel coords (uses the last frame's view-projection)
+  function worldToScreen(x, y, z) {
+    var m = mVP; if (!m) return null;
+    var cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13], cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (cw <= 0.0001) return null;
+    return { x: (cx / cw * 0.5 + 0.5) * CW, y: (1 - (cy / cw * 0.5 + 0.5)) * CH, behind: false };
   }
 
   // ---- procedural textures ----
@@ -311,6 +328,7 @@
   if (canvas.addEventListener) {
     canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     canvas.addEventListener('pointerdown', function (e) {
+      if (window.Juice && !muted) Juice.Audio.unlock();           // unlock WebAudio on first gesture
       if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
       ptrs.set(e.pointerId, pxy(e)); C.vAz = C.vEl = C.vTx = C.vTz = 0;
       if (ptrs.size === 1) { downPt = pxy(e); moved = false; multi = false; orbitMode = (e.button === 2 || e.shiftKey); var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; }
@@ -355,9 +373,55 @@
     });
   }
 
+  // ---- feel: audio + particle/popup helpers ----
+  var muted = false, hudShownMoney = 0, prevMoney = 0, incomeTimer = 0, cine = null, ascendBanner = null;
+  function sfx(name, a) { if (window.Juice && !muted) Juice.Audio.play(name, a); }
+  function haptic(ms) { if (window.Juice) Juice.vibrate(ms); }
+  function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
+  function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
+  function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
+  function portWorld() { var p = scene.port; return p ? { x: p.x, y: p.by + 4, z: p.z } : { x: C.tx, y: 4, z: C.tz }; }
+
+  function confettiBurst() {
+    if (!FX) return;
+    for (var i = 0; i < 80; i++) FX.p.list.push({ x: Math.random() * CW, y: -12 - Math.random() * 70, vx: (Math.random() - 0.5) * 70, vy: 70 + Math.random() * 130, life: 2.0, max: 2.0, size: 5 + Math.random() * 4, color: ['#ff6b6b', '#ffd24a', '#4fd6c4', '#7fe0ff', '#c084fc', '#f2b35e'][(Math.random() * 6) | 0], gravity: 80, shape: 'rect' });
+  }
+  // ---- Era Ascension cinematic ----
+  function startAscension(toEra, eraName, unlocksText, bonus) {
+    cine = { t: 0, dur: 4.2, flashed: false, banner: false, toEra: toEra, name: eraName, unlocks: unlocksText, bonus: bonus, az0: C.azT };
+    if (window.Juice && !muted) Juice.Audio.tone(170, 0.7, 'sawtooth', { vol: 0.3, glide: 340 });
+    haptic([10, 40, 20]);
+  }
+  function updateCine(dt) {
+    cine.t += dt; var t = cine.t, pw = portWorld();
+    C.txT = pw.x; C.tzT = pw.z;
+    if (t < 2.0) { C.distT = 270; C.elT = 0.88; C.azT = cine.az0 + 0.5 * (t / 2.0); }      // pull back + orbit
+    if (t >= 2.0 && !cine.flashed) {                                                        // the bloom
+      cine.flashed = true; era = cine.toEra; buildBiome(biomeId);
+      if (cine.bonus && SIM.raw()) SIM.raw().money += cine.bonus;
+      var p = portWorld();
+      burstWorld(p.x, p.y, p.z, { count: 64, colors: ['#ffe27a', '#ffd24a', '#fff3c4', '#7fe0ff'], speed: 270, life: 1.5, size: 6, gravity: 110 });
+      shakeFX(9, 0.6); sfx('win'); haptic(30); confettiBurst();
+    }
+    if (t >= 2.35 && !cine.banner) { cine.banner = true; showAscendBanner(cine.name, cine.unlocks, cine.bonus); }
+    if (t >= cine.dur) { C.distT = 150; C.elT = 0.5; cine = null; }
+  }
+  function drawCine(ctx) {
+    if (!cine) return; var t = cine.t;
+    if (t < 2.0) { ctx.fillStyle = 'rgba(4,10,16,' + (0.4 * Math.min(1, t / 0.6)) + ')'; ctx.fillRect(0, 0, CW, CH); }
+    if (t >= 1.94 && t < 2.75) { var a = t < 2.0 ? Math.min(1, (t - 1.94) / 0.06) : (1 - clamp((t - 2.0) / 0.7, 0, 1)); ctx.fillStyle = 'rgba(255,255,255,' + a + ')'; ctx.fillRect(0, 0, CW, CH); }
+  }
+  function showAscendBanner(name, unlocks, bonus) {
+    if (!ascendBanner) { ascendBanner = document.createElement('div'); ascendBanner.id = 'ascendbanner'; wrap.appendChild(ascendBanner); }
+    ascendBanner.innerHTML = '<div class="ab-sub">ERA ASCENSION</div><div class="ab-name">' + name + '</div>' + (unlocks ? '<div class="ab-unlock">Unlocked: ' + unlocks + '</div>' : '') + (bonus ? '<div class="ab-bonus">+ £' + fmt(bonus) + ' grant</div>' : '');
+    ascendBanner.classList.remove('show'); void ascendBanner.offsetWidth; ascendBanner.classList.add('show');
+    clearTimeout(showAscendBanner._t); showAscendBanner._t = setTimeout(function () { ascendBanner.classList.remove('show'); }, 2600);
+  }
+
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    if (cine) updateCine(dt);
     if (ptrs.size === 0) {
       C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0;
       C.txT = clamp(C.txT + C.vTx, -PANX, PANX); C.tzT = clamp(C.tzT + C.vTz, PANZ0, PANZ1); C.vTx *= 0.90; C.vTz *= 0.90; if (Math.abs(C.vTx) < 1e-3) C.vTx = 0; if (Math.abs(C.vTz) < 1e-3) C.vTz = 0;
@@ -370,8 +434,24 @@
       SIM.tick(dt);
       frame._hud = (frame._hud || 0) + dt; if (frame._hud > 0.2) { updateHUD(); frame._hud = 0; }
       frame._sv = (frame._sv || 0) + dt; if (frame._sv > 5) { SIM.mark(); frame._sv = 0; }
+      var m = SIM.raw().money; if (!prevMoney) prevMoney = m;
+      incomeTimer += dt;
+      if (incomeTimer > 0.8) {                                   // floating +£ income from the port
+        var d = m - prevMoney; if (d > 0.5 && !cine) { var pw = portWorld(); popWorld(pw.x, pw.y + 6, pw.z, '+£' + fmt(d), { color: '#ffe27a', size: 17, life: 1.15, vy: -52 }); }
+        prevMoney = m; incomeTimer = 0;
+      }
+      hudShownMoney += (m - hudShownMoney) * Math.min(1, dt * 6);  // HUD counter tweens up
+      if (hudMoney) hudMoney.textContent = fmt(hudShownMoney);
     }
-    render(); requestAnimationFrame(frame);
+    render();
+    if (FX && fxCtx) {                                            // draw the 2D juice overlay (with screenshake)
+      FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
+      fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+      fxCtx.setTransform(DPR, 0, 0, DPR, sh.x * DPR, sh.y * DPR);
+      drawCine(fxCtx); FX.p.draw(fxCtx); FX.pop.draw(fxCtx);
+      canvas.style.transform = (sh.x || sh.y) ? ('translate(' + sh.x.toFixed(1) + 'px,' + sh.y.toFixed(1) + 'px)') : '';
+    }
+    requestAnimationFrame(frame);
   }
 
   // ---- unlockable worlds ----
@@ -442,32 +522,52 @@
   function simReady() { return SIM && SIM.raw && SIM.raw() && SIM.raw().founded; }
   function fmt(n) { n = n | 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return '' + n; }
 
+  var eraBar = null, muteBtn = null;
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
     hudMoney = chip('e-money', '£'); hudFish = chip('e-fish', 'Fish'); hudPop = chip('e-pop', 'Crew');
+    muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = '♪'; muteBtn.title = 'Sound';
+    muteBtn.addEventListener('click', function () { muted = !muted; if (window.Juice) Juice.Audio.setMuted(muted); muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); });
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    econHud.appendChild(advBtn); econHud.appendChild(mBtn);
+    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(mBtn);
     wrap.appendChild(econHud);
+
+    // always-visible era progress bar (goal-gradient carrot)
+    eraBar = document.createElement('div'); eraBar.id = 'erabar';
+    eraBar.innerHTML = '<div class="eb-fill"></div><div class="eb-label"></div><div class="eb-need"></div>';
+    wrap.appendChild(eraBar);
 
     managePanel = document.createElement('div'); managePanel.id = 'managepanel';
     wrap.appendChild(managePanel);
     updateHUD();
   }
-  function popup(txt) { try { if (window.Juice && Juice.Popups) Juice.Popups.spawn ? Juice.Popups.spawn(txt) : 0; } catch (e) {} }
 
   function updateHUD() {
     if (!econHud) return;
     var on = simReady();
-    econHud.classList.toggle('show', on);
+    econHud.classList.toggle('show', on); if (eraBar) eraBar.classList.toggle('show', on && !cine);
     if (!on) { if (managePanel) managePanel.classList.remove('show'); return; }
     var s = SIM.state();
-    hudMoney.textContent = fmt(s.money); hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
-    if (clockEl) {} // clock stays
+    hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
+    if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
     var pill = document.getElementById('era-pill'); if (pill) pill.textContent = s.eraName;
     advBtn.style.display = s.canAdvance ? '' : 'none';
     advBtn.textContent = s.nextEra ? 'Advance → ' + s.nextEra : 'Advance era';
+    // era progress bar
+    var req = SIM.ERA_REQ[s.era];
+    if (eraBar) {
+      if (!req) { eraBar.querySelector('.eb-fill').style.width = '100%'; eraBar.querySelector('.eb-label').textContent = 'Max era — ' + s.eraName; eraBar.querySelector('.eb-need').textContent = ''; }
+      else {
+        var mr = clamp(s.money / req.money, 0, 1);
+        eraBar.querySelector('.eb-fill').style.width = (mr * 100).toFixed(0) + '%';
+        eraBar.querySelector('.eb-label').textContent = '→ ' + (s.nextEra || '') + '  £' + fmt(s.money) + ' / £' + fmt(req.money);
+        var need = '', c = s.counts || {}; if (req.need) for (var nk in req.need) { var have = c[nk] || 0; if (have < req.need[nk]) need += (need ? ' · ' : '') + (SIM.BT[nk] ? SIM.BT[nk].name : nk) + ' ' + have + '/' + req.need[nk]; }
+        eraBar.querySelector('.eb-need').textContent = need;
+        eraBar.classList.toggle('ready', s.canAdvance);
+      }
+    }
     if (manageOpen) renderManage();
   }
   function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
@@ -491,29 +591,50 @@
     }
     managePanel.innerHTML = html;
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
-    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { if (SIM.build(el.getAttribute('data-build'))) { popup('Built'); updateHUD(); renderManage(); } }); });
-    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { if (SIM.upgrade(+el.getAttribute('data-up'))) { updateHUD(); renderManage(); } }); });
+    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.raw().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+  }
+  // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
+  function plopFeedback(tier, label) {
+    var pw = portWorld();
+    burstWorld(pw.x, pw.y, pw.z, { count: 16, colors: ['#ffe27a', '#fff3c4', '#cdeafe'], speed: 150, life: 0.6, size: 4, gravity: 320 });
+    popWorld(pw.x, pw.y + 5, pw.z, label, { color: '#bfe9ff', size: 15, life: 0.9 });
+    shakeFX(3.5, 0.22); sfx('merge', tier); haptic(14);
+  }
+  function checkMilestones() {
+    if (!SIM.raw()) return; var r = SIM.raw(); r._ms = r._ms || {};
+    function once(key, txt) { if (!r._ms[key]) { r._ms[key] = 1; var pw = portWorld(); popWorld(pw.x, pw.y + 9, pw.z, txt, { color: '#ffd24a', size: 19, life: 1.6 }); burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#ffd24a', '#fff3c4'], speed: 190, life: 1.0 }); sfx('score'); } }
+    var c = SIM.state().counts || {};
+    if (c.fishing_hut) once('hut', 'First Fishing Hut!');
+    if (c.market) once('market', 'Market opened!');
+    if (c.factory) once('factory', 'Goods Factory — industry!');
+    if (c.dock) once('dock', 'Cargo Dock built!');
+    if (SIM.raw().money >= 1000) once('1k', '£1,000 banked!');
   }
   function doAdvance() {
-    if (!SIM.canAdvance()) return;
-    SIM.advanceEra(); era = SIM.raw().era;
-    var ni = HARBOR_BIOME_ORDER.indexOf(biomeId) >= 0 ? era : -1;   // unlock the world matching the new era, if any
-    HARBOR_BIOME_ORDER.forEach(function (id) { if (HARBOR_BIOMES[id].unlockEra <= era) unlockWorld(id); });
-    buildBiome(biomeId);                                            // regrow the port at the new era
-    showHint('Ascended to ' + SIM.state().eraName + '!');
-    updateHUD();
+    if (!SIM.canAdvance() || cine) return;
+    var req = SIM.ERA_REQ[SIM.raw().era], bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
+    SIM.advanceEra(); var toEra = SIM.raw().era;
+    var newWorlds = []; HARBOR_BIOME_ORDER.forEach(function (id) { if (HARBOR_BIOMES[id].unlockEra <= toEra && !isUnlocked(id)) { newWorlds.push(HARBOR_BIOMES[id].name); unlockWorld(id); } });
+    var name = SIM.ERAS[toEra], newBuilds = [];
+    for (var bk in SIM.BT) if (SIM.BT[bk].era === toEra) newBuilds.push(SIM.BT[bk].name);
+    var unlockTxt = newBuilds.concat(newWorlds).slice(0, 4).join(' · ');
+    if (window.Juice) Juice.Audio.unlock();
+    startAscension(toEra, name, unlockTxt, bonus);                  // cinematic does buildBiome + bonus at the bloom
   }
 
   function boot() {
     if (window.Portal) Portal.loadingStart();
     if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play HARBOR.</div>'; return; }
-    E = HGL.createEngine(gl);
+    E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
     waterMesh = E.mesh(E.plane(2900, 300)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture());
     loadAssets();
     loadUnlocked(); loadFounded();
-    if (SIM) { SIM.load(); if (SIM.raw().founded) { SIM.applyOffline(8 * 3600); era = SIM.raw().era; } }
+    var offGain = 0, offSec = 0;
+    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(8 * 3600); offGain = SIM.raw().money - m0; era = SIM.raw().era; } }
+    if (SIM && SIM.raw()) { hudShownMoney = prevMoney = SIM.raw().money; }
     if (!(SIM && SIM.raw() && SIM.raw().founded)) era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
     if (saved && !isUnlocked(saved)) saved = null;
@@ -535,10 +656,19 @@
       if (/[?&]still\b/.test(q)) paused = true;
     } catch (e) {}
     updateFoundUI();
+    if (offGain > 0 && offSec > 60) setTimeout(function () { showOffline(offGain, offSec); }, 900);
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
     if (window.Portal) Portal.init().then(function () { Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart(); });
+  }
+  function showOffline(gain, sec) {
+    var h = Math.floor(sec / 3600), mn = Math.floor((sec % 3600) / 60), ago = (h ? h + 'h ' : '') + mn + 'm';
+    var ov = document.createElement('div'); ov.id = 'offlineModal';
+    ov.innerHTML = '<div class="om-card"><div class="om-title">Welcome back!</div><div class="om-body">While you were away (' + ago + ') your port earned</div><div class="om-amt">£' + fmt(gain) + '</div><button class="om-btn">Collect</button></div>';
+    wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); });
+    sfx('score');
+    ov.querySelector('.om-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('merge', 4); var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe27a', '#ffd24a'], speed: 200, life: 1.1 }); setTimeout(function () { ov.remove(); }, 300); });
   }
 
   window.__harbor = {
