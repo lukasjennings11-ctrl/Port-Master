@@ -1,19 +1,8 @@
-/* HARBOR — nautical-industrial chrome over a hand-drawn side-on port. */
-@font-face {
-  font-family: 'BigShoulders';
-  src: url('fonts/BigShoulders-Bold.ttf') format('truetype');
-  font-weight: 700; font-display: swap;
-}
-@font-face {
-  font-family: 'Outfit';
-  src: url('fonts/Outfit-Regular.ttf') format('truetype');
-  font-weight: 400; font-display: swap;
-}
-@font-face {
-  font-family: 'Outfit';
-  src: url('fonts/Outfit-Bold.ttf') format('truetype');
-  font-weight: 700; font-display: swap;
-}
+/* HARBOR — playful cartoon chrome. Display = Lilita One, UI = Fredoka. */
+@font-face { font-family: 'Lilita'; src: url('fonts/LilitaOne-400.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Fredoka'; src: url('fonts/Fredoka-400.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Fredoka'; src: url('fonts/Fredoka-600.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Fredoka'; src: url('fonts/Fredoka-700.woff2') format('woff2'); font-weight: 700; font-display: swap; }
 
 :root {
   --brass:  #f2b35e;
@@ -28,7 +17,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body {
   margin: 0; height: 100%; overflow: hidden;
-  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  font-family: 'Fredoka', system-ui, -apple-system, sans-serif;
   color: var(--text); background: var(--sea);
   user-select: none; -webkit-user-select: none; touch-action: none;
 }
@@ -40,7 +29,7 @@ html, body {
 }
 #loader.hidden { display: none; }
 #loader .logo {
-  font-family: 'BigShoulders', sans-serif; font-weight: 700; font-size: 56px;
+  font-family: 'Lilita', cursive; font-weight: 400; font-size: 56px;
   letter-spacing: .12em; color: var(--brass); padding-left: .12em;
   text-shadow: 0 2px 24px rgba(242,179,94,.35);
 }
@@ -60,7 +49,7 @@ html, body {
   z-index: 5; pointer-events: none;
 }
 .hud .brand {
-  font-family: 'BigShoulders', sans-serif; font-weight: 700; font-size: 24px;
+  font-family: 'Lilita', cursive; font-weight: 400; font-size: 24px;
   letter-spacing: .14em; color: var(--brass);
 }
 .hud .era {
@@ -91,7 +80,7 @@ html, body {
 #biomebar::-webkit-scrollbar { display: none; }
 .biome-btn {
   display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; white-space: nowrap;
-  font-family: 'Outfit', sans-serif; font-size: 10.5px; font-weight: 700; letter-spacing: .01em;
+  font-family: 'Fredoka', system-ui, sans-serif; font-size: 10.5px; font-weight: 700; letter-spacing: .01em;
   color: var(--text); background: rgba(8,18,24,.62); border: 1px solid rgba(255,255,255,.14);
   border-radius: 999px; padding: 5px 9px; cursor: pointer; backdrop-filter: blur(4px);
   transition: background .12s, border-color .12s, transform .08s, opacity .12s;
@@ -111,12 +100,12 @@ html, body {
   padding: 7px 9px; backdrop-filter: blur(6px); max-width: calc(100% - 16px);
 }
 #foundpanel.show { display: flex; }
-#foundlabel { font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 800; color: var(--text); letter-spacing: .01em; text-align: center; }
+#foundlabel { font-family: 'Fredoka', system-ui, sans-serif; font-size: 11px; font-weight: 800; color: var(--text); letter-spacing: .01em; text-align: center; }
 #sitechips { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; max-width: 318px; max-height: 88px; overflow-y: auto; scrollbar-width: thin; }
 #sitechips::-webkit-scrollbar { width: 4px; } #sitechips::-webkit-scrollbar-thumb { background: rgba(255,255,255,.25); border-radius: 3px; }
 .site-chip {
   display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
-  font-family: 'Outfit', sans-serif; font-weight: 700; color: var(--text);
+  font-family: 'Fredoka', system-ui, sans-serif; font-weight: 700; color: var(--text);
   background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
   border-radius: 999px; padding: 4px 9px; cursor: pointer; transition: background .12s, transform .08s, border-color .12s;
 }
@@ -126,7 +115,7 @@ html, body {
 .site-chip.on { background: var(--brass); border-color: var(--brass); color: #20140a; }
 .site-chip.on .ss { color: #5c3a08; }
 #foundbtn {
-  font-family: 'Outfit', sans-serif; font-size: 11.5px; font-weight: 800; letter-spacing: .02em;
+  font-family: 'Fredoka', system-ui, sans-serif; font-size: 11.5px; font-weight: 800; letter-spacing: .02em;
   color: #20140a; background: var(--brass); border: 0; border-radius: 999px; padding: 6px 15px; cursor: pointer; white-space: nowrap;
 }
 #foundbtn:disabled { background: rgba(255,255,255,.18); color: rgba(255,255,255,.55); cursor: default; }
@@ -139,14 +128,14 @@ html, body {
 }
 #econhud.show { display: flex; }
 .estat {
-  display: inline-flex; align-items: baseline; gap: 4px; font-family: 'Outfit', sans-serif;
+  display: inline-flex; align-items: baseline; gap: 4px; font-family: 'Fredoka', system-ui, sans-serif;
   background: rgba(8,18,24,.62); border: 1px solid rgba(255,255,255,.14); border-radius: 999px;
   padding: 4px 10px; backdrop-filter: blur(4px);
 }
 .estat b { font-size: 9px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .estat i { font-size: 13px; font-weight: 800; color: var(--text); font-style: normal; }
 #econhud #managebtn, #econhud #advbtn {
-  margin-left: auto; font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 800;
+  margin-left: auto; font-family: 'Fredoka', system-ui, sans-serif; font-size: 11px; font-weight: 800;
   border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer;
 }
 #econhud #managebtn { background: rgba(8,18,24,.7); color: var(--text); border: 1px solid rgba(255,255,255,.18); }
@@ -162,13 +151,13 @@ html, body {
   border-radius: 12px; padding: 8px 10px; backdrop-filter: blur(8px);
 }
 #managepanel.show { display: flex; }
-.mp-head { display: flex; align-items: center; font-family: 'Big Shoulders Display','Outfit',sans-serif; font-weight: 800; font-size: 13px; color: var(--text); }
+.mp-head { display: flex; align-items: center; font-family: 'Lilita', cursive; font-weight: 400; font-size: 15px; letter-spacing: .02em; color: var(--text); }
 .mp-head #mp-close { margin-left: auto; background: rgba(255,255,255,.1); border: 0; color: var(--text); border-radius: 7px; width: 22px; height: 22px; cursor: pointer; font-size: 13px; }
-.mp-sec { font-family: 'Outfit',sans-serif; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
+.mp-sec { font-family: 'Fredoka',system-ui,sans-serif; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
 .mp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .mp-item {
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
-  font-family: 'Outfit',sans-serif; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14);
+  font-family: 'Fredoka',system-ui,sans-serif; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14);
   border-radius: 8px; padding: 4px 7px; cursor: pointer; color: var(--text); transition: background .12s, transform .08s;
 }
 .mp-item.up { background: rgba(120,180,255,.10); }

@@ -97,7 +97,8 @@
             rg = clamp(rg / 1.55, 0, 1);
             h += Math.pow(mt, 1.55) * MTN.h * (0.30 + 0.95 * rg) * (0.9 + hilly * 0.1);
           }
-          h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 11 * hilly * clamp(e * 3, 0, 1); // rolling hills
+          h += (fbm(x * 0.009 + seed * 4, z * 0.009 + 1.2) - 0.5) * 22 * hilly * clamp(e * 2, 0, 1)   // broad rolling hills (natural, integrated)
+             + (fbm(x * 0.022 + seed * 2, z * 0.022 + 3.3) - 0.5) * 8 * hilly * clamp(e * 3, 0, 1);  // finer undulation
           var pr = Math.hypot((x - PLAIN.x) / PLAIN.ax, (z - PLAIN.z) / PLAIN.az);   // flatten the harbour expansion apron
           if (pr < 1) { var pk = (1 - pr); pk = pk * pk * 0.92; h = h * (1 - pk) + PLAIN.h * pk; }
           if (h < 24) {                                                              // rivers only run through the lowlands — never over the massif
@@ -315,7 +316,7 @@
     var seed = (hashStr(biome.id) % 997) * 0.013;
     genField(biome, seed);
     buildFieldMesh(B.flat, biome);
-    landforms(B.flat, biome, rng);
+    if (biome.hillType !== 'hill') landforms(B.flat, biome, rng);   // craggy rock props only for mountain/cliff/mesa; green/tropical use natural rolling terrain
     if (biome.veg !== 'none') {                            // dense forest on the lower/mid slopes
       var nv = Math.round((biome.vegN + 30) * WORLD.W / 760 * 1.7), hw = WORLD.W * 0.48;
       for (var v = 0; v < nv; v++) {
