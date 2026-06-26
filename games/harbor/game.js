@@ -505,7 +505,9 @@
       FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
       fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
       fxCtx.setTransform(DPR, 0, 0, DPR, sh.x * DPR, sh.y * DPR);
-      drawCine(fxCtx); FX.p.draw(fxCtx); FX.pop.draw(fxCtx);
+      drawCine(fxCtx);
+      if (flashT > 0) { flashT -= dt; fxCtx.fillStyle = 'rgba(255,70,45,' + (0.32 * Math.max(0, flashT)) + ')'; fxCtx.fillRect(0, 0, fxCanvas.width, fxCanvas.height); }
+      FX.p.draw(fxCtx); FX.pop.draw(fxCtx);
       canvas.style.transform = (sh.x || sh.y) ? ('translate(' + sh.x.toFixed(1) + 'px,' + sh.y.toFixed(1) + 'px)') : '';
     }
     if (tradeOpen) drawTradeMap();
@@ -768,6 +770,40 @@
     }
     setGoalText(s);
   }
+
+  // ---- hazards: storm warning banner + strike juice (consumes the sim's telegraph/strike signals) ----
+  var lastStrikeId = 0, stormAlert = null, flashT = 0;
+  function ensureStormAlert() {
+    if (stormAlert) return;
+    stormAlert = document.createElement('div'); stormAlert.id = 'stormalert';
+    stormAlert.innerHTML = '<span class="sa-ic">⚠</span><span class="sa-txt"></span><span class="sa-cd"></span>';
+    wrap.appendChild(stormAlert);
+  }
+  function handleHazard(s) {
+    var hz = s.hazard || { phase: 'idle', strikeId: 0 };
+    ensureStormAlert();
+    if (hz.phase === 'warn' && hz.port) {
+      stormAlert.classList.remove('crash');
+      stormAlert.querySelector('.sa-txt').textContent = (hz.kind || 'Storm') + ' approaching ' + wname(hz.port);
+      stormAlert.querySelector('.sa-cd').textContent = hz.in + 's';
+      stormAlert.classList.add('show');
+    } else if (s.crash) {
+      stormAlert.classList.add('crash');
+      stormAlert.querySelector('.sa-txt').textContent = 'Market crash — ' + s.crash.res + ' prices slump';
+      stormAlert.querySelector('.sa-cd').textContent = s.crash.t + 's';
+      stormAlert.classList.add('show');
+    } else { stormAlert.classList.remove('show'); }
+    // a fresh strike fired in the sim — react with juice
+    if (hz.strikeId && hz.strikeId !== lastStrikeId) {
+      lastStrikeId = hz.strikeId; var last = hz.last;
+      shakeFX(11, 0.7); flashT = 0.85; sfx('lose'); haptic([10, 50, 20]);
+      if (last && last.crash) { showHint('Market crash — ' + last.res + ' prices slump'); }
+      else if (last) {
+        showHint((last.kind || 'Storm') + ' hit ' + wname(last.port) + '! ' + last.damaged + ' building' + (last.damaged === 1 ? '' : 's') + ' damaged');
+        if (last.port === biomeId) { var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 32, colors: ['#9aa6ad', '#cdd6da', '#ffd24a', '#88b0c0'], speed: 230, life: 1.1, size: 5, gravity: 240 }); }
+      }
+    }
+  }
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
@@ -823,6 +859,7 @@
     var mBtn = document.getElementById('managebtn');
     if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
     checkGoals(s);
+    handleHazard(s);
     if (manageOpen) renderManage();
   }
   function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
@@ -841,9 +878,19 @@
       });
       html += '</div>';
     }
+    // storm-damaged buildings — repair them to restore output (salvage-priced vs rebuilding)
+    if (s.damaged) {
+      html += '<div class="mp-sec">Storm damage</div><div class="mp-grid">';
+      s.buildings.forEach(function (b) {
+        if (b.hp >= 100) return; var can = b.rep > 0 && s.money >= b.rep;
+        html += '<button class="mp-item repair" data-repair="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' <i class="mi-hp">' + b.hp + '%</i></span><span class="mi-c">Repair £' + fmt(b.rep) + '</span></button>';
+      });
+      html += '</div>';
+    }
     html += '<div class="mp-sec">New buildings</div><div class="mp-grid">';
     Object.keys(BT).forEach(function (id) {
       var t = BT[id]; if (s.era < t.era) return;                    // hide future-era types
+      if (SIM.blocked && SIM.blocked(id)) return;                   // hide buildings this world can't run (e.g. desert sawmill)
       var cost = SIM.buildCost(id), can = SIM.canBuild(id);
       html += '<button class="mp-item" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">£' + fmt(cost) + '</span></button>';
     });
@@ -851,8 +898,8 @@
     if (s.buildings.length) {
       html += '<div class="mp-sec">Your port (' + s.buildings.length + ')</div><div class="mp-grid">';
       s.buildings.forEach(function (b) {
-        var can = SIM.canUpgrade(b.i);
-        html += '<button class="mp-item up" data-up="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' L' + b.level + '</span><span class="mi-c">↑£' + fmt(b.up) + '</span></button>';
+        var can = SIM.canUpgrade(b.i), hp = (b.hp != null && b.hp < 100) ? ' <i class="mi-hp">' + b.hp + '%</i>' : '';
+        html += '<button class="mp-item up' + (b.hp != null && b.hp < 100 ? ' hurt' : '') + '" data-up="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' L' + b.level + hp + '</span><span class="mi-c">↑£' + fmt(b.up) + '</span></button>';
       });
       html += '</div>';
     }
@@ -882,6 +929,7 @@
     managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
