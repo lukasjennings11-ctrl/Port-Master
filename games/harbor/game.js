@@ -81,6 +81,10 @@
   function buildBiome(id) {
     if (!HARBOR_BIOMES[id]) id = 'green';
     biomeId = id; biome = HARBOR_BIOMES[id]; ambient = null;
+    if (SIM && SIM.raw()) {
+      if (founded[id] && !SIM.port(id)) SIM.foundPort(id);         // reconcile legacy/missing port economy
+      SIM.setActive(id);                                          // HUD/manage now follow this port
+    }
     if (simReady() && founded[id]) era = SIM.raw().era;            // sim is the authority on era when founded
     var rng = mulberry(hash('harbor:' + id + ':e' + era));
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
@@ -97,7 +101,7 @@
   function foundHere(x, z, yaw) {
     if (yaw == null) yaw = HARBOR_MODELS.portYaw(x, z);
     founded[biomeId] = { x: x, z: z, yaw: yaw }; saveFounded();
-    if (SIM) { if (!SIM.raw() || !SIM.raw().founded) SIM.newGame(); SIM.setFounded(true); era = SIM.raw().era; }  // start the port economy
+    if (SIM) { SIM.foundPort(biomeId); era = SIM.raw().era; }      // start this world's port economy
     buildBiome(biomeId);
     C.txT = x; C.tzT = z; C.distT = 130; C.elT = 0.5;        // frame the new harbour
     if (typeof updateHUD === 'function') updateHUD();
@@ -571,7 +575,7 @@
   // ---- economy HUD + port management ----
   var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
   var SIM = window.HARBOR_SIM || null;
-  function simReady() { return SIM && SIM.raw && SIM.raw() && SIM.raw().founded; }
+  function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
   function fmt(n) { n = n | 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return '' + n; }
 
   var eraBar = null, muteBtn = null, goalBanner = null;
@@ -730,7 +734,7 @@
     managePanel.innerHTML = html;
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
     managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); updateHUD(); renderManage(); } else sfx('lose'); }); });
-    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.raw().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
