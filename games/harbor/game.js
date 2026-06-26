@@ -265,14 +265,13 @@
   }
   // camera azimuth that views a site from offshore (downhill = toward open sea)
   function seaAz(x, z) { var e = 8, gx = HARBOR_MODELS.heightAt(x + e, z) - HARBOR_MODELS.heightAt(x - e, z), gz = HARBOR_MODELS.heightAt(x, z + e) - HARBOR_MODELS.heightAt(x, z - e); return Math.atan2(-gx, -gz); }
-  function selectSite(i) {
+  function selectSite(i, fly) {
     if (i < 0 || i >= sites.length) return;
     selSite = i; var s = sites[i];
-    C.txT = s.x; C.tzT = s.z; C.distT = 132; C.elT = 0.5; C.azT = seaAz(s.x, s.z);     // fly to the chosen harbour
+    if (fly !== false) { C.txT = s.x; C.tzT = s.z; C.distT = 138; C.elT = 0.5; C.azT = seaAz(s.x, s.z); if (hintEl) hintEl.classList.add('gone'); }
     if (foundLabel) foundLabel.innerHTML = s.name + '  ' + '★★★'.slice(0, s.stars) + '☆☆☆'.slice(0, 3 - s.stars);
     if (foundBtn) foundBtn.disabled = false;
     if (siteChips) for (var k = 0; k < siteChips.children.length; k++) siteChips.children[k].classList.toggle('on', k === i);
-    if (hintEl) hintEl.classList.add('gone');
   }
   // tap on the scene -> select the nearest curated site (if reasonably close)
   function scoutAt(sx, sy) {
@@ -283,8 +282,12 @@
   function confirmFound() { if (selSite >= 0 && sites[selSite]) { var s = sites[selSite]; foundHere(s.x, s.z, s.yaw); if (foundPanel) foundPanel.classList.remove('show'); updateFoundUI(); } }
   function updateFoundUI() {
     if (!foundPanel) return;
-    if (foundMode()) { foundPanel.classList.add('show'); if (foundBtn) foundBtn.disabled = selSite < 0; if (selSite < 0 && foundLabel) foundLabel.textContent = 'Choose your harbour'; }
-    else { foundPanel.classList.remove('show'); }
+    if (foundMode()) {
+      foundPanel.classList.add('show');
+      if (sites.length === 1 && selSite < 0) selectSite(0, false);    // one obvious harbour — pre-select it
+      if (foundBtn) foundBtn.disabled = selSite < 0;
+      if (selSite < 0 && foundLabel) foundLabel.textContent = 'Choose your harbour';
+    } else { foundPanel.classList.remove('show'); }
   }
   function autoFound() { var ss = sites.length ? sites : HARBOR_MODELS.sites(); if (ss[0]) foundHere(ss[0].x, ss[0].z, ss[0].yaw); }
 
@@ -414,6 +417,8 @@
   function buildSiteChips() {
     if (!siteChips) return;
     siteChips.innerHTML = '';
+    if (sites.length <= 1) { siteChips.style.display = 'none'; return; }   // single obvious harbour: just label + button
+    siteChips.style.display = '';
     sites.forEach(function (s, i) {
       var c = document.createElement('button'); c.className = 'site-chip';
       c.innerHTML = '<span class="sn">' + s.name + '</span><span class="ss">' + '★★★'.slice(0, s.stars) + '</span>';
