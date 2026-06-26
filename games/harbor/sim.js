@@ -63,6 +63,22 @@
     { money: 40000, need: { factory: 1, dock: 1 } },                // -> Megaport
     { money: 200000, need: { dock: 2 } }                            // -> Global Hub
   ];
+  // ENDLESS eras: past the curated 6, generate "Global Hub II, III…" with exponentially scaling
+  // money thresholds, so the ladder never ends (prestige multipliers keep you climbing it).
+  function roman(n) {
+    if (n < 1) return '' + n;
+    var M = ['', 'M', 'MM', 'MMM'], C = ['', 'C', 'CC', 'CCC', 'CD', 'D', 'DC', 'DCC', 'DCCC', 'CM'],
+        X = ['', 'X', 'XX', 'XXX', 'XL', 'L', 'LX', 'LXX', 'LXXX', 'XC'], I = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX'];
+    if (n > 3999) return '' + n;
+    return M[(n / 1000) | 0] + C[((n % 1000) / 100) | 0] + X[((n % 100) / 10) | 0] + I[n % 10];
+  }
+  function eraName(n) { return n < ERAS.length ? ERAS[n] : 'Global Hub ' + roman(n - ERAS.length + 2); }
+  function eraReq(n) { return n < ERA_REQ.length ? ERA_REQ[n] : { money: 200000 * Math.pow(6, n - (ERA_REQ.length - 1)) }; }
+
+  // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
+  // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
+  var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1 };
+  function applyMeta(m) { if (!m) return; for (var k in META) if (typeof m[k] === 'number') META[k] = m[k]; }
 
   var S = null;     // empire root
   var CUR = null;   // the port currently in scope for the per-port helpers below
@@ -78,7 +94,7 @@
   }
   function fresh() {
     return {
-      era: 0, money: 120, lifetimeMoney: 0, lastSeen: now(), founded: false,
+      era: 0, money: 120 + (META.startMoney || 0), lifetimeMoney: 0, lastSeen: now(), founded: false,
       managers: { fishing: 0, sales: 0, labour: 0 },
       active: 'green', ports: {},
       network: { xp: 0, level: 1, routes: [] },
@@ -139,8 +155,10 @@
   // jobs scale with level (bigger buildings need more crew) — keeps housing meaningful late game
   function jobs() { var j = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.jobs) j += t.jobs * (1 + 0.5 * ((b.level || 1) - 1)); } return j; }
   function lvlMul(t, lvl) { return Math.pow(t.lvlGain, (lvl || 1) - 1); }
-  function buildCost(type) { var t = BT[type]; return Math.round(t.cost * Math.pow(t.costMul, countOf(type))); }
-  function upCost(b) { var t = BT[b.type]; return Math.round(t.cost * 0.6 * Math.pow(t.lvlCost, b.level)); }
+  // economic buildings are effectively uncapped (geometric cost self-limits); defenses keep tight caps
+  function bmax(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : Math.max(t.max, 999); }
+  function buildCost(type) { var t = BT[type]; return Math.round(t.cost * Math.pow(t.costMul, countOf(type)) * (META.costMul || 1)); }
+  function upCost(b) { var t = BT[b.type]; return Math.round(t.cost * 0.6 * Math.pow(t.lvlCost, b.level) * (META.costMul || 1)); }
   // a building is blocked on this world if every resource it produces has a 0 specialisation
   function blocked(type) {
     var t = BT[type]; if (!t || !t.prod) return false;
@@ -184,7 +202,7 @@
 
   // ---- trade network (routes ship surplus between ports + pay a tariff; volume levels the net) ----
   var ROUTE_BASE_CAP = 0.5, NET_XP_PER_UNIT = 0.4;
-  function routeCap(level) { return ROUTE_BASE_CAP * level * (1 + 0.12 * ((S.network.level || 1) - 1)); }   // units/s
+  function routeCap(level) { return ROUTE_BASE_CAP * level * (1 + 0.12 * ((S.network.level || 1) - 1)) * (META.routeMul || 1); }   // units/s
   function routeTariff(res) { return basePrice(res) * 0.06 * (1 + 0.05 * ((S.network.level || 1) - 1)); }    // money/unit
   function routeCost(level) { return Math.round(250 * Math.pow(1.7, level || 0)); }   // level=current; cost to reach level+1 (0=create)
   function maxRoutes() { return 2 + (S.network.level || 1); }
@@ -243,7 +261,7 @@
   function strike(portId) {
     var p = S.ports[portId]; if (!p) return;
     var def = portDef(p);
-    var dmgF = Math.max(0.25, 1 - 0.16 * def.wall - 0.05 * ((S.network.level || 1) - 1));   // sea wall + network insurance
+    var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0));   // sea wall + insurance + Legacy
     var pool = []; for (var i = 0; i < p.buildings.length; i++) if (BT[p.buildings[i].type].cat !== 'defense') pool.push(i);
     var n = Math.min(pool.length, 1 + Math.floor(Math.random() * 2)), damaged = 0;     // hit 1–2 buildings
     for (var k = 0; k < n && pool.length; k++) {
@@ -297,7 +315,7 @@
     // labour: housing feeds crew. Foreman manager makes the same crew go further.
     var labor = j > 0 ? clamp(p / j, 0, 1) : 1;
     labor = Math.min(1.25, labor * mgrMul('labour'));
-    var prodMul = mgrMul('fishing'), salesMul = mgrMul('sales');
+    var prodMul = mgrMul('fishing') * (META.prodMul || 1), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × prestige Legacy
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
     var taper = {};
     for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
@@ -338,14 +356,14 @@
   }
 
   // ---- actions (operate on the active port) ----
-  function canBuild(type) { var t = BT[type]; return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < t.max && S.money >= buildCost(type); }
+  function canBuild(type) { var t = BT[type]; return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < bmax(type) && S.money >= buildCost(type); }
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
-  function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < BT[b.type].max && S.money >= upCost(b); }
+  function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < bmax(b.type) && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
 
   function canAdvance() {
-    if (!S || S.era >= ERAS.length - 1) return false;
-    var req = ERA_REQ[S.era]; if (!req) return false;
+    if (!S) return false;                                            // no era cap — endless
+    var req = eraReq(S.era); if (!req) return false;
     if (S.money < req.money) return false;
     if (req.need) { var c = empireCounts(); for (var k in req.need) if ((c[k] || 0) < req.need[k]) return false; }
     return true;
@@ -373,11 +391,17 @@
   function applyOffline(maxSec) {
     if (!S) return 0;
     var elapsed = (now() - (S.lastSeen || now())) / 1000;
-    elapsed = clamp(elapsed, 0, maxSec || 8 * 3600);
+    elapsed = clamp(elapsed, 0, maxSec || (META.offlineHours || 8) * 3600);
     if (elapsed > 1) tick(elapsed);
     S.lastSeen = now();
     return elapsed;
   }
+
+  // ---- prestige (cash the run's lifetime earnings into permanent Legacy, then start anew) ----
+  var PRESTIGE_THRESHOLD = 1e6;
+  function prestigeGain() { return S ? Math.floor(Math.pow((S.lifetimeMoney || 0) / PRESTIGE_THRESHOLD, 0.5) * 6) : 0; }
+  function canPrestige() { return !!S && (S.lifetimeMoney || 0) >= PRESTIGE_THRESHOLD && prestigeGain() >= 1; }
+  function resetRun() { S = fresh(); setActive('green'); save(); return snapshot(); }   // wipe the run; META start bonuses apply via fresh()
 
   // ---- views ----
   function managerView() {
@@ -395,11 +419,12 @@
     var pid = id || S.active, port = S.ports[pid] || null, prev = CUR;
     CUR = port;
     var v = {
-      era: S.era, eraName: ERAS[S.era], money: Math.floor(S.money),
+      era: S.era, eraName: eraName(S.era), money: Math.floor(S.money),
       world: pid, worldHint: spec(pid).hint, spec: spec(pid),
       founded: S.founded, portFounded: !!port,
-      canAdvance: canAdvance(), nextEra: ERAS[S.era + 1] || null,
+      canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
+      prestige: { gain: prestigeGain(), can: canPrestige() },
       network: networkView(),
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
@@ -423,6 +448,9 @@
 
   g.HARBOR_SIM = {
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS, WORLD_SPEC: WORLD_SPEC, WORLD_ORDER: WORLD_ORDER,
+    eraName: eraName, eraReq: eraReq,
+    applyMeta: applyMeta, meta: function () { return META; },
+    prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
@@ -440,7 +468,7 @@
     upgrade: upgrade, canUpgrade: canUpgrade, upCost: function (i) { return CUR && CUR.buildings[i] ? upCost(CUR.buildings[i]) : 0; },
     canAdvance: canAdvance, advanceEra: advanceEra,
     setFounded: function (v) { if (S) { S.founded = !!v; save(); } },
-    setEra: function (n) { if (S) { S.era = clamp(n | 0, 0, ERAS.length - 1); save(); } },
+    setEra: function (n) { if (S) { S.era = Math.max(0, n | 0); save(); } },
     save: save, applyOffline: applyOffline, mark: function () { if (S) { S.lastSeen = now(); save(); } }
   };
 })(typeof window !== 'undefined' ? window : globalThis);
