@@ -1,4 +1,4 @@
-const CACHE = 'prismplay-v17';
+const CACHE = 'prismplay-v18';
 const PRECACHE = [
   './',
   'index.html',
