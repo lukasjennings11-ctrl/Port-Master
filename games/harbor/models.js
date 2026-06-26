@@ -29,20 +29,39 @@
   }
   function fbm(x, z) { var s = 0, a = 0.5, f = 1; for (var i = 0; i < 4; i++) { s += a * vnoise(x * f, z * f); f *= 2; a *= 0.5; } return s; }
 
-  // a rounded ISLAND surrounded by water: high interior dropping below sea level all around,
-  // with a noise-warped (irregular) coastline + a few small offshore islets.
+  // a rugged ISLAND surrounded by water: high interior dropping below sea level all around, with a
+  // FRACTAL (multi-octave) coastline + carved coves/inlets that read as real natural harbours
+  // (Portsmouth/Falmouth-style indentations cutting into the land).
   var ISLAND = { cx: 0, cz: 150, ax: 540, az: 255 };
+  function isleCoves(seed) {
+    var coves = [], n = 5;
+    for (var c = 0; c < n; c++) {
+      var a = c * 2.3999 + seed * 1.7;                                        // golden-angle spread around the coast
+      var rr = 0.74 + (fbm(c * 3.3 + seed, 1.1) - 0.5) * 0.22;                // how far out toward the shore
+      var cr = 55 + fbm(c * 1.7 + seed, 2.2) * 75;                            // cove radius (mouth width)
+      coves.push([ISLAND.cx + Math.cos(a) * ISLAND.ax * rr, ISLAND.cz + Math.sin(a) * ISLAND.az * rr, cr, 0.5 + fbm(c + seed, 4.0) * 0.5]);
+    }
+    return coves;
+  }
   function genField(biome, seed) {
     var nx = Math.round(WORLD.W / WORLD.cell) + 1, nz = Math.round((WORLD.z1 - WORLD.z0) / WORLD.cell) + 1;
     var H = new Float32Array(nx * nz), hilly = biome.hilliness || 1;
     var islets = [[-900, 170, 150], [880, 205, 120], [-280, -95, 85]];        // x, z, radius
+    var coves = isleCoves(seed);
     for (var j = 0; j < nz; j++) {
       var z = WORLD.z0 + j * WORLD.cell;
       for (var i = 0; i < nx; i++) {
         var x = -WORLD.W / 2 + i * WORLD.cell;
         var rad = Math.hypot((x - ISLAND.cx) / ISLAND.ax, (z - ISLAND.cz) / ISLAND.az);
-        var warp = (fbm(x * 0.006 + seed, z * 0.006 + seed) - 0.5) * 0.5;       // irregular coast (bays/headlands)
-        var e = (1 + warp) - rad;                                              // >0 land, <0 sea
+        var warp = (fbm(x * 0.006 + seed, z * 0.006 + seed) - 0.5) * 0.42     // fractal coast: low + mid + high freq
+                 + (fbm(x * 0.015 + seed * 3, z * 0.015 + seed) - 0.5) * 0.22
+                 + (fbm(x * 0.034 + seed * 5, z * 0.034 + seed) - 0.5) * 0.11;
+        var e = (1 + warp) - rad;                                            // >0 land, <0 sea
+        for (var cc = 0; cc < coves.length; cc++) {                          // carve organic coves/inlets into the coast
+          var dd = Math.hypot(x - coves[cc][0], z - coves[cc][1]) / coves[cc][2];
+          dd *= 1 + (fbm(x * 0.028 + cc * 5 + seed, z * 0.028 - cc * 3) - 0.5) * 0.7;   // wavy, non-circular edge
+          if (dd < 1.2) { var ev = (dd - 0.58) * coves[cc][3] * 1.5; if (ev < e) e = ev; }
+        }
         for (var k = 0; k < islets.length; k++) { var ir = Math.hypot((x - islets[k][0]) / islets[k][2], (z - islets[k][1]) / islets[k][2]); var ie = (1 - ir) * 0.7; if (ie > e) e = ie; }
         var h = e > 0 ? Math.min(e * 26, 14) : Math.max(e * 30, -4);           // gentle interior / sea floor
         h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 13 * hilly * clamp(e * 3, 0, 1); // interior hills
@@ -233,9 +252,7 @@
 
   // curated harbour candidates: scan the island coast for many natural DEEP-WATER harbours,
   // keep the best, well-spaced spots, and give each a distinct name.
-  var DP_NAMES = ['Deep-water Inlet', 'Deepwater Reach', 'Deep Anchorage', "Mariner's Inlet", "Trader's Deep", 'Fathom Bay', 'Keelhaven', 'Lowtide Reach'];
-  var SH_NAMES = ['Sheltered Cove', 'Calm Bay', 'Hidden Harbour', 'Quiet Cove', 'Stillwater Bay'];
-  var GN_NAMES = ['Harbour Bay', "Fisher's Bay", 'Anchorage', 'Tidewater', 'Saltmarsh Landing'];
+  var HARBOUR_NAMES = ['Sheltered Cove', 'Haven Point', 'Anchor Bay', 'Gull Harbour', 'Stonehaven', 'Westport', "Mariner's Rest", 'Tradewind Bay', 'Spithead', 'Kingsferry', 'Saltmarsh Inlet', 'Blackwater Reach', 'Greenport', 'Falmouth Cove'];
   function sites() {
     if (!FIELD) return [];
     var cand = [], x, z;
@@ -257,11 +274,8 @@
         if (ok) picked.push(c);
       }
     }
-    var used = {}, dR = { i: 0 }, sR = { i: 0 }, gR = { i: 0 };
-    function uniq(pool, ref) { var n; do { n = pool[ref.i % pool.length]; ref.i++; } while (used[n] && ref.i < pool.length * 2); used[n] = 1; return n; }
-    return picked.map(function (c) {
-      var name = c.depth > 2.0 ? uniq(DP_NAMES, dR) : c.shelter > 0.6 ? uniq(SH_NAMES, sR) : uniq(GN_NAMES, gR);
-      return { x: Math.round(c.x), z: Math.round(c.z), yaw: portYaw(c.x, c.z), stars: c.stars, name: name, score: +c.score.toFixed(2) };
+    return picked.map(function (c, idx) {
+      return { x: Math.round(c.x), z: Math.round(c.z), yaw: portYaw(c.x, c.z), stars: c.stars, name: HARBOUR_NAMES[idx % HARBOUR_NAMES.length], score: +c.score.toFixed(2) };
     });
   }
 
