@@ -575,7 +575,7 @@
   function renderTradeAct() {
     if (!tradeAct) return;
     var net = SIM.network();
-    var lvlEl = document.getElementById('tm-lvl'); if (lvlEl) lvlEl.textContent = 'Lv ' + net.level + ' · ' + net.routes.length + '/' + net.maxRoutes + ' routes';
+    var lvlEl = document.getElementById('tm-lvl'); if (lvlEl) lvlEl.textContent = 'Lv ' + net.level + ' · ' + net.routes.length + '/' + net.maxRoutes + ' routes' + (net.insurance ? ' · insured' : '');
     if (tradeBar) tradeBar.style.width = Math.round(100 * net.xp / Math.max(1, net.need)) + '%';
     // building a route (source + dest selected)
     if (tradeSel.node && tradeSel.dest) {
@@ -602,9 +602,11 @@
         return;
       }
     }
-    // default hint
+    // default hint + network perks
     var founded = 0; for (var id in NODES) if (portFounded(id)) founded++;
-    tradeAct.innerHTML = '<div class="ta-msg">' + (founded < 2 ? 'Found a second harbour to open trade routes.' : (tradeSel.node ? 'Now tap another port to ship to.' : 'Tap a port, then another, to build a route.')) + '</div>';
+    var perk = 'Network Lv ' + net.level + ' — +' + net.capPct + '% capacity, +' + net.tariffPct + '% tariffs' + (net.insurance ? ', storm insurance' : ', insurance at Lv 3');
+    var hint = founded < 2 ? 'Found a second harbour to open trade routes.' : (tradeSel.node ? 'Now tap another port to ship to.' : 'Tap a port, then another, to build a route.');
+    tradeAct.innerHTML = '<div class="ta-msg">' + hint + '</div><div class="ta-perk">' + perk + '</div>';
   }
   function RESCOL_(res) { return RESCOL[res] || '#9fb0bd'; }
   function segDist(px, py, ax, ay, bx, by) {
@@ -742,7 +744,13 @@
     { t: 'Build a Sawmill', ok: function (s) { return (s.counts.sawmill || 0) >= 1; }, r: 500 },
     { t: 'Manufacture goods — build a Factory', ok: function (s) { return (s.counts.factory || 0) >= 1; }, r: 700 },
     { t: 'Ship cargo — build a Cargo Dock', ok: function (s) { return (s.counts.dock || 0) >= 1; }, r: 900 },
-    { t: 'Grow into a Metropolis', ok: function (s) { return s.era >= 3; }, r: 2000 }
+    { t: 'Grow into a Metropolis', ok: function (s) { return s.era >= 3; }, r: 2000 },
+    { t: 'Found a second harbour', ok: function (s) { return (s.ports || []).length >= 2; }, r: 600 },
+    { t: 'Open your first trade route', ok: function (s) { return s.network && s.network.routes.length >= 1; }, r: 700 },
+    { t: 'Weather a storm', ok: function (s) { return s.stats && s.stats.storms >= 1; }, r: 500 },
+    { t: 'Raise the trade network to Lv 2', ok: function (s) { return s.network && s.network.level >= 2; }, r: 1000 },
+    { t: 'Insure your empire — network Lv 3', ok: function (s) { return s.network && s.network.level >= 3; }, r: 2500 },
+    { t: 'Found all five harbours', ok: function (s) { return (s.ports || []).length >= 5; }, r: 8000 }
   ];
   var goalIdx = 0;
   function mgrTotal(s) { var n = 0, m = s.managers || {}; for (var k in m) n += m[k].lvl || 0; return n; }
@@ -860,6 +868,7 @@
     if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
     checkGoals(s);
     handleHazard(s);
+    checkAchievements(s);
     if (manageOpen) renderManage();
   }
   function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
@@ -949,6 +958,22 @@
     if (c.dock) once('dock', 'Cargo Dock built!');
     if (SIM.raw().money >= 1000) once('1k', '£1,000 banked!');
   }
+  // empire-scale achievements — checked every HUD tick (conditions change outside building)
+  function checkAchievements(s) {
+    if (!SIM.raw() || !s) return; var r = SIM.raw(); r._ms = r._ms || {};
+    function ach(key, txt) { if (!r._ms[key]) { r._ms[key] = 1; var pw = portWorld(); popWorld(pw.x, pw.y + 11, pw.z, '🏆 ' + txt, { color: '#ffe08a', size: 18, life: 2.0 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#9ef0b0'], speed: 200, life: 1.1 }); sfx('win'); haptic(20); } }
+    var np = (s.ports || []).length, nl = s.network ? s.network.level : 1, st = s.stats ? s.stats.storms : 0, lm = s.lifetimeMoney || 0;
+    if (lm >= 100000) ach('lm100k', '£100k earned');
+    if (lm >= 1000000) ach('lm1m', 'Millionaire port baron');
+    if (lm >= 10000000) ach('lm10m', '£10M trade empire');
+    if (np >= 3) ach('p3', 'Three harbours founded');
+    if (np >= 5) ach('p5', 'Master of all five seas');
+    if (s.network && s.network.routes.length >= 1) ach('r1', 'First trade route');
+    if (nl >= 3) ach('nl3', 'Network insured (Lv 3)');
+    if (nl >= 5) ach('nl5', 'Trade network Lv 5');
+    if (st >= 1) ach('s1', 'Weathered your first storm');
+    if (st >= 10) ach('s10', 'Storm-hardened (10 survived)');
+  }
   function doAdvance() {
     if (!SIM.canAdvance() || cine) return;
     var req = SIM.ERA_REQ[SIM.raw().era], bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
@@ -1022,6 +1047,7 @@
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
+    forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 

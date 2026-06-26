@@ -176,7 +176,8 @@ html, body {
 #trademap .tm-xp i { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, #2f8f7e, var(--teal)); transition: width .3s ease; }
 #trademap #tradecanvas { flex: 1; width: 100%; min-height: 0; touch-action: none; }
 #trademap .tm-act { padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(14,34,46,0), rgba(14,34,46,.9)); min-height: 64px; }
-.ta-msg { font-family: 'Fredoka', sans-serif; font-size: 12px; color: var(--muted); text-align: center; padding: 8px 0; }
+.ta-msg { font-family: 'Fredoka', sans-serif; font-size: 12px; color: var(--muted); text-align: center; padding: 8px 0 2px; }
+.ta-perk { font-family: 'Fredoka', sans-serif; font-size: 10px; font-weight: 600; color: var(--teal); text-align: center; opacity: .85; }
 .ta-head { font-family: 'Fredoka', sans-serif; font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .ta-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
 .ta-stat { font-family: 'Fredoka', sans-serif; font-size: 11px; color: var(--muted); margin-bottom: 8px; }

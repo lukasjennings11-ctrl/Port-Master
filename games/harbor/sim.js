@@ -82,7 +82,8 @@
       managers: { fishing: 0, sales: 0, labour: 0 },
       active: 'green', ports: {},
       network: { xp: 0, level: 1, routes: [] },
-      hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null
+      hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null,
+      stats: { storms: 0 }
     };
   }
   function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
@@ -120,6 +121,7 @@
     }
     if (!S.hazard) S.hazard = { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null };
     if (typeof S.crash === 'undefined') S.crash = null;
+    if (!S.stats) S.stats = { storms: 0 };
     setActive(S.active);
   }
 
@@ -225,6 +227,7 @@
     return {
       level: S.network.level, xp: Math.floor(S.network.xp || 0), need: netNeed(S.network.level),
       maxRoutes: maxRoutes(), routeCreateCost: routeCost(0),
+      capPct: Math.round(12 * (S.network.level - 1)), tariffPct: Math.round(5 * (S.network.level - 1)), insurance: S.network.level >= 3,
       routes: (S.network.routes || []).map(function (r) {
         return { id: r.id, a: r.a, b: r.b, res: r.res, level: r.level, cap: +(routeCap(r.level)).toFixed(2), tariff: +(routeTariff(r.res)).toFixed(2), up: routeCost(r.level) };
       })
@@ -251,6 +254,7 @@
     var rs = S.network.routes;
     for (var r = 0; r < rs.length; r++) { if (rs[r].a === portId || rs[r].b === portId) { var res = rs[r].res, loss = (p.res[res] || 0) * 0.25 * lossMul; p.res[res] -= loss; sunk += loss; } }
     S.hazard.strikeId = (S.hazard.strikeId || 0) + 1;
+    if (S.stats) S.stats.storms = (S.stats.storms || 0) + 1;
     S.hazard.last = { id: S.hazard.strikeId, port: portId, kind: HAZARD[portId] || 'Storm', damaged: damaged, sunk: Math.round(sunk), crash: false };
   }
   function tickHazard(dt) {
@@ -271,7 +275,7 @@
     } else if (hz.phase === 'warn') {
       hz.warn -= dt;
       if (hz.warn <= 0) {
-        if (hz.crash) { var rr = ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)]; S.crash = { res: rr, t: 35 }; hz.strikeId = (hz.strikeId || 0) + 1; hz.last = { id: hz.strikeId, crash: true, res: rr, kind: 'Market Crash', port: hz.port }; }
+        if (hz.crash) { var rr = ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)]; S.crash = { res: rr, t: 35 }; hz.strikeId = (hz.strikeId || 0) + 1; if (S.stats) S.stats.storms = (S.stats.storms || 0) + 1; hz.last = { id: hz.strikeId, crash: true, res: rr, kind: 'Market Crash', port: hz.port }; }
         else strike(hz.port);
         hz.phase = 'idle'; hz.t = 0; hz.next = hzRand(110, 230);
       }
@@ -399,6 +403,7 @@
       network: networkView(),
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
+      stats: { storms: (S.stats && S.stats.storms) || 0, ports: Object.keys(S.ports).length },
       ports: portList()
     };
     if (port) {
