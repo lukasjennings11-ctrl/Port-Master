@@ -32,44 +32,79 @@
   // a rugged ISLAND surrounded by water: high interior dropping below sea level all around, with a
   // FRACTAL (multi-octave) coastline + carved coves/inlets that read as real natural harbours
   // (Portsmouth/Falmouth-style indentations cutting into the land).
-  var ISLAND = { cx: 0, cz: 150, ax: 540, az: 255 };
+  var ISLAND = { cx: 0, cz: 150, ax: 560, az: 270 };
+  var BAY = { x: 30, z: -55, r: 175, depth: 1.0 };                            // the one big, obvious natural harbour (front)
+  var MTN = { x: 0, z: 180, ax: 0.52, az: 0.52, h: 66 };                      // central snow-capped massif
+  var RIVERS = null;
   function isleCoves(seed) {
-    var coves = [], n = 5;
-    for (var c = 0; c < n; c++) {
-      var a = c * 2.3999 + seed * 1.7;                                        // golden-angle spread around the coast
-      var rr = 0.74 + (fbm(c * 3.3 + seed, 1.1) - 0.5) * 0.22;                // how far out toward the shore
-      var cr = 55 + fbm(c * 1.7 + seed, 2.2) * 75;                            // cove radius (mouth width)
-      coves.push([ISLAND.cx + Math.cos(a) * ISLAND.ax * rr, ISLAND.cz + Math.sin(a) * ISLAND.az * rr, cr, 0.5 + fbm(c + seed, 4.0) * 0.5]);
+    var coves = [[BAY.x, BAY.z, BAY.r, BAY.depth]];                           // big harbour bay first
+    for (var c = 0; c < 3; c++) {                                            // a few smaller natural coves
+      var a = c * 2.3999 + seed * 1.7 + 1.6;
+      var rr = 0.78 + (fbm(c * 3.3 + seed, 1.1) - 0.5) * 0.18;
+      coves.push([ISLAND.cx + Math.cos(a) * ISLAND.ax * rr, ISLAND.cz + Math.sin(a) * ISLAND.az * rr, 50 + fbm(c * 1.7 + seed, 2.2) * 55, 0.5 + fbm(c + seed, 4.0) * 0.4]);
     }
     return coves;
   }
+  function genRivers(seed) {                                                  // winding rivers from the mountain to the sea
+    var rivers = [], n = 3;
+    for (var r = 0; r < n; r++) {
+      var ang = r * 2.1 + seed * 0.9 - 0.4, dirx = Math.cos(ang), dirz = Math.sin(ang), pts = [];
+      for (var t = 0; t <= 13; t++) {
+        var f = t / 13, wob = (fbm(r * 7 + t * 0.5 + seed, t * 0.3) - 0.5) * 130 * f, perpx = -dirz, perpz = dirx;
+        pts.push([MTN.x + dirx * ISLAND.ax * 0.92 * f + perpx * wob, MTN.z + dirz * ISLAND.az * 0.92 * f + perpz * wob, 7 + f * 15]);
+      }
+      rivers.push(pts);
+    }
+    return rivers;
+  }
+  function riverDist(x, z) {                                                  // nearest distance to any river + its width there
+    var best = 1e9, bw = 8;
+    for (var r = 0; r < RIVERS.length; r++) { var p = RIVERS[r]; for (var k = 0; k < p.length - 1; k++) {
+      var ax = p[k][0], az = p[k][1], bx = p[k + 1][0], bz = p[k + 1][1], dx = bx - ax, dz = bz - az;
+      var t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      var qx = ax + dx * t, qz = az + dz * t, d = Math.hypot(x - qx, z - qz);
+      if (d < best) { best = d; bw = p[k][2] + (p[k + 1][2] - p[k][2]) * t; }
+    } }
+    return { d: best, w: bw };
+  }
   function genField(biome, seed) {
     var nx = Math.round(WORLD.W / WORLD.cell) + 1, nz = Math.round((WORLD.z1 - WORLD.z0) / WORLD.cell) + 1;
-    var H = new Float32Array(nx * nz), hilly = biome.hilliness || 1;
-    var islets = [[-900, 170, 150], [880, 205, 120], [-280, -95, 85]];        // x, z, radius
-    var coves = isleCoves(seed);
+    var H = new Float32Array(nx * nz), RM = new Uint8Array(nx * nz), hilly = biome.hilliness || 1;
+    var islets = [[-940, 150, 150], [900, 215, 120], [-300, -120, 85], [520, -150, 95]];
+    var coves = isleCoves(seed); RIVERS = genRivers(seed);
     for (var j = 0; j < nz; j++) {
       var z = WORLD.z0 + j * WORLD.cell;
       for (var i = 0; i < nx; i++) {
         var x = -WORLD.W / 2 + i * WORLD.cell;
         var rad = Math.hypot((x - ISLAND.cx) / ISLAND.ax, (z - ISLAND.cz) / ISLAND.az);
-        var warp = (fbm(x * 0.006 + seed, z * 0.006 + seed) - 0.5) * 0.42     // fractal coast: low + mid + high freq
+        var warp = (fbm(x * 0.006 + seed, z * 0.006 + seed) - 0.5) * 0.42
                  + (fbm(x * 0.015 + seed * 3, z * 0.015 + seed) - 0.5) * 0.22
                  + (fbm(x * 0.034 + seed * 5, z * 0.034 + seed) - 0.5) * 0.11;
-        var e = (1 + warp) - rad;                                            // >0 land, <0 sea
-        for (var cc = 0; cc < coves.length; cc++) {                          // carve organic coves/inlets into the coast
+        var e = (1 + warp) - rad;
+        for (var cc = 0; cc < coves.length; cc++) {
           var dd = Math.hypot(x - coves[cc][0], z - coves[cc][1]) / coves[cc][2];
-          dd *= 1 + (fbm(x * 0.028 + cc * 5 + seed, z * 0.028 - cc * 3) - 0.5) * 0.7;   // wavy, non-circular edge
+          dd *= 1 + (fbm(x * 0.026 + cc * 5 + seed, z * 0.026 - cc * 3) - 0.5) * 0.55;
           if (dd < 1.2) { var ev = (dd - 0.58) * coves[cc][3] * 1.5; if (ev < e) e = ev; }
         }
         for (var k = 0; k < islets.length; k++) { var ir = Math.hypot((x - islets[k][0]) / islets[k][2], (z - islets[k][1]) / islets[k][2]); var ie = (1 - ir) * 0.7; if (ie > e) e = ie; }
-        var h = e > 0 ? Math.min(e * 26, 14) : Math.max(e * 30, -4);           // gentle interior / sea floor
-        h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 13 * hilly * clamp(e * 3, 0, 1); // interior hills
+        var h = e > 0 ? Math.min(e * 26, 14) : Math.max(e * 30, -4);
+        if (e > 0) {
+          var mc = Math.hypot((x - MTN.x) / (ISLAND.ax * MTN.ax), (z - MTN.z) / (ISLAND.az * MTN.az)), mt = clamp(1 - mc, 0, 1);
+          if (mt > 0) {                                                              // craggy central massif (ridged fractal)
+            var rg = 0, amp = 1, fr = 0.017;
+            for (var o = 0; o < 4; o++) { var rn = 1 - Math.abs(fbm(x * fr + seed + o * 2, z * fr - o) * 2 - 1); rg += amp * rn * rn; fr *= 2.2; amp *= 0.5; }
+            rg = clamp(rg / 1.55, 0, 1);
+            h += Math.pow(mt, 1.55) * MTN.h * (0.30 + 0.95 * rg) * (0.9 + hilly * 0.1);
+          }
+          h += (fbm(x * 0.020 + seed * 2, z * 0.020 + 3.3) - 0.5) * 11 * hilly * clamp(e * 3, 0, 1); // rolling hills
+          var rv = riverDist(x, z);                                                  // carve winding rivers
+          if (rv.d < rv.w) { var rt = rv.d / rv.w; h = Math.min(h, -0.5 + rt * rt * 4); RM[j * nx + i] = 1; }
+        }
         if (h < -4) h = -4;
         H[j * nx + i] = h;
       }
     }
-    FIELD = { H: H, nx: nx, nz: nz };
+    FIELD = { H: H, RM: RM, nx: nx, nz: nz };
   }
   function heightAt(x, z) {
     if (!FIELD) return 0;
@@ -86,22 +121,26 @@
 
   // build the heightfield surface into the flat builder (per-vertex colour + normal)
   function buildFieldMesh(flat, biome) {
-    var nx = FIELD.nx, nz = FIELD.nz, H = FIELD.H, base = flat.P.length / 3;
-    var sand = biome.beach || [0.88, 0.80, 0.55], rock = biome.hill, grass = biome.ground, deep = [0.46, 0.42, 0.34];
+    var nx = FIELD.nx, nz = FIELD.nz, H = FIELD.H, RM = FIELD.RM, base = flat.P.length / 3;
+    var sand = biome.beach || [0.88, 0.80, 0.55], grass = biome.ground, deep = [0.40, 0.46, 0.40];
+    var mrock = mixc(biome.hill, [0.40, 0.38, 0.43], 0.62), river = [0.13, 0.42, 0.52], snow = [0.96, 0.97, 1.0];
+    var snowLine = 45;
     for (var j = 0; j < nz; j++) {
       var z = WORLD.z0 + j * WORLD.cell;
       for (var i = 0; i < nx; i++) {
-        var x = -WORLD.W / 2 + i * WORLD.cell, y = H[j * nx + i];
+        var idx = j * nx + i, x = -WORLD.W / 2 + i * WORLD.cell, y = H[idx];
         var hl = H[j * nx + Math.max(0, i - 1)], hr = H[j * nx + Math.min(nx - 1, i + 1)];
         var hd = H[Math.max(0, j - 1) * nx + i], hu = H[Math.min(nz - 1, j + 1) * nx + i];
         var nX = hl - hr, nZ = hd - hu, nY = 2 * WORLD.cell, nl = Math.hypot(nX, nY, nZ) || 1;
-        var slope = 1 - nY / nl;
-        var col;
-        if (y < -0.2) col = mixc(deep, sand, clamp((y + 3) / 2.8, 0, 1));
-        else if (y < 0.7) col = sand;
-        else col = mixc(grass, rock, clamp((y - 2) / 7, 0, 1));
-        if (slope > 0.45 && y > 0.7) col = mixc(col, rock, clamp((slope - 0.45) * 2, 0, 1));
-        if (biome.snow && y > 7) col = mixc(col, [0.95, 0.96, 1.0], clamp((y - 7) / 3, 0, 1));
+        var slope = 1 - nY / nl, col;
+        if (RM[idx]) col = river;                                              // winding river
+        else if (y < -0.2) col = mixc(deep, sand, clamp((y + 3) / 2.8, 0, 1));
+        else if (y < 1.1) col = sand;                                          // beach (wider sandy rim)
+        else if (y < 7) col = grass;
+        else if (y < 22) col = mixc(grass, mrock, clamp((y - 7) / 15, 0, 1));  // forested slope -> rock
+        else col = mrock;                                                      // bare rock
+        if (slope > 0.5 && y > 1.1 && !RM[idx]) col = mixc(col, mrock, clamp((slope - 0.5) * 2, 0, 1));
+        if (y > snowLine) col = mixc(col, snow, clamp((y - snowLine) / 12, 0, 1)); // snow-capped peaks (all biomes)
         flat.P.push(x, y, z); flat.N.push(nX / nl, nY / nl, nZ / nl); flat.U.push(i * 0.25, j * 0.25); flat.C.push(col[0], col[1], col[2]);
       }
     }
@@ -141,13 +180,13 @@
     }
   }
   function landforms(flat, b, rng) {
-    var target = Math.round(WORLD.W / 170), placed = 0, tries = 0;   // scatter peaks on the island's interior highs
-    while (placed < target && tries < target * 10) {
+    var target = Math.round(WORLD.W / 150), placed = 0, tries = 0;   // craggy rock outcrops on the mid slopes
+    while (placed < target && tries < target * 12) {
       tries++;
-      var cx = (rng() - 0.5) * (ISLAND.ax * 2.0), cz = ISLAND.cz + (rng() - 0.5) * (ISLAND.az * 1.7);
+      var cx = (rng() - 0.5) * (ISLAND.ax * 1.7), cz = ISLAND.cz + (rng() - 0.5) * (ISLAND.az * 1.5);
       var y = heightAt(cx, cz);
-      if (y < 5) continue;                                           // only on dry inland highs
-      var s = 0.8 + rng() * 1.1, tmp = new g.HGL.Builder(); landform(tmp, b, s, rng);
+      if (y < 8 || y > 50) continue;                                 // on slopes, not the summit or lowlands
+      var s = 0.5 + rng() * 0.7, tmp = new g.HGL.Builder(); landform(tmp, b, s, rng);
       flat.addXform(tmp, cx, y - 1, cz, rng() * TAU); placed++;
     }
   }
@@ -250,33 +289,19 @@
     return { shelter: shelter, depth: depth, score: score, stars: stars, label: label, onCoast: onCoast, y: here };
   }
 
-  // curated harbour candidates: scan the island coast for many natural DEEP-WATER harbours,
-  // keep the best, well-spaced spots, and give each a distinct name.
-  var HARBOUR_NAMES = ['Sheltered Cove', 'Haven Point', 'Anchor Bay', 'Gull Harbour', 'Stonehaven', 'Westport', "Mariner's Rest", 'Tradewind Bay', 'Spithead', 'Kingsferry', 'Saltmarsh Inlet', 'Blackwater Reach', 'Greenport', 'Falmouth Cove'];
+  // ONE obvious harbour: the best-sheltered spot inside the big front bay.
   function sites() {
     if (!FIELD) return [];
-    var cand = [], x, z;
-    for (x = -ISLAND.ax * 1.45; x <= ISLAND.ax * 1.45; x += 30)
-      for (z = ISLAND.cz - ISLAND.az * 1.6; z <= ISLAND.cz + ISLAND.az * 1.6; z += 30) {
+    var best = null, x, z;
+    for (x = BAY.x - BAY.r; x <= BAY.x + BAY.r; x += 16)
+      for (z = BAY.z - BAY.r; z <= BAY.z + BAY.r; z += 16) {
+        if (Math.hypot(x - BAY.x, z - BAY.z) > BAY.r) continue;
         var r = rate(x, z);
-        if (r.onCoast && r.depth > 1.5) {                              // natural deep-water harbours only
-          var dscore = r.shelter * 0.4 + clamp(r.depth / 2.2, 0, 1) * 0.6;  // weight toward depth
-          cand.push({ x: x, z: z, score: dscore, shelter: r.shelter, depth: r.depth, stars: r.stars });
-        }
+        if (r.onCoast) { var sc = r.shelter * 0.5 + clamp(r.depth / 2.2, 0, 1) * 0.5; if (!best || sc > best.score) best = { x: x, z: z, score: sc }; }
       }
-    cand.sort(function (a, b) { return b.score - a.score; });
-    var picked = [], i, j, want = 8;
-    for (var pass = 0; pass < 2 && picked.length < want; pass++) {     // relax spacing on a 2nd pass if needed
-      var dmin = pass ? 120 : 175;
-      for (i = 0; i < cand.length && picked.length < want; i++) {
-        var c = cand[i], ok = picked.indexOf(c) < 0;
-        for (j = 0; ok && j < picked.length; j++) if (Math.hypot(c.x - picked[j].x, c.z - picked[j].z) < dmin) ok = false;
-        if (ok) picked.push(c);
-      }
-    }
-    return picked.map(function (c, idx) {
-      return { x: Math.round(c.x), z: Math.round(c.z), yaw: portYaw(c.x, c.z), stars: c.stars, name: HARBOUR_NAMES[idx % HARBOUR_NAMES.length], score: +c.score.toFixed(2) };
-    });
+    if (!best) for (x = -420; x <= 420; x += 30) for (z = -170; z <= 80; z += 14) { var rr = rate(x, z); if (rr.onCoast && (!best || rr.score > best.score)) best = { x: x, z: z, score: rr.score }; }
+    if (!best) return [];
+    return [{ x: Math.round(best.x), z: Math.round(best.z), yaw: portYaw(best.x, best.z), stars: 3, name: 'Great Harbour', score: +best.score.toFixed(2) }];
   }
 
   // ---------------- top-level build ----------------
@@ -286,14 +311,18 @@
     genField(biome, seed);
     buildFieldMesh(B.flat, biome);
     landforms(B.flat, biome, rng);
-    if (biome.veg !== 'none') {
-      var nv = Math.round((biome.vegN + 14) * WORLD.W / 760), hw = WORLD.W * 0.48;
+    if (biome.veg !== 'none') {                            // dense forest on the lower/mid slopes
+      var nv = Math.round((biome.vegN + 30) * WORLD.W / 760 * 1.7), hw = WORLD.W * 0.48;
       for (var v = 0; v < nv; v++) {
-        var x = -hw + rng() * hw * 2, z = -110 + rng() * 530, y = heightAt(x, z);
-        if (y < 1.0 || y > 16) continue;                 // only on dry, non-peak land
-        if (port && Math.abs(x - port.x) < 50 && Math.abs(z - port.z) < 50) continue;
+        var x = -hw + rng() * hw * 2, z = -120 + rng() * 560, y = heightAt(x, z);
+        if (y < 1.1 || y > 28) continue;                 // dry land below the rock line
+        if (port && Math.abs(x - port.x) < 46 && Math.abs(z - port.z) < 46) continue;
         tree(B.flat, x, z, rng, biome.veg, y);
       }
+    }
+    for (var bk = 0, bt = 0; bk < 8 && bt < 80; bt++) {    // little boats dotted in the water around the island
+      var bx = -760 + rng() * 1520, bz = -210 + rng() * 760, byy = heightAt(bx, bz);
+      if (byy > -3.2 && byy < -0.7) { dinghy(B.flat, bx, bz, rng); bk++; }
     }
     var scene = { city: [], blobs: [], crane: false, era: era, founded: !!port, port: null };
     if (!port) return scene;                               // wild, unfounded — no structures
