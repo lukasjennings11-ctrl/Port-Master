@@ -568,12 +568,27 @@
         eraBar.classList.toggle('ready', s.canAdvance);
       }
     }
+    // glow the Manage button when an order is ready to deliver
+    var mBtn = document.getElementById('managebtn');
+    if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
     if (manageOpen) renderManage();
   }
   function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
   function renderManage() {
     if (!simReady()) { managePanel.classList.remove('show'); manageOpen = false; return; }
     var s = SIM.state(), BT = SIM.BT, html = '<div class="mp-head">Build & upgrade<button id="mp-close">✕</button></div>';
+    // orders: active delivery goals paying a premium — listed first so they grab attention
+    if (s.contracts && s.contracts.length) {
+      html += '<div class="mp-sec">Orders</div><div class="mp-grid">';
+      s.contracts.forEach(function (c) {
+        var unit = c.res.charAt(0).toUpperCase() + c.res.slice(1);
+        html += '<button class="mp-item order' + (c.can ? ' ready' : '') + '" data-order="' + c.id + '">' +
+          '<span class="mi-n">' + c.who + '</span>' +
+          '<span class="mi-d">' + c.amt + ' ' + unit + ' &middot; ' + c.have + '/' + c.amt + '</span>' +
+          '<span class="mi-c">' + (c.can ? 'Deliver £' + fmt(c.reward) : '£' + fmt(c.reward)) + '</span></button>';
+      });
+      html += '</div>';
+    }
     html += '<div class="mp-sec">New buildings</div><div class="mp-grid">';
     Object.keys(BT).forEach(function (id) {
       var t = BT[id]; if (s.era < t.era) return;                    // hide future-era types
@@ -615,6 +630,7 @@
     managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.raw().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
   function plopFeedback(tier, label) {

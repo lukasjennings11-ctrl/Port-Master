@@ -170,6 +170,15 @@ html, body {
 .mp-item.mgr .mi-n { flex: 1; }
 .mp-item.mgr .mi-lv { font-style: normal; font-size: 9px; font-weight: 800; color: var(--brass); opacity: .85; }
 .mp-item.mgr .mi-d { flex-basis: 100%; order: 3; font-size: 9px; color: var(--muted); margin-top: 1px; }
+/* orders / contracts */
+.mp-item.order { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; background: rgba(120,180,255,.08); border-color: rgba(120,180,255,.22); }
+.mp-item.order .mi-n { flex: 1; }
+.mp-item.order .mi-d { flex-basis: 100%; order: 3; font-size: 9px; color: var(--muted); margin-top: 1px; }
+.mp-item.order.ready { background: rgba(111,208,138,.16); border-color: rgba(111,208,138,.5); animation: orderPulse 1.4s ease-in-out infinite; }
+.mp-item.order.ready .mi-c { color: #8ef0a8; }
+@keyframes orderPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(111,208,138,.0); } 50% { box-shadow: 0 0 10px 1px rgba(111,208,138,.45); } }
+#managebtn.order-ready { animation: mgrReady 1.4s ease-in-out infinite; }
+@keyframes mgrReady { 0%,100% { box-shadow: 0 0 0 0 rgba(111,208,138,0); } 50% { box-shadow: 0 0 0 3px rgba(111,208,138,.5); } }
 /* market demand bars */
 .mp-dem { display: flex; flex-direction: column; gap: 3px; }
 .dem-i { display: flex; align-items: center; gap: 6px; font-family: 'Fredoka',system-ui,sans-serif; }

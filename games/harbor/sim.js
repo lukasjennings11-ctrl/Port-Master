@@ -52,15 +52,19 @@
       era: 0, money: 120, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0,
       managers: { fishing: 0, sales: 0, labour: 0 },
       demand: { fish: 1, timber: 1, goods: 1 },
+      contracts: [], contractSeq: 0,
       lifetimeMoney: 0, lastSeen: now(), founded: false
     };
   }
-  // migrate older saves that predate managers/demand/lifetime fields
+  // migrate older saves that predate managers/demand/lifetime/contract fields
   function patch() {
     if (!S) return;
     if (!S.managers) S.managers = { fishing: 0, sales: 0, labour: 0 };
     if (!S.demand) S.demand = { fish: 1, timber: 1, goods: 1 };
     if (typeof S.lifetimeMoney !== 'number') S.lifetimeMoney = 0;
+    if (!S.contracts) S.contracts = [];
+    if (typeof S.contractSeq !== 'number') S.contractSeq = 0;
+    ensureContracts();
   }
 
   function counts() { var c = {}; for (var i = 0; i < S.buildings.length; i++) { var t = S.buildings[i].type; c[t] = (c[t] || 0) + 1; } return c; }
@@ -82,6 +86,35 @@
   function canBuyManager(kind) { var m = MANAGERS[kind]; return !!m && (S.managers[kind] || 0) < m.max && S.money >= managerCost(kind); }
   function buyManager(kind) { if (!canBuyManager(kind)) return false; S.money -= managerCost(kind); S.managers[kind] = (S.managers[kind] || 0) + 1; save(); return true; }
   function mgrMul(kind) { var m = MANAGERS[kind]; return 1 + m.per * (S.managers[kind] || 0); }
+
+  // ---- contracts (standing orders: deliver a stockpile for a premium lump sum) ----
+  // Orders reward holding inventory and pay ABOVE the demand-softened passive price,
+  // giving an active goal between builds. Always ~3 open; fulfilling rolls a fresh one.
+  var ORDER_LABELS = ['Royal Galley', 'Spice Merchant', 'Naval Quartermaster', 'Coastal Guild', 'Foreign Envoy', 'Cannery Co.', 'Harbour Exchange', 'Northern Traders'];
+  function basePrice(res) { for (var k in BT) { var t = BT[k]; if (t.sells && t.sells.from === res) return t.sells.price; } return 5; }
+  function genContract() {
+    var pool = ['fish']; if (S.era >= 2) { pool.push('timber', 'goods'); } if (S.era >= 1) pool.push('fish');
+    var seq = (S.contractSeq = (S.contractSeq || 0) + 1);
+    var res = pool[(seq * 1) % pool.length];
+    var base = res === 'goods' ? 24 : 70;
+    var amt = Math.round(base * (1 + S.era * 0.55) * (0.8 + ((seq * 7) % 5) * 0.12));
+    var premium = 1.7 + ((seq * 3) % 4) * 0.15;                      // 1.7x .. 2.15x passive price
+    var reward = Math.round(amt * basePrice(res) * premium);
+    var who = ORDER_LABELS[(seq * 5) % ORDER_LABELS.length];
+    return { id: 'c' + seq, who: who, res: res, amt: amt, reward: reward };
+  }
+  function ensureContracts() { if (!S.contracts) S.contracts = []; var guard = 0; while (S.contracts.length < 3 && guard++ < 20) S.contracts.push(genContract()); }
+  function findContract(id) { for (var i = 0; i < (S.contracts || []).length; i++) if (S.contracts[i].id === id) return i; return -1; }
+  function canFulfill(id) { var i = findContract(id); return i >= 0 && S.res[S.contracts[i].res] >= S.contracts[i].amt; }
+  function fulfillContract(id) {
+    if (!canFulfill(id)) return 0;
+    var i = findContract(id), c = S.contracts[i];
+    S.res[c.res] = Math.max(0, S.res[c.res] - c.amt);
+    S.money += c.reward; S.lifetimeMoney = (S.lifetimeMoney || 0) + c.reward;
+    S.contracts.splice(i, 1); ensureContracts(); save();
+    return c.reward;
+  }
+  function rerollContract(id) { var i = findContract(id); if (i < 0) return false; S.contracts.splice(i, 1); ensureContracts(); save(); return true; }
 
   // ---- core tick ----
   function tick(dt) {
@@ -169,14 +202,16 @@
       buildings: S.buildings.map(function (b, i) { return { i: i, type: b.type, name: BT[b.type].name, level: b.level, up: upCost(b) }; }),
       counts: counts(), canAdvance: canAdvance(), nextEra: ERAS[S.era + 1] || null, founded: S.founded,
       managers: managerView(), demand: { fish: S.demand.fish, timber: S.demand.timber, goods: S.demand.goods },
-      lifetimeMoney: Math.floor(S.lifetimeMoney || 0)
+      lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
+      contracts: (S.contracts || []).map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(S.res[c.res] || 0), can: canFulfill(c.id) }; })
     };
   }
 
   g.HARBOR_SIM = {
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
-    newGame: function () { S = fresh(); save(); return snapshot(); },
+    fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
+    newGame: function () { S = fresh(); ensureContracts(); save(); return snapshot(); },
     load: function () { load(); return snapshot(); },
     state: function () { return S ? snapshot() : null; },
     raw: function () { return S; },
