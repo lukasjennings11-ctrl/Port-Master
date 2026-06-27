@@ -264,6 +264,13 @@ html, body {
 .mp-item.mgr .mi-n { flex: 1; }
 .mp-item.mgr .mi-lv { font-style: normal; font-size: 9px; font-weight: 800; color: var(--brass); opacity: .85; }
 .mp-item.mgr .mi-d { flex-basis: 100%; order: 3; font-size: 9px; color: var(--muted); margin-top: 1px; }
+/* automation toggles */
+.mp-item.auto { background: rgba(120,180,255,.08); border-color: rgba(120,180,255,.24); }
+.mp-item.auto.on { background: rgba(111,208,138,.16); border-color: rgba(111,208,138,.5); }
+.mp-item.auto .mi-c { color: var(--muted); }
+.mp-item.auto.on .mi-c { color: #8ef0a8; }
+#legacypanel .lg-stats { font-family: 'Fredoka', sans-serif; font-size: 10.5px; color: #9a8cc0; text-align: center; margin-top: 8px; }
+
 /* daily missions */
 .mp-item.daily { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 2px 8px; background: rgba(158,240,176,.08); border-color: rgba(158,240,176,.24); }
 .mp-item.daily .mi-n { flex: 1; }

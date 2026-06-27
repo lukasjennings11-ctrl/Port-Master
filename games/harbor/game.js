@@ -488,7 +488,7 @@
     if (clockEl) { var hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 % 1) * 60); clockEl.textContent = ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2); }
     // economy tick (founded ports earn over time)
     if (!paused && simReady()) {
-      SIM.tick(dt);
+      SIM.tick(dt); tickAutomation(dt);
       frame._hud = (frame._hud || 0) + dt; if (frame._hud > 0.2) { updateHUD(); frame._hud = 0; }
       frame._sv = (frame._sv || 0) + dt; if (frame._sv > 5) { SIM.mark(); frame._sv = 0; }
       var m = SIM.raw().money; if (!prevMoney) prevMoney = m;
@@ -762,20 +762,26 @@
   ];
   var goalIdx = 0;
   function mgrTotal(s) { var n = 0, m = s.managers || {}; for (var k in m) n += m[k].lvl || 0; return n; }
+  // endless goal stream: past the curated ladder, generate escalating objectives forever
+  function genGoal(idx) {
+    var k = idx - GOALS.length, tier = Math.floor(k / 3), mod = k % 3;
+    if (mod === 0) { var target = 5e6 * Math.pow(8, tier); return { t: 'Bank £' + fmt(target) + ' lifetime', ok: function (s) { return s.lifetimeMoney >= target; }, r: Math.round(2000 * Math.pow(3, tier)) }; }
+    if (mod === 1) { var era = 6 + tier; return { t: 'Reach ' + (SIM ? SIM.eraName(era) : 'era ' + era), ok: function (s) { return s.era >= era; }, r: Math.round(3000 * Math.pow(3, tier)) }; }
+    var pc = tier + 1; return { t: 'Prestige ' + pc + (pc === 1 ? ' time' : ' times'), ok: function () { return (window.Progress ? Progress.prestige(GAME) : 0) >= pc; }, r: Math.round(2500 * Math.pow(3, tier)) };
+  }
+  function curGoal() { return goalIdx < GOALS.length ? GOALS[goalIdx] : genGoal(goalIdx); }
   function loadGoal() { var g = window.Retention && Retention.get(GAME, 'goal', null); goalIdx = (g && typeof g.i === 'number') ? g.i : 0; }
   function saveGoal() { if (window.Retention) Retention.set(GAME, 'goal', { i: goalIdx }); }
   function setGoalText(s) {
     if (!goalBanner) return;
-    if (goalIdx >= GOALS.length) { goalBanner.querySelector('.gb-text').textContent = 'Port master — every goal complete!'; goalBanner.querySelector('.gb-rew').textContent = ''; return; }
-    var g = GOALS[goalIdx];
+    var g = curGoal();
     goalBanner.querySelector('.gb-text').textContent = g.t;
     goalBanner.querySelector('.gb-rew').textContent = '+£' + fmt(g.r);
   }
   function checkGoals(s) {
     if (!goalBanner || !s) return;
     goalBanner.classList.toggle('show', simReady() && !cine);
-    if (goalIdx >= GOALS.length) { setGoalText(s); return; }
-    var g = GOALS[goalIdx];
+    var g = curGoal();
     if (g.ok(s)) {
       if (SIM.raw()) { SIM.raw().money += g.r; SIM.save(); }
       var pw = portWorld(); popWorld(pw.x, pw.y + 9, pw.z, 'Goal! +£' + fmt(g.r), { color: '#9ef0b0', size: 18, life: 1.5 });
@@ -830,7 +836,9 @@
     { id: 'offline', name: 'Standing Orders', desc: '+2h offline earnings / lvl', base: 5, mul: 1.8, per: 2, max: 8, meta: 'offlineHours' },
     { id: 'cost', name: 'Bulk Charters', desc: '−4% build costs / lvl', base: 4, mul: 1.7, per: 0.04, max: 15, meta: 'costMul' },
     { id: 'hazard', name: 'Storm Wardens', desc: '+6% storm resistance / lvl', base: 3, mul: 1.6, per: 0.06, max: 12, meta: 'hazardResist' },
-    { id: 'route', name: 'Trade Winds', desc: '+20% route capacity / lvl', base: 4, mul: 1.6, per: 0.20, max: 15, meta: 'routeMul' }
+    { id: 'route', name: 'Trade Winds', desc: '+20% route capacity / lvl', base: 4, mul: 1.6, per: 0.20, max: 15, meta: 'routeMul' },
+    { id: 'auto_repair', name: 'Repair Crews', desc: 'Unlocks auto-repair of storm damage', base: 8, mul: 1, per: 0, max: 1, meta: 'auto' },
+    { id: 'auto_buy', name: 'Port Authority', desc: 'Unlocks auto-buy of cheapest upgrades', base: 14, mul: 1, per: 0, max: 1, meta: 'auto' }
   ];
   function ln(id) { for (var i = 0; i < LEGACY_TREE.length; i++) if (LEGACY_TREE[i].id === id) return LEGACY_TREE[i]; return null; }
   function legacyBal() { return (window.Retention ? (Retention.get(GAME, 'legacyBal', 0) | 0) : 0); }
@@ -870,6 +878,7 @@
   function doPrestige() {
     if (!SIM || !SIM.canPrestige() || cine) { sfx('lose'); return; }
     var gain = SIM.prestigeGain();
+    if (window.Retention) Retention.submitScore(GAME, Math.floor(SIM.raw().lifetimeMoney));   // banked peak net worth
     setLegacyBal(legacyBal() + gain);
     if (window.Progress) Progress.addPrestige(GAME, gain);          // lifetime Legacy (achievements/leaderboard)
     computeMeta();                                                  // META now includes any newly-bought-able bonuses
@@ -900,8 +909,10 @@
     var p = SIM.state().prestige || { gain: 0, can: false };
     legacyPanel.querySelector('#lg-bal').textContent = '✦ ' + fmt(legacyBal()) + ' Legacy';
     var pres = legacyPanel.querySelector('#lg-prestige');
+    var best = (window.Retention ? Retention.best(GAME) : 0) | 0, pc = (window.Progress ? Progress.prestige(GAME) : 0) | 0;
     pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
-      '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £1M lifetime to prestige') + '</button>';
+      '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £1M lifetime to prestige') + '</button>' +
+      '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
     var tree = legacyPanel.querySelector('#lg-tree'), html = '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {
       var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
@@ -965,6 +976,24 @@
       setTimeout(function () { var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#9ef0b0', '#ffe08a', '#d9b8ff'], speed: 200, life: 1.1 }); sfx('score'); }, 400);
     } else if (last === today) {
       showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
+    }
+  }
+
+  // ---- Automation (idle comfort, unlocked via the Legacy tree) ----
+  function autoOn(key) { return window.Retention ? !!Retention.get(GAME, key, false) : false; }
+  function setAuto(key, v) { if (window.Retention) Retention.set(GAME, key, !!v); }
+  var autoT = 0;
+  function tickAutomation(dt) {
+    if (!simReady()) return; autoT += dt; if (autoT < 1.2) return; autoT = 0;
+    if (legacyLvl('auto_repair') > 0 && autoOn('autoRepair')) {     // repair the cheapest affordable damage
+      var s = SIM.state(), best = -1, bc = Infinity;
+      s.buildings.forEach(function (b) { if (b.hp < 100 && b.rep > 0 && b.rep < bc && s.money >= b.rep) { bc = b.rep; best = b.i; } });
+      if (best >= 0) { SIM.repair(best); if (manageOpen) renderManage(); }
+    }
+    if (legacyLvl('auto_buy') > 0 && autoOn('autoBuy')) {           // buy cheapest upgrade, keeping a 40% reserve
+      var s2 = SIM.state(), bi = -1, mc = Infinity, reserve = s2.money * 0.4;
+      s2.buildings.forEach(function (b) { if (SIM.canUpgrade(b.i) && b.up < mc && b.up <= reserve) { mc = b.up; bi = b.i; } });
+      if (bi >= 0) { SIM.upgrade(bi); if (manageOpen) renderManage(); updateHUD(); }
     }
   }
 
@@ -1127,6 +1156,13 @@
       });
       html += '</div>';
     }
+    // automation toggles (once unlocked via the Legacy tree)
+    if (legacyLvl('auto_repair') > 0 || legacyLvl('auto_buy') > 0) {
+      html += '<div class="mp-sec">Automation</div><div class="mp-grid">';
+      if (legacyLvl('auto_repair') > 0) html += '<button class="mp-item auto' + (autoOn('autoRepair') ? ' on' : '') + '" data-auto="autoRepair"><span class="mi-n">Auto-repair damage</span><span class="mi-c">' + (autoOn('autoRepair') ? 'ON' : 'OFF') + '</span></button>';
+      if (legacyLvl('auto_buy') > 0) html += '<button class="mp-item auto' + (autoOn('autoBuy') ? ' on' : '') + '" data-auto="autoBuy"><span class="mi-n">Auto-buy upgrades</span><span class="mi-c">' + (autoOn('autoBuy') ? 'ON' : 'OFF') + '</span></button>';
+      html += '</div>';
+    }
     // orders: active delivery goals paying a premium — listed first so they grab attention
     if (s.contracts && s.contracts.length) {
       html += '<div class="mp-sec">Orders</div><div class="mp-grid">';
@@ -1191,6 +1227,7 @@
     managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
     managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
@@ -1299,7 +1336,8 @@
     sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
-    goal: function () { return { i: goalIdx, total: GOALS.length, text: goalIdx < GOALS.length ? GOALS[goalIdx].t : 'done', shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
+    goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
+    goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; }, tickAuto: function () { autoT = 10; tickAutomation(2); },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
