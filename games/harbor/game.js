@@ -813,6 +813,7 @@
     if (hz.strikeId && hz.strikeId !== lastStrikeId) {
       lastStrikeId = hz.strikeId; var last = hz.last;
       shakeFX(11, 0.7); flashT = 0.85; sfx('lose'); haptic([10, 50, 20]); bumpDaily('storm');
+      if (Math.random() < 0.35) { grantCrate(1); showHint('Salvage washed ashore — a crate! 🎁'); }   // storms occasionally drop salvage
       if (last && last.crash) { showHint('Market crash — ' + last.res + ' prices slump'); }
       else if (last) {
         showHint((last.kind || 'Storm') + ' hit ' + wname(last.port) + '! ' + last.damaged + ' building' + (last.damaged === 1 ? '' : 's') + ' damaged');
@@ -855,6 +856,13 @@
       else if (nd.meta === 'offlineHours') M.offlineHours = 8 + amt;
       else if (nd.meta === 'hazardResist') M.hazardResist = amt;
       else if (nd.meta === 'costMul') M.costMul = Math.max(0.2, 1 - amt);
+    });
+    // owned blueprints stack permanent bonuses on top of the Legacy tree
+    if (window.Progress) BLUEPRINTS.forEach(function (bp) {
+      if (!Progress.unlocked(GAME, bp.id)) return;
+      if (bp.meta === 'prodMul') M.prodMul += bp.amt; else if (bp.meta === 'sellMul') M.sellMul += bp.amt;
+      else if (bp.meta === 'routeMul') M.routeMul += bp.amt; else if (bp.meta === 'offlineHours') M.offlineHours += bp.amt;
+      else if (bp.meta === 'hazardResist') M.hazardResist += bp.amt;
     });
     if (SIM && SIM.applyMeta) SIM.applyMeta(M);
     return M;
@@ -901,6 +909,8 @@
         '<span class="ln-n">' + nd.name + ' <i>L' + lv + '</i></span><span class="ln-d">' + nd.desc + '</span>' +
         '<span class="ln-c">' + (maxed ? 'MAX' : '✦ ' + fmt(legacyNodeCost(nd))) + '</span></button>';
     });
+    var owned = ownedBlueprints();
+    if (owned.length) { html += '<div class="lg-sec">Blueprints collected (' + owned.length + '/' + BLUEPRINTS.length + ')</div>'; owned.forEach(function (bp) { html += '<div class="lg-bp"><span class="bp-n">📜 ' + bp.name + '</span><span class="bp-d">' + bp.desc + '</span></div>'; }); }
     tree.innerHTML = html;
     pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
@@ -935,7 +945,7 @@
       setLegacyBal(legacyBal() + (done.reward || 1));
       var pw = portWorld(); popWorld(pw.x, pw.y + 11, pw.z, 'Daily done! +' + (done.reward || 1) + '✦', { color: '#9ef0b0', size: 17, life: 1.7 });
       burstWorld(pw.x, pw.y, pw.z, { count: 24, colors: ['#9ef0b0', '#fff3c4', '#d9b8ff'], speed: 190, life: 1.0 });
-      sfx('score'); haptic(20); if (manageOpen) renderManage();
+      sfx('score'); haptic(20); if (Math.random() < 0.35) grantCrate(1); if (manageOpen) renderManage();
     }
   }
   var dailyBase = { lm: null, sh: null };
@@ -958,6 +968,83 @@
     }
   }
 
+  // ---- Salvage crates + blueprints (variable-ratio rewards: the dopamine layer) ----
+  var BLUEPRINTS = [
+    { id: 'bp_prod', name: 'Ancient Ledger', desc: '+10% production forever', meta: 'prodMul', amt: 0.10 },
+    { id: 'bp_sell', name: 'Trade Compass', desc: '+10% sales forever', meta: 'sellMul', amt: 0.10 },
+    { id: 'bp_off', name: 'Tide Charts', desc: '+1h offline forever', meta: 'offlineHours', amt: 1 },
+    { id: 'bp_haz', name: 'Storm Glass', desc: '+8% storm resistance forever', meta: 'hazardResist', amt: 0.08 },
+    { id: 'bp_route', name: 'Old Sea Maps', desc: '+15% route capacity forever', meta: 'routeMul', amt: 0.15 }
+  ];
+  function crateCount() { return window.Retention ? (Retention.get(GAME, 'crates', 0) | 0) : 0; }
+  function setCrates(n) { if (window.Retention) Retention.set(GAME, 'crates', Math.max(0, n | 0)); }
+  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); }
+  function ownedBlueprints() { var a = []; BLUEPRINTS.forEach(function (b) { if (window.Progress && Progress.unlocked(GAME, b.id)) a.push(b); }); return a; }
+  function unownedBlueprints() { return BLUEPRINTS.filter(function (b) { return !(window.Progress && Progress.unlocked(GAME, b.id)); }); }
+  // weighted roll → applies the reward, returns { tier, color, title, sub }
+  function rollCrate() {
+    var s = SIM.state(), r = Math.random(), tier, color, title, sub;
+    var moneyBase = Math.max(50, (s.money || 0) * 0.15 + (s.era + 1) * 80);
+    if (r < 0.50) {                                                    // common — cash
+      tier = 'Common'; color = '#bfe9ff'; var amt = Math.round(moneyBase * (0.6 + Math.random() * 0.9));
+      if (SIM.raw()) SIM.raw().money += amt; title = '+£' + fmt(amt); sub = 'Salvaged coin';
+    } else if (r < 0.74) {                                             // common — resources into active port
+      tier = 'Common'; color = '#8fe0c0'; var res = ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)];
+      var port = SIM.port(); var q = Math.round((s.caps[res] || 80) * (0.4 + Math.random() * 0.6));
+      if (port) port.res[res] = Math.min((s.caps[res] || 80) * 3, (port.res[res] || 0) + q);
+      title = '+' + fmt(q) + ' ' + res; sub = 'Crate of cargo';
+    } else if (r < 0.90) {                                             // rare — Legacy
+      tier = 'Rare'; color = '#d9b8ff'; var lg = 1 + Math.floor(Math.random() * 3);
+      setLegacyBal(legacyBal() + lg); title = '+' + lg + ' ✦ Legacy'; sub = 'Rare find';
+    } else if (r < 0.985) {                                            // epic — production surge
+      tier = 'Epic'; color = '#ffd24a'; var secs = 60 + Math.floor(Math.random() * 60);
+      if (SIM.setBoost) SIM.setBoost(2, secs); title = '2× production'; sub = secs + 's surge!';
+    } else {                                                           // legendary — a blueprint (or jackpot Legacy)
+      tier = 'Legendary'; color = '#ff9a5a'; var pool = unownedBlueprints();
+      if (pool.length) { var bp = pool[Math.floor(Math.random() * pool.length)]; if (window.Progress) Progress.unlock(GAME, bp.id); computeMeta(); title = bp.name; sub = bp.desc; }
+      else { var jp = 15 + Math.floor(Math.random() * 25); setLegacyBal(legacyBal() + jp); title = '+' + jp + ' ✦ Legacy'; sub = 'Jackpot!'; }
+    }
+    return { tier: tier, color: color, title: title, sub: sub };
+  }
+
+  var crateModal = null, crateBtn = null, crateBusy = false;
+  function ensureCrateModal() {
+    if (crateModal) return;
+    crateModal = document.createElement('div'); crateModal.id = 'cratemodal';
+    crateModal.innerHTML = '<div class="cm-card"><div class="cm-box" id="cm-box">🎁</div><div class="cm-tier" id="cm-tier"></div><div class="cm-title" id="cm-title"></div><div class="cm-sub" id="cm-sub"></div><button class="cm-btn" id="cm-btn">Open</button></div>';
+    wrap.appendChild(crateModal);
+    crateModal.addEventListener('click', function (e) { if (e.target === crateModal && !crateBusy) closeCrate(); });
+    crateModal.querySelector('#cm-btn').addEventListener('click', onCrateBtn);
+  }
+  function openCrate() { if (crateCount() <= 0) return; ensureCrateModal(); crateModal.classList.add('show'); resetCrateCard(); }
+  function resetCrateCard() {
+    crateBusy = false;
+    crateModal.querySelector('#cm-box').textContent = '🎁'; crateModal.querySelector('#cm-box').className = 'cm-box';
+    crateModal.querySelector('#cm-tier').textContent = ''; crateModal.querySelector('#cm-title').textContent = 'Salvage Crate';
+    crateModal.querySelector('#cm-sub').textContent = crateCount() + ' to open';
+    var b = crateModal.querySelector('#cm-btn'); b.textContent = 'Open'; b.disabled = crateCount() <= 0;
+  }
+  function onCrateBtn() {
+    var b = crateModal.querySelector('#cm-btn');
+    if (b.textContent === 'Open') {
+      if (crateCount() <= 0 || crateBusy) return; crateBusy = true; setCrates(crateCount() - 1);
+      var rew = rollCrate();
+      var box = crateModal.querySelector('#cm-box'); box.classList.add('opening'); sfx('move');
+      setTimeout(function () {
+        box.textContent = rew.tier === 'Legendary' ? '🏆' : rew.tier === 'Epic' ? '⭐' : '✦';
+        box.className = 'cm-box reveal'; box.style.color = rew.color;
+        crateModal.querySelector('#cm-tier').textContent = rew.tier; crateModal.querySelector('#cm-tier').style.color = rew.color;
+        crateModal.querySelector('#cm-title').textContent = rew.title; crateModal.querySelector('#cm-sub').textContent = rew.sub;
+        b.textContent = crateCount() > 0 ? 'Open next' : 'Collect'; b.disabled = false; crateBusy = false;
+        var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: rew.tier === 'Legendary' ? 50 : 28, colors: [rew.color, '#fff3c4', '#ffffff'], speed: 230, life: 1.2, size: 5 });
+        sfx(rew.tier === 'Legendary' || rew.tier === 'Epic' ? 'win' : 'score'); haptic(rew.tier === 'Common' ? 14 : 26);
+        if (rew.tier === 'Legendary') { confettiBurst(); shakeFX(5, 0.4); }
+        updateHUD();
+      }, 520);
+    } else { closeCrate(); }
+  }
+  function closeCrate() { if (crateModal) crateModal.classList.remove('show'); }
+
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
@@ -967,8 +1054,9 @@
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
     var nBtn = document.createElement('button'); nBtn.id = 'netbtn'; nBtn.textContent = 'Trade network'; nBtn.addEventListener('click', openTrade);
     legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
+    crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(legacyBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
+    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(crateBtn); econHud.appendChild(legacyBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
     wrap.appendChild(econHud);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -1019,6 +1107,7 @@
     trackDaily(s);
     // reveal the Legacy button once prestige is relevant; pulse when a prestige is available
     if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); }
+    if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
   }
@@ -1139,12 +1228,13 @@
   }
   function doAdvance() {
     if (!SIM.canAdvance() || cine) return;
-    var req = SIM.ERA_REQ[SIM.raw().era], bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
+    var req = SIM.eraReq(SIM.raw().era), bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
     SIM.advanceEra(); var toEra = SIM.raw().era;
     var newWorlds = []; HARBOR_BIOME_ORDER.forEach(function (id) { if (HARBOR_BIOMES[id].unlockEra <= toEra && !isUnlocked(id)) { newWorlds.push(HARBOR_BIOMES[id].name); unlockWorld(id); } });
-    var name = SIM.ERAS[toEra], newBuilds = [];
+    var name = SIM.eraName(toEra), newBuilds = [];
     for (var bk in SIM.BT) if (SIM.BT[bk].era === toEra) newBuilds.push(SIM.BT[bk].name);
     var unlockTxt = newBuilds.concat(newWorlds).slice(0, 4).join(' · ');
+    grantCrate(1);                                                  // every era-up drops a salvage crate
     if (window.Juice) Juice.Audio.unlock();
     startAscension(toEra, name, unlockTxt, bonus);                  // cinematic does buildBiome + bonus at the bloom
   }
@@ -1217,6 +1307,8 @@
     openLegacy: function () { openLegacy(); }, prestige: function () { doPrestige(); },
     legacy: function () { return { bal: legacyBal(), tree: legacyTreeMap(), meta: SIM.meta(), gain: SIM.prestigeGain(), can: SIM.canPrestige() }; },
     buyLegacy: function (id) { return buyLegacy(id); }, fmt: function (n) { return fmt(n); },
+    grantCrate: function (n) { grantCrate(n || 1); return crateCount(); }, crates: function () { return crateCount(); }, openCrate: function () { openCrate(); },
+    rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
   };
 

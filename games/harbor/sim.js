@@ -84,6 +84,10 @@
   // A rotating positive bonus that rewards logging in — production and/or per-resource sale boosts.
   var TIDE = { prod: 1, sell: { fish: 1, timber: 1, goods: 1 } };
   function setTide(t) { if (!t) return; TIDE.prod = t.prod || 1; TIDE.sell = { fish: (t.sell && t.sell.fish) || 1, timber: (t.sell && t.sell.timber) || 1, goods: (t.sell && t.sell.goods) || 1 }; }
+  // BOOST: a transient production surge (e.g. from opening a crate). Not persisted — pure live juice.
+  var BOOST = { mult: 1, t: 0 };
+  function setBoost(mult, secs) { BOOST.mult = mult || 1; BOOST.t = secs || 0; }
+  function boostMul() { return BOOST.t > 0 ? BOOST.mult : 1; }
 
   var S = null;     // empire root
   var CUR = null;   // the port currently in scope for the per-port helpers below
@@ -321,7 +325,7 @@
     // labour: housing feeds crew. Foreman manager makes the same crew go further.
     var labor = j > 0 ? clamp(p / j, 0, 1) : 1;
     labor = Math.min(1.25, labor * mgrMul('labour'));
-    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × Legacy × daily tide
+    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul(), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × Legacy × tide × crate surge
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
     var taper = {};
     for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
@@ -352,6 +356,7 @@
   function tick(dt) {
     if (!S || !S.ports || dt <= 0) return;
     dt = Math.min(dt, 36000);                                       // safety clamp (10h max chunk)
+    if (BOOST.t > 0) { BOOST.t -= dt; if (BOOST.t <= 0) { BOOST.mult = 1; BOOST.t = 0; } }   // decay crate surge
     var delta = 0;
     for (var id in S.ports) { CUR = S.ports[id]; delta += tickPort(dt); }
     setActive(S.active);                                            // restore scope to the active port
@@ -455,7 +460,7 @@
   g.HARBOR_SIM = {
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS, WORLD_SPEC: WORLD_SPEC, WORLD_ORDER: WORLD_ORDER,
     eraName: eraName, eraReq: eraReq,
-    applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide,
+    applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide, setBoost: setBoost, boostT: function () { return BOOST.t; },
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
