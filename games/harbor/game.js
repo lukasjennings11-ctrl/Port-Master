@@ -443,6 +443,21 @@
     if (!FX) return;
     for (var i = 0; i < 80; i++) FX.p.list.push({ x: Math.random() * CW, y: -12 - Math.random() * 70, vx: (Math.random() - 0.5) * 70, vy: 70 + Math.random() * 130, life: 2.0, max: 2.0, size: 5 + Math.random() * 4, color: ['#ff6b6b', '#ffd24a', '#4fd6c4', '#7fe0ff', '#c084fc', '#f2b35e'][(Math.random() * 6) | 0], gravity: 80, shape: 'rect' });
   }
+  // chimney smoke: soft grey puffs rising from the port, intensity scaling with how much you manufacture
+  var smokeT = 0;
+  function emitSmoke(dt) {
+    if (!FX || !simReady() || cine || tradeOpen) return;
+    var s = SIM.state(), facs = (s.counts && (s.counts.factory || 0)) + ((s.counts && s.counts.sawmill || 0)) * 0.5;
+    if (facs < 1) return;
+    smokeT += dt; var every = Math.max(0.12, 0.5 / facs);
+    while (smokeT >= every) {
+      smokeT -= every;
+      var pw = portWorld(); if (!pw) return; var sc = worldToScreen(pw.x - 18 + Math.random() * 36, pw.y + 8, pw.z - 4 + Math.random() * 8); if (!sc) continue;
+      var g = 0.55 + Math.random() * 0.2;
+      FX.p.list.push({ x: sc.x, y: sc.y, vx: (Math.random() - 0.3) * 14, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
+    }
+  }
+
   // ---- Era Ascension cinematic ----
   function startAscension(toEra, eraName, unlocksText, bonus) {
     cine = { t: 0, dur: 4.2, flashed: false, banner: false, toEra: toEra, name: eraName, unlocks: unlocksText, bonus: bonus, az0: C.azT };
@@ -501,6 +516,7 @@
       if (hudMoney) hudMoney.textContent = fmt(hudShownMoney);
     }
     render();
+    emitSmoke(dt);                                               // industry breathes: chimney smoke once you manufacture
     if (FX && fxCtx) {                                            // draw the 2D juice overlay (with screenshake)
       FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
       fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
@@ -1385,7 +1401,7 @@
     forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
     openLegacy: function () { openLegacy(); }, prestige: function () { doPrestige(); },
     legacy: function () { return { bal: legacyBal(), tree: legacyTreeMap(), meta: SIM.meta(), gain: SIM.prestigeGain(), can: SIM.canPrestige() }; },
-    buyLegacy: function (id) { return buyLegacy(id); }, fmt: function (n) { return fmt(n); },
+    buyLegacy: function (id) { return buyLegacy(id); }, fmt: function (n) { return fmt(n); }, fxCount: function () { return FX ? FX.p.list.length : 0; },
     grantCrate: function (n) { grantCrate(n || 1); return crateCount(); }, crates: function () { return crateCount(); }, openCrate: function () { openCrate(); },
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
