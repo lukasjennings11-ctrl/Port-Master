@@ -911,7 +911,7 @@
     var pres = legacyPanel.querySelector('#lg-prestige');
     var best = (window.Retention ? Retention.best(GAME) : 0) | 0, pc = (window.Progress ? Progress.prestige(GAME) : 0) | 0;
     pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
-      '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £1M lifetime to prestige') + '</button>' +
+      '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £' + fmt(p.threshold || 250000) + ' lifetime to prestige') + '</button>' +
       '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
     var tree = legacyPanel.querySelector('#lg-tree'), html = '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {

@@ -103,7 +103,7 @@
   }
   function fresh() {
     return {
-      era: 0, money: 120 + (META.startMoney || 0), lifetimeMoney: 0, lastSeen: now(), founded: false,
+      era: 0, money: 150 + (META.startMoney || 0), lifetimeMoney: 0, lastSeen: now(), founded: false,
       managers: { fishing: 0, sales: 0, labour: 0 },
       active: 'green', ports: {},
       network: { xp: 0, level: 1, routes: [] },
@@ -322,8 +322,9 @@
     var port = CUR; if (!port) return 0;
     var sp = spec(port.id);
     var cap = caps(), p = pop(), j = jobs();
-    // labour: housing feeds crew. Foreman manager makes the same crew go further.
-    var labor = j > 0 ? clamp(p / j, 0, 1) : 1;
+    // labour: housing feeds crew. A 12% floor (the founders themselves) keeps a port from ever
+    // soft-locking at zero output, and softens the blow when a storm wrecks your cottages.
+    var labor = j > 0 ? clamp(p / j, 0.12, 1) : 1;
     labor = Math.min(1.25, labor * mgrMul('labour'));
     var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul(), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × Legacy × tide × crate surge
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
@@ -409,8 +410,8 @@
   }
 
   // ---- prestige (cash the run's lifetime earnings into permanent Legacy, then start anew) ----
-  var PRESTIGE_THRESHOLD = 1e6;
-  function prestigeGain() { return S ? Math.floor(Math.pow((S.lifetimeMoney || 0) / PRESTIGE_THRESHOLD, 0.5) * 6) : 0; }
+  var PRESTIGE_THRESHOLD = 250000;   // first prestige unlocks ~Industrial Port (~45–60 min) so the loop hooks early
+  function prestigeGain() { return S ? Math.floor(Math.pow((S.lifetimeMoney || 0) / PRESTIGE_THRESHOLD, 0.5) * 8) : 0; }
   function canPrestige() { return !!S && (S.lifetimeMoney || 0) >= PRESTIGE_THRESHOLD && prestigeGain() >= 1; }
   function resetRun() { S = fresh(); setActive('green'); save(); return snapshot(); }   // wipe the run; META start bonuses apply via fresh()
 
@@ -435,7 +436,7 @@
       founded: S.founded, portFounded: !!port,
       canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
-      prestige: { gain: prestigeGain(), can: canPrestige() },
+      prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
       network: networkView(),
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
