@@ -10,7 +10,7 @@ Casual web gamers — people with a spare five minutes, on any device, who want 
 
 ## Product Purpose
 
-Prism Play is a browser-native arcade that ships original casual games at high volume with zero friction. No installs. No accounts. No paywalls. Revenue comes from portal licensing (CrazyGames, Poki, GameDistribution). Success means: players click once and are in a game within seconds; they come back for the daily game (Equate); they share scores. Ten games in the initial lineup.
+PortMaster is a browser-native arcade that ships original casual games at high volume with zero friction. No installs. No accounts. No paywalls. Revenue comes from portal licensing (CrazyGames, Poki, GameDistribution). Success means: players click once and are in a game within seconds; they come back for the daily game (Equate); they share scores. Ten games in the initial lineup.
 
 ## Brand Personality
 
