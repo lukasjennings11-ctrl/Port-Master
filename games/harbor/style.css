@@ -218,6 +218,16 @@ html, body {
 #legacypanel .lg-bp { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px; background: rgba(255,154,90,.1); border: 1px solid rgba(255,154,90,.3); font-family: 'Fredoka', sans-serif; }
 #legacypanel .lg-bp .bp-n { flex: 1; font-size: 12px; font-weight: 700; color: #ffd9c0; }
 #legacypanel .lg-bp .bp-d { font-size: 10px; color: #d6b39a; }
+#legacypanel .lg-bp.locked { background: rgba(255,255,255,.04); border-color: rgba(255,255,255,.1); }
+#legacypanel .lg-bp.locked .bp-n { color: #6f6a85; } #legacypanel .lg-bp.locked .bp-d { color: #5a5570; }
+/* almanac: stat cells + achievement grid */
+#legacypanel .lg-statgrid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+#legacypanel .lg-stat { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 9px 4px; border-radius: 10px; background: rgba(184,132,240,.07); border: 1px solid rgba(184,132,240,.16); }
+#legacypanel .lg-stat .ls-v { font-family: 'Lilita', cursive; font-weight: 400; font-size: 15px; color: #ece4fb; }
+#legacypanel .lg-stat .ls-l { font-family: 'Fredoka', sans-serif; font-size: 8.5px; color: #9a8cc0; text-align: center; }
+#legacypanel .lg-achgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+#legacypanel .lg-ach { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-radius: 9px; font-family: 'Fredoka', sans-serif; font-size: 10.5px; font-weight: 600; background: rgba(255,224,138,.1); border: 1px solid rgba(255,224,138,.3); color: #ffe9b8; }
+#legacypanel .lg-ach.locked { background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.08); color: #6f6a85; }
 
 /* salvage crate button + open modal */
 #econhud #cratebtn { position: relative; width: 32px; height: 30px; border-radius: 999px; border: 1px solid rgba(255,210,74,.5); background: rgba(40,30,8,.7); font-size: 15px; cursor: pointer; margin-left: 6px; }
