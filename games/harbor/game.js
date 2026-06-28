@@ -73,7 +73,7 @@
   function mulberry(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
   // ---- scene ----
-  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex;
+  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, hullMesh, sailMesh, gullMesh;
   var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
   var cityModels = null, atlasTex = null, blobTex = null;   // glTF buildings (async) + shared atlas + shadow decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
@@ -237,18 +237,23 @@
       nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1); nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
       yaw = Math.atan2(nx, nz);
       var sc = b.big ? 1.5 : 1, bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
+      // rounded wooden hull (flattened 12-gon, long & narrow), riding the water
       gl.uniform3fv(M.u.uBase, b.hull);
-      composeRYS(mModel, x, 0.5 + bob, z, 6 * sc, 1.8, 2.4 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
-      gl.uniform3fv(M.u.uBase, [0.93, 0.93, 0.9]);                         // sail / cabin
-      composeRYS(mModel, x, 3.2 + bob, z, 0.5, 4.2, 3.0 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      composeRYS(mModel, x, 0.55 + bob, z, 3.6 * sc, 1.0, 1.5 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      // little deck cabin
+      gl.uniform3fv(M.u.uBase, [b.hull[0] * 0.8, b.hull[1] * 0.8, b.hull[2] * 0.78]);
+      composeRYS(mModel, x, 1.2 + bob, z, 1.5 * sc, 1.0, 1.2 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      // tall triangular sail
+      gl.uniform3fv(M.u.uBase, [0.96, 0.95, 0.92]);
+      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc, 4.6 * sc, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
-    gl.uniform3fv(M.u.uBase, [0.97, 0.97, 0.95]);
+    gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
       var g = ambient.gulls[i], ga = g.a0 + clock * g.sp;
       x = (p ? p.x : ambient.cx) + Math.cos(ga) * g.r; z = (p ? p.z : ambient.cz) + Math.sin(ga) * g.r;
       var gy = by + g.h + Math.sin(clock * 2 + g.bob) * 3;
-      var flap = 1 + Math.sin(clock * 9 + g.bob) * 0.4;                    // wing-flap shimmer
-      composeRYS(mModel, x, gy, z, 2.4 * flap, 0.4, 0.9, ga); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      var flap = 0.7 + Math.sin(clock * 9 + g.bob) * 0.4;                  // wing-flap: stretch the little V
+      composeRYS(mModel, x, gy, z, 1.9 * flap, 0.5, 0.7, ga + clock * 0.6); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, gullMesh);
     }
   }
 
@@ -368,7 +373,7 @@
 
   // ---- input: PAN-FIRST. 1 finger / left-drag = travel along the coast; pinch / wheel = zoom;
   // 2-finger twist (or right-drag / Shift+drag) = rotate; tap = scout; arrow keys / WASD pan. ----
-  var ptrs = new Map(), pinchPrev = 0, panPrev = null, twistPrev = null, lastTap = 0, downPt = null, moved = false, multi = false, orbitMode = false;
+  var ptrs = new Map(), pinchPrev = 0, panPrev = null, twistPrev = null, twistAcc = 0, lastTap = 0, downPt = null, moved = false, multi = false, orbitMode = false;
   function pxy(e) { var b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
   function defaultView() {
     if (founded[biomeId]) { C.azT = 2.42; C.elT = 0.5; C.distT = 150; C.txT = founded[biomeId].x; C.tzT = founded[biomeId].z; }
@@ -390,7 +395,7 @@
       if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
       ptrs.set(e.pointerId, pxy(e)); C.vAz = C.vEl = C.vTx = C.vTz = 0;
       if (ptrs.size === 1) { downPt = pxy(e); moved = false; multi = false; orbitMode = (e.button === 2 || e.shiftKey); var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; }
-      else { multi = true; pinchPrev = 0; panPrev = null; twistPrev = null; }
+      else { multi = true; pinchPrev = 0; panPrev = null; twistPrev = null; twistAcc = 0; }
     });
     canvas.addEventListener('pointermove', function (e) {
       if (!ptrs.has(e.pointerId)) return;
@@ -403,10 +408,16 @@
       } else if (ptrs.size >= 2) {
         var pts = Array.from(ptrs.values()), a = pts[0], b = pts[1];
         var d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.5, 1.5); C.distT = clamp(C.distT * f, 40, 520); }
+        // ZOOM: gentle + smooth (cap per-event change so fast pinches don't jump)
+        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.82, 1.22); C.distT = clamp(C.distT * f, 45, 560); }
         pinchPrev = d;
-        var ang = Math.atan2(a.y - b.y, a.x - b.x);          // twist -> rotate
-        if (twistPrev != null) { var da = ang - twistPrev; if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI; C.azT += da; C.vAz = da; }
+        // TWIST -> rotate, but only past a deadzone so a normal pinch never accidentally spins the camera
+        var ang = Math.atan2(a.y - b.y, a.x - b.x);
+        if (twistPrev != null) {
+          var da = ang - twistPrev; if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI;
+          twistAcc += da;
+          if (Math.abs(twistAcc) > 0.12) { var ap = twistAcc * 0.85; C.azT += ap; C.vAz = ap * 0.5; twistAcc = 0; }
+        }
         twistPrev = ang;
         if (panPrev) panDrag(panPrev.x, panPrev.y, mid.x, mid.y);
         panPrev = mid;
@@ -419,7 +430,7 @@
       if (ptrs.size < 2) { pinchPrev = 0; panPrev = null; twistPrev = null; multi = false; }
     }
     window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
-    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 40, 520); }, { passive: false });
+    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 45, 560); }, { passive: false });
     window.addEventListener('keydown', function (e) {
       var k = e.key, step = C.dist * 0.06, dx = 0, dz = 0;
       if (k === 'ArrowRight' || k === 'd' || k === 'D') dx = step;
@@ -752,7 +763,7 @@
     return (neg ? '-' : '') + n.toExponential(2).replace('e+', 'e');
   }
 
-  var eraBar = null, muteBtn = null, goalBanner = null, legacyBtn = null;
+  var eraBar = null, muteBtn = null, goalBanner = null, legacyBtn = null, actionBar = null;
   var statFlags = { orders: 0 };                              // session counters for objectives
   // guided objective ladder — each completes once, pays a small reward + juice, then reveals the next
   var GOALS = [
@@ -1117,8 +1128,13 @@
     legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
     crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    econHud.appendChild(muteBtn); econHud.appendChild(advBtn); econHud.appendChild(crateBtn); econHud.appendChild(legacyBtn); econHud.appendChild(nBtn); econHud.appendChild(mBtn);
+    // top row: resource chips + mute only (keeps it short so the era/goal bars stay clear)
+    econHud.appendChild(muteBtn);
     wrap.appendChild(econHud);
+    // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
+    actionBar = document.createElement('div'); actionBar.id = 'actionbar';
+    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
+    wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
     eraBar = document.createElement('div'); eraBar.id = 'erabar';
@@ -1138,7 +1154,8 @@
   function updateHUD() {
     if (!econHud) return;
     var on = simReady();
-    econHud.classList.toggle('show', on); if (eraBar) eraBar.classList.toggle('show', on && !cine);
+    econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
+    if (eraBar) eraBar.classList.toggle('show', on && !cine);
     if (!on) { if (managePanel) managePanel.classList.remove('show'); return; }
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
@@ -1326,6 +1343,10 @@
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
+    // cartoon ambient shapes: a rounded hull (flat 12-gon), a triangular sail, a small gull triangle
+    hullMesh = E.mesh(new HGL.Builder().cyl(0, -0.5, 0, 1, 1, 12, [1, 1, 1], 1).data());
+    sailMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 1, 3, [1, 1, 1], 0.05).data());
+    gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
     waterMesh = E.mesh(E.plane(2900, 300)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture());
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
@@ -1397,6 +1418,8 @@
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
     goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; }, tickAuto: function () { autoT = 10; tickAutomation(2); },
+    lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
+    boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },

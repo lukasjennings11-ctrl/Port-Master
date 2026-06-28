@@ -208,9 +208,13 @@
     flat.box(x, h * 0.4, z + d * 0.5 + 0.05, w * 0.3, h * 0.5, 0.3, [0.2, 0.14, 0.1], rot);
   }
   function dinghy(flat, x, z, rng) {
-    var rot = (rng() - 0.5) * 0.8, wood = pick([[0.62, 0.44, 0.28], [0.7, 0.5, 0.32], [0.8, 0.78, 0.74]], rng);
-    flat.box(x, 0.1, z, 6, 1.4, 2.2, wood, rot); flat.box(x - 2.6, 0.1, z, 1.6, 1.4, 1.6, wood, rot + 0.2); flat.box(x + 2.6, 0.1, z, 1.6, 1.4, 1.6, wood, rot - 0.2);
-    flat.box(x, 1.0, z, 1.6, 0.3, 1.8, mul(wood, 0.8), rot); flat.box(x + 0.5, 2.2, z, 0.18, 3.0, 0.18, [0.4, 0.3, 0.2], rot);
+    var rot = (rng() - 0.5) * 0.8, wood = pick([[0.62, 0.44, 0.28], [0.7, 0.5, 0.32], [0.55, 0.40, 0.26]], rng);
+    var c = Math.cos(rot), s = Math.sin(rot), bx = x + c * 3.0, bz = z - s * 3.0;   // bow offset along the hull
+    flat.box(x, 0.25, z, 5.0, 1.1, 2.0, wood, rot);                                  // main hull
+    flat.box(bx, 0.45, bz, 1.7, 0.85, 1.2, wood, rot, 0.5);                          // tilted-up pointed bow
+    flat.cyl(x - c * 0.6, 0.8, z + s * 0.6, 0.95, 0.95, 10, mul(wood, 0.82), 0.85);  // rounded cabin
+    flat.box(x + c * 0.6, 2.0, z - s * 0.6, 0.16, 3.2, 0.16, [0.42, 0.30, 0.2], rot); // mast
+    flat.cyl(x + c * 0.6, 0.85, z - s * 0.6, 1.1, 3.0, 3, [0.95, 0.94, 0.9], 0.05);   // triangular sail
   }
   function woodenJetty(flat, x) {
     flat.box(x, 0.8, 8, 6, 0.5, 18, [0.52, 0.4, 0.27], 0);
