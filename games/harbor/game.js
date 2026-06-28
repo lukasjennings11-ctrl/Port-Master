@@ -767,7 +767,7 @@
     var k = idx - GOALS.length, tier = Math.floor(k / 3), mod = k % 3;
     if (mod === 0) { var target = 5e6 * Math.pow(8, tier); return { t: 'Bank £' + fmt(target) + ' lifetime', ok: function (s) { return s.lifetimeMoney >= target; }, r: Math.round(2000 * Math.pow(3, tier)) }; }
     if (mod === 1) { var era = 6 + tier; return { t: 'Reach ' + (SIM ? SIM.eraName(era) : 'era ' + era), ok: function (s) { return s.era >= era; }, r: Math.round(3000 * Math.pow(3, tier)) }; }
-    var pc = tier + 1; return { t: 'Prestige ' + pc + (pc === 1 ? ' time' : ' times'), ok: function () { return (window.Progress ? Progress.prestige(GAME) : 0) >= pc; }, r: Math.round(2500 * Math.pow(3, tier)) };
+    var pc = tier + 1; return { t: 'Prestige ' + pc + (pc === 1 ? ' time' : ' times'), ok: function () { return chartersCount() >= pc; }, r: Math.round(2500 * Math.pow(3, tier)) };
   }
   function curGoal() { return goalIdx < GOALS.length ? GOALS[goalIdx] : genGoal(goalIdx); }
   function loadGoal() { var g = window.Retention && Retention.get(GAME, 'goal', null); goalIdx = (g && typeof g.i === 'number') ? g.i : 0; }
@@ -842,6 +842,7 @@
   ];
   function ln(id) { for (var i = 0; i < LEGACY_TREE.length; i++) if (LEGACY_TREE[i].id === id) return LEGACY_TREE[i]; return null; }
   function legacyBal() { return (window.Retention ? (Retention.get(GAME, 'legacyBal', 0) | 0) : 0); }
+  function chartersCount() { return window.Retention ? (Retention.get(GAME, 'charters', 0) | 0) : 0; }
   function setLegacyBal(v) { if (window.Retention) Retention.set(GAME, 'legacyBal', Math.max(0, v | 0)); }
   function legacyTreeMap() { return (window.Retention && Retention.get(GAME, 'legacyTree', {})) || {}; }
   function legacyLvl(id) { return (legacyTreeMap()[id] || 0) | 0; }
@@ -880,7 +881,8 @@
     var gain = SIM.prestigeGain();
     if (window.Retention) Retention.submitScore(GAME, Math.floor(SIM.raw().lifetimeMoney));   // banked peak net worth
     setLegacyBal(legacyBal() + gain);
-    if (window.Progress) Progress.addPrestige(GAME, gain);          // lifetime Legacy (achievements/leaderboard)
+    if (window.Progress) Progress.addPrestige(GAME, gain);          // lifetime Legacy total (stat)
+    if (window.Retention) Retention.set(GAME, 'charters', chartersCount() + 1);   // count of prestiges
     computeMeta();                                                  // META now includes any newly-bought-able bonuses
     SIM.resetRun();                                                 // wipe the run; fresh() applies META start bonuses
     founded = {}; saveFounded(); era = 0; if (window.Retention) Retention.set(GAME, 'era', 0);
@@ -904,12 +906,13 @@
   }
   function openLegacy() { ensureLegacy(); legacyOpen = true; legacyPanel.classList.add('show'); renderLegacy(); sfx('tap'); }
   function closeLegacy() { legacyOpen = false; if (legacyPanel) legacyPanel.classList.remove('show'); }
+  function sCell(label, val) { return '<div class="lg-stat"><span class="ls-v">' + val + '</span><span class="ls-l">' + label + '</span></div>'; }
   function renderLegacy() {
     if (!legacyPanel || !SIM) return;
     var p = SIM.state().prestige || { gain: 0, can: false };
     legacyPanel.querySelector('#lg-bal').textContent = '✦ ' + fmt(legacyBal()) + ' Legacy';
     var pres = legacyPanel.querySelector('#lg-prestige');
-    var best = (window.Retention ? Retention.best(GAME) : 0) | 0, pc = (window.Progress ? Progress.prestige(GAME) : 0) | 0;
+    var best = (window.Retention ? Retention.best(GAME) : 0) | 0, pc = chartersCount();
     pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
       '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £' + fmt(p.threshold || 250000) + ' lifetime to prestige') + '</button>' +
       '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
@@ -920,8 +923,20 @@
         '<span class="ln-n">' + nd.name + ' <i>L' + lv + '</i></span><span class="ln-d">' + nd.desc + '</span>' +
         '<span class="ln-c">' + (maxed ? 'MAX' : '✦ ' + fmt(legacyNodeCost(nd))) + '</span></button>';
     });
-    var owned = ownedBlueprints();
-    if (owned.length) { html += '<div class="lg-sec">Blueprints collected (' + owned.length + '/' + BLUEPRINTS.length + ')</div>'; owned.forEach(function (bp) { html += '<div class="lg-bp"><span class="bp-n">📜 ' + bp.name + '</span><span class="bp-d">' + bp.desc + '</span></div>'; }); }
+    // ---- Almanac: stats, blueprint collection, achievements ----
+    var st = SIM.state(), stat = st.stats || { storms: 0, shipped: 0, ports: 0 };
+    html += '<div class="lg-sec">Empire almanac</div><div class="lg-statgrid">' +
+      sCell('Lifetime earned', '£' + fmt(st.lifetimeMoney || 0)) + sCell('Charters signed', '' + pc) +
+      sCell('Best empire', best > 0 ? '£' + fmt(best) : '—') + sCell('Ports founded', '' + stat.ports) +
+      sCell('Storms survived', '' + (stat.storms || 0)) + sCell('Cargo shipped', fmt(stat.shipped || 0)) +
+      '</div>';
+    var owned = ownedBlueprints().length;
+    html += '<div class="lg-sec">Blueprints (' + owned + '/' + BLUEPRINTS.length + ')</div>';
+    BLUEPRINTS.forEach(function (bp) { var has = window.Progress && Progress.unlocked(GAME, bp.id); html += '<div class="lg-bp' + (has ? '' : ' locked') + '"><span class="bp-n">' + (has ? '📜 ' + bp.name : '🔒 ???') + '</span><span class="bp-d">' + (has ? bp.desc : 'Find in a Legendary crate') + '</span></div>'; });
+    var got = 0; ACHIEVEMENTS.forEach(function (a) { if (achOwned(a.id)) got++; });
+    html += '<div class="lg-sec">Achievements (' + got + '/' + ACHIEVEMENTS.length + ')</div><div class="lg-achgrid">';
+    ACHIEVEMENTS.forEach(function (a) { var has = achOwned(a.id); html += '<div class="lg-ach' + (has ? '' : ' locked') + '">' + (has ? '🏆' : '🔒') + '<span>' + (has ? a.name : '???') + '</span></div>'; });
+    html += '</div>';
     tree.innerHTML = html;
     pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
@@ -1237,31 +1252,42 @@
     popWorld(pw.x, pw.y + 5, pw.z, label, { color: '#bfe9ff', size: 15, life: 0.9 });
     shakeFX(3.5, 0.22); sfx('merge', tier); haptic(14);
   }
+  // achievements live in PERMANENT (meta) storage so they survive prestige wipes
+  var ACHIEVEMENTS = [
+    { id: 'hut', name: 'First Fishing Hut' }, { id: 'market', name: 'Market Opened' },
+    { id: 'factory', name: 'Industrialist' }, { id: 'dock', name: 'Cargo Dock' }, { id: '1k', name: '£1,000 Banked' },
+    { id: 'lm100k', name: '£100k Earned' }, { id: 'lm1m', name: 'Millionaire Baron' }, { id: 'lm10m', name: '£10M Empire' },
+    { id: 'p3', name: 'Three Harbours' }, { id: 'p5', name: 'Master of Five Seas' },
+    { id: 'r1', name: 'First Trade Route' }, { id: 'nl3', name: 'Network Insured' }, { id: 'nl5', name: 'Network Lv 5' },
+    { id: 's1', name: 'First Storm Survived' }, { id: 's10', name: 'Storm-Hardened' },
+    { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' }
+  ];
+  function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
+  function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
+  function achUnlock(id) { if (!window.Retention) return false; var a = Retention.get(GAME, 'ach', {}); if (a[id]) return false; a[id] = 1; Retention.set(GAME, 'ach', a); return true; }
+  function popAch(txt, gold) { var pw = portWorld(); popWorld(pw.x, pw.y + (gold ? 11 : 9), pw.z, (gold ? '🏆 ' : '') + txt, { color: gold ? '#ffe08a' : '#ffd24a', size: gold ? 18 : 19, life: gold ? 2.0 : 1.6 }); burstWorld(pw.x, pw.y, pw.z, { count: gold ? 30 : 26, colors: gold ? ['#ffe08a', '#fff3c4', '#9ef0b0'] : ['#ffd24a', '#fff3c4'], speed: 195, life: 1.05 }); sfx(gold ? 'win' : 'score'); if (gold) haptic(20); }
   function checkMilestones() {
-    if (!SIM.raw()) return; var r = SIM.raw(); r._ms = r._ms || {};
-    function once(key, txt) { if (!r._ms[key]) { r._ms[key] = 1; var pw = portWorld(); popWorld(pw.x, pw.y + 9, pw.z, txt, { color: '#ffd24a', size: 19, life: 1.6 }); burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#ffd24a', '#fff3c4'], speed: 190, life: 1.0 }); sfx('score'); } }
+    if (!SIM.raw()) return;
     var c = SIM.state().counts || {};
-    if (c.fishing_hut) once('hut', 'First Fishing Hut!');
-    if (c.market) once('market', 'Market opened!');
-    if (c.factory) once('factory', 'Goods Factory — industry!');
-    if (c.dock) once('dock', 'Cargo Dock built!');
-    if (SIM.raw().money >= 1000) once('1k', '£1,000 banked!');
+    if (c.fishing_hut && achUnlock('hut')) popAch('First Fishing Hut!');
+    if (c.market && achUnlock('market')) popAch('Market opened!');
+    if (c.factory && achUnlock('factory')) popAch('Goods Factory — industry!');
+    if (c.dock && achUnlock('dock')) popAch('Cargo Dock built!');
+    if (SIM.raw().money >= 1000 && achUnlock('1k')) popAch('£1,000 banked!');
   }
   // empire-scale achievements — checked every HUD tick (conditions change outside building)
   function checkAchievements(s) {
-    if (!SIM.raw() || !s) return; var r = SIM.raw(); r._ms = r._ms || {};
-    function ach(key, txt) { if (!r._ms[key]) { r._ms[key] = 1; var pw = portWorld(); popWorld(pw.x, pw.y + 11, pw.z, '🏆 ' + txt, { color: '#ffe08a', size: 18, life: 2.0 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#9ef0b0'], speed: 200, life: 1.1 }); sfx('win'); haptic(20); } }
+    if (!SIM.raw() || !s) return;
+    function ach(key) { if (achUnlock(key)) popAch(achName(key), true); }
     var np = (s.ports || []).length, nl = s.network ? s.network.level : 1, st = s.stats ? s.stats.storms : 0, lm = s.lifetimeMoney || 0;
-    if (lm >= 100000) ach('lm100k', '£100k earned');
-    if (lm >= 1000000) ach('lm1m', 'Millionaire port baron');
-    if (lm >= 10000000) ach('lm10m', '£10M trade empire');
-    if (np >= 3) ach('p3', 'Three harbours founded');
-    if (np >= 5) ach('p5', 'Master of all five seas');
-    if (s.network && s.network.routes.length >= 1) ach('r1', 'First trade route');
-    if (nl >= 3) ach('nl3', 'Network insured (Lv 3)');
-    if (nl >= 5) ach('nl5', 'Trade network Lv 5');
-    if (st >= 1) ach('s1', 'Weathered your first storm');
-    if (st >= 10) ach('s10', 'Storm-hardened (10 survived)');
+    var pc = chartersCount();
+    if (lm >= 100000) ach('lm100k'); if (lm >= 1000000) ach('lm1m'); if (lm >= 10000000) ach('lm10m');
+    if (np >= 3) ach('p3'); if (np >= 5) ach('p5');
+    if (s.network && s.network.routes.length >= 1) ach('r1');
+    if (nl >= 3) ach('nl3'); if (nl >= 5) ach('nl5');
+    if (st >= 1) ach('s1'); if (st >= 10) ach('s10');
+    if (pc >= 1) ach('pr1'); if (pc >= 10) ach('pr10');
+    if (ownedBlueprints().length >= BLUEPRINTS.length) ach('bpall');
   }
   function doAdvance() {
     if (!SIM.canAdvance() || cine) return;
