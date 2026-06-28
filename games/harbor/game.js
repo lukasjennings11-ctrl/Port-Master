@@ -1337,7 +1337,8 @@
       if (/[?&]still\b/.test(q)) paused = true;
     } catch (e) {}
     updateFoundUI();
-    setTimeout(showStreak, 1400);                                    // once-per-day login streak + today's tide
+    var welcomed = showWelcome();                                    // first-ever load: premise card
+    if (!welcomed) setTimeout(showStreak, 1400);                     // else once-per-day login streak + today's tide
     if (offGain > 0 && offSec > 60) setTimeout(function () { showOffline(offGain, offSec); }, 900);
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
@@ -1351,6 +1352,20 @@
     wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); });
     sfx('score');
     ov.querySelector('.om-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('merge', 4); var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe27a', '#ffd24a'], speed: 200, life: 1.1 }); setTimeout(function () { ov.remove(); }, 300); });
+  }
+
+  // first-ever-load welcome: the premise in one card, so a cold newcomer knows what to do
+  function showWelcome() {
+    if (!window.Retention || Retention.get(GAME, 'seen', false)) return false;
+    Retention.set(GAME, 'seen', true);
+    var ov = document.createElement('div'); ov.id = 'welcomemodal';
+    ov.innerHTML = '<div class="wm-card"><div class="wm-logo">HARBOR</div>' +
+      '<div class="wm-body">Found a harbour on the glowing coast, then grow a humble fishing village into a global trade empire.</div>' +
+      '<div class="wm-feat">⚓ Build &amp; upgrade · 🚢 trade between islands · 🌊 weather storms · ✦ prestige to grow <i>forever</i></div>' +
+      '<button class="wm-btn">Begin ⚓</button></div>';
+    wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); }); sfx('score');
+    ov.querySelector('.wm-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('tap'); if (window.Juice) Juice.Audio.unlock(); showHint('Tap the glowing harbour, then “Found village”'); setTimeout(function () { ov.remove(); }, 320); });
+    return true;
   }
 
   window.__harbor = {
