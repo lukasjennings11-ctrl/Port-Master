@@ -247,6 +247,17 @@ html, body {
 #cratemodal .cm-sub { font-family: 'Fredoka', sans-serif; font-size: 12px; color: var(--muted); margin-top: 2px; }
 #cratemodal .cm-btn { margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 12px; font-family: 'Lilita', cursive; font-weight: 400; font-size: 16px; color: #20140a; background: var(--brass); cursor: pointer; }
 
+/* first-run welcome */
+#welcomemodal { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center; background: rgba(4,10,16,0); transition: background .35s ease; }
+#welcomemodal.show { background: rgba(4,12,20,.78); }
+#welcomemodal .wm-card { width: min(320px,86%); text-align: center; transform: scale(.8) translateY(10px); opacity: 0; transition: transform .45s cubic-bezier(.2,1.4,.4,1), opacity .35s ease; background: linear-gradient(180deg, #143246, #0c1d2a); border: 2px solid var(--teal); border-radius: 20px; padding: 26px 22px; box-shadow: 0 20px 70px rgba(0,0,0,.6); }
+#welcomemodal.show .wm-card { transform: scale(1) translateY(0); opacity: 1; }
+#welcomemodal .wm-logo { font-family: 'Lilita', cursive; font-weight: 400; font-size: 38px; letter-spacing: .06em; color: var(--brass); text-shadow: 0 2px 0 rgba(0,0,0,.3); }
+#welcomemodal .wm-body { font-family: 'Fredoka', sans-serif; font-size: 13.5px; line-height: 1.5; color: var(--text); margin: 10px 0; }
+#welcomemodal .wm-feat { font-family: 'Fredoka', sans-serif; font-size: 11px; line-height: 1.7; color: var(--muted); margin-bottom: 18px; }
+#welcomemodal .wm-feat i { color: var(--teal); font-style: normal; font-weight: 700; }
+#welcomemodal .wm-btn { width: 100%; padding: 13px; border: 0; border-radius: 13px; font-family: 'Lilita', cursive; font-weight: 400; font-size: 18px; letter-spacing: .02em; color: #20140a; background: linear-gradient(180deg, #ffd98a, var(--brass)); cursor: pointer; box-shadow: 0 6px 22px rgba(242,179,94,.35); }
+
 /* manage panel (compact bottom sheet) */
 #managepanel {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(52px + env(safe-area-inset-bottom));
