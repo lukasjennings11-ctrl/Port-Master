@@ -8,6 +8,12 @@
   <meta property="og:title" content="PortMaster" />
   <meta property="og:description" content="From fishing village to global port empire." />
   <title>PortMaster — port simulator</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PortMaster" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -28,12 +34,21 @@
   <script src="../../shared/portal.js?v=1"></script>
   <script src="../../shared/progression.js?v=1"></script>
   <script src="../../shared/stage.js?v=1"></script>
-  <script src="gl.js?v=35"></script>
-  <script src="gltf.js?v=35"></script>
-  <script src="biomes.js?v=35"></script>
-  <script src="assets.js?v=35"></script>
-  <script src="models.js?v=35"></script>
-  <script src="sim.js?v=35"></script>
-  <script src="game.js?v=35"></script>
+  <script src="gl.js?v=36"></script>
+  <script src="gltf.js?v=36"></script>
+  <script src="biomes.js?v=36"></script>
+  <script src="assets.js?v=36"></script>
+  <script src="models.js?v=36"></script>
+  <script src="sim.js?v=36"></script>
+  <script src="game.js?v=36"></script>
+  <script>
+    // Register the PortMaster service worker so the game installs as a
+    // standalone app and runs fully offline once cached.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function () {});
+      });
+    }
+  </script>
 </body>
 </html>

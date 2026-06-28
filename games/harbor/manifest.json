@@ -1,0 +1,20 @@
+{
+  "name": "PortMaster",
+  "short_name": "PortMaster",
+  "description": "Found a harbour and grow a humble fishing village into a global trade empire. A living cartoon port builder — build, trade, weather storms and prestige forever. Free, no install, works offline.",
+  "start_url": ".",
+  "scope": ".",
+  "id": "/games/harbor/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07141c",
+  "theme_color": "#0c1c26",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "screenshots": [
+    { "src": "screenshot.png", "sizes": "414x820", "type": "image/png", "form_factor": "narrow", "label": "Grow your port empire" }
+  ]
+}
