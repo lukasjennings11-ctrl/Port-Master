@@ -946,7 +946,7 @@
   }
   function ensureEventModal() {
     if (eventModal) return;
-    eventModal = document.createElement('div'); eventModal.id = 'eventmodal';
+    eventModal = document.createElement('div'); eventModal.id = 'eventmodal'; eventModal.className = 'evm';
     eventModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ev-ic">⚓</div><div class="ev-name" id="ev-name"></div><div class="ev-desc" id="ev-desc"></div><div class="ev-btns" id="ev-btns"></div></div>';
     wrap.appendChild(eventModal);
   }
@@ -1032,6 +1032,84 @@
     sfx('win'); haptic(26); confettiBurst();
     if (rel) announceRelic(rel);
     renderExp(); updateHUD();
+  }
+
+  // ---- the Rival: Baron Krall (Phase 7d) — recurring antagonist with taunts + head-to-head races ----
+  var RIVAL_NAME = 'Baron Krall';
+  var RIVAL_TAUNTS = [
+    'You call that a harbour? Let me show you how a real magnate trades.',
+    'Beginner’s luck. I’ll bury you in cargo.',
+    'Still here? Persistent little barnacle. Try THIS.',
+    'You’re becoming a nuisance. Let’s settle this on the water.',
+    'Impossible… how are you keeping pace with me?!'
+  ];
+  var RIVAL_LOSE = ['“Pathetic. The sea favours the bold — and that’s me.”', '“Was that your best? My grandmother ships faster.”', '“Run home, harbourmaster.”'];
+  var RIVAL_WIN = ['“You… beat me? Bah! A fluke!”', '“Impossible! I’ll have my revenge, PortMaster.”', '“Enjoy your trophy. It won’t happen again.”'];
+  var rivalModal = null, rivalPending = false, raceBanner = null;
+  function rivalGet() { var d = { stage: 0, wins: 0, losses: 0, race: null }; return (window.Retention && Retention.get(GAME, 'rival', d)) || d; }
+  function rivalSet(r) { if (window.Retention) Retention.set(GAME, 'rival', r); }
+  function rivalThreshold(stage) { return 2 + stage * 2; }                       // era at which the next challenge appears
+  function raceCounter(kind) { var s = SIM.state(); return kind === 'ship' ? ((s.stats && s.stats.shipped) || 0) : (s.lifetimeMoney || 0); }
+  function rivalTarget(kind, era, stage) {
+    if (kind === 'ship') return Math.round(40 * (1 + era * 0.7) * (1 + stage * 0.4));
+    return Math.round(Math.max(800, (SIM.state().lifetimeMoney || 0) * 0.03 + 500 * Math.pow(1.8, era)) * (1 + stage * 0.25));
+  }
+  function ensureRivalModal() {
+    if (rivalModal) return;
+    rivalModal = document.createElement('div'); rivalModal.id = 'rivalmodal'; rivalModal.className = 'evm';
+    rivalModal.innerHTML = '<div class="ev-card rival"><div class="ev-ic">🎩</div><div class="ev-name" id="rv-name"></div><div class="ev-desc" id="rv-desc"></div><div class="ev-btns" id="rv-btns"></div></div>';
+    wrap.appendChild(rivalModal);
+  }
+  function rvButtons(list) { var bw = rivalModal.querySelector('#rv-btns'); bw.innerHTML = ''; list.forEach(function (b) { var el = document.createElement('button'); el.className = 'ev-btn' + (b.cls ? ' ' + b.cls : ''); el.textContent = b.t; el.addEventListener('click', b.fn); bw.appendChild(el); }); }
+  function showRivalChallenge() {
+    var r = rivalGet(), s = SIM.state(), kind = (r.stage % 2 === 0) ? 'earn' : 'ship', target = rivalTarget(kind, s.era, r.stage);
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = RIVAL_NAME;
+    var goal = kind === 'ship' ? ('ship ' + fmt(target) + ' cargo') : ('earn £' + fmt(target));
+    rivalModal.querySelector('#rv-desc').textContent = '“' + RIVAL_TAUNTS[Math.min(r.stage, RIVAL_TAUNTS.length - 1)] + '” — Race him: ' + goal + ' within 3 minutes.';
+    rvButtons([
+      { t: 'Back down', fn: function () { declineRival(); rivalModal.classList.remove('show'); } },
+      { t: 'Accept ⚔', cls: 'primary', fn: function () { startRace(kind, target, 180); rivalModal.classList.remove('show'); } }
+    ]);
+    rivalModal.classList.add('show'); sfx('score'); haptic(14);
+  }
+  function startRace(kind, target, secs) { var r = rivalGet(); r.race = { kind: kind, target: target, base: raceCounter(kind), endsAt: Date.now() + secs * 1000 }; rivalPending = false; rivalSet(r); showHint('🏁 Race on! Beat ' + RIVAL_NAME + '!'); updateHUD(); }
+  function declineRival() { var r = rivalGet(); r.losses = (r.losses || 0) + 1; r.stage = (r.stage || 0) + 1; rivalPending = false; rivalSet(r); showHint(RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)]); }
+  function resolveRace(win) {
+    var r = rivalGet(); r.race = null; r.stage = (r.stage || 0) + 1;
+    if (win) {
+      r.wins = (r.wins || 0) + 1; rivalSet(r);
+      var prize = Math.round(Math.max(1000, (SIM.state().lifetimeMoney || 0) * 0.03));
+      if (SIM.raw()) { SIM.raw().money += prize; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + prize; }
+      var rel = grantRandomRelic(); showRivalResult(true, prize, rel);
+    } else { r.losses = (r.losses || 0) + 1; rivalSet(r); showRivalResult(false, 0, null); }
+    updateHUD();
+  }
+  function showRivalResult(win, prize, rel) {
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = win ? (RIVAL_NAME + ' — defeated!') : (RIVAL_NAME + ' wins this round');
+    rivalModal.querySelector('#rv-desc').textContent = win ? ((RIVAL_WIN[Math.floor(Math.random() * RIVAL_WIN.length)]) + ' You won £' + fmt(prize) + (rel ? ' and a relic — ' + rel.name + '!' : '!')) : RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)];
+    rvButtons([{ t: win ? 'Victory! 🏆' : 'Hmph.', cls: 'primary', fn: function () { rivalModal.classList.remove('show'); } }]);
+    rivalModal.classList.add('show');
+    if (win) { sfx('win'); haptic([10, 40, 20, 40]); confettiBurst(); if (rel && rel.completed) announceRelic(rel); } else { sfx('lose'); haptic(20); }
+  }
+  function maybeTriggerRival(s) {
+    if (rivalPending) return; var r = rivalGet();
+    if (r.race) return;
+    if (eventModal && eventModal.classList.contains('show')) return;             // don't collide with an event modal
+    if (s.era >= rivalThreshold(r.stage || 0)) { rivalPending = true; showRivalChallenge(); }
+  }
+  function updateRaceBanner() {
+    if (!raceBanner) return; var r = rivalGet();
+    if (r.race) {
+      var prog = raceCounter(r.race.kind) - r.race.base, rem = Math.ceil((r.race.endsAt - Date.now()) / 1000);
+      if (prog >= r.race.target) { resolveRace(true); return; }
+      if (rem <= 0) { resolveRace(false); return; }
+      var label = r.race.kind === 'ship' ? (fmt(Math.max(0, Math.floor(prog))) + '/' + fmt(r.race.target) + ' cargo') : ('£' + fmt(Math.max(0, Math.floor(prog))) + ' / £' + fmt(r.race.target));
+      raceBanner.querySelector('.rb-txt').textContent = '🏁 vs ' + RIVAL_NAME + ': ' + label;
+      raceBanner.querySelector('.rb-cd').textContent = rem + 's';
+      raceBanner.classList.add('show');
+    } else raceBanner.classList.remove('show');
   }
 
   // ---- Legacy / Prestige: meta progression persisted across runs (via Retention, survives a wipe) ----
@@ -1373,6 +1451,10 @@
     goalBanner.innerHTML = '<span class="gb-tick">◎</span><span class="gb-text"></span><span class="gb-rew"></span>';
     wrap.appendChild(goalBanner);
 
+    raceBanner = document.createElement('div'); raceBanner.id = 'racebar';
+    raceBanner.innerHTML = '<span class="rb-txt"></span><span class="rb-cd"></span>';
+    wrap.appendChild(raceBanner);
+
     managePanel = document.createElement('div'); managePanel.id = 'managepanel';
     wrap.appendChild(managePanel);
 
@@ -1384,7 +1466,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v42';
+  var BUILD_TAG = 'v43';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1456,7 +1538,7 @@
     var on = simReady();
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
-    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } return; }
+    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
     if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
@@ -1482,6 +1564,8 @@
     checkGoals(s);
     handleHazard(s);
     handleEvent(s);
+    updateRaceBanner();
+    maybeTriggerRival(s);
     checkAchievements(s);
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
@@ -1742,7 +1826,10 @@
     collectVoyage: function (seq) { return collectVoyageUI(seq); },
     openExp: function () { if (!expOpen) toggleExp(); },
     relics: function () { return { count: relicCount(), total: totalRelics(), owned: ownedRelics(), meta: SIM.meta() }; },
-    grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; }
+    grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; },
+    rival: function () { return rivalGet(); },
+    triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
+    raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; }
   };
 
   if (canvas && canvas.getContext) boot();
