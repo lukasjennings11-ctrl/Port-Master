@@ -1417,16 +1417,51 @@
   }
   function showStreak() {                                             // once-per-day login reward
     if (!window.Retention) return;
-    var last = Retention.get(GAME, 'lastDay', null), today = Retention.todayStr();
-    var st = Retention.touchStreak(GAME);
-    if (last !== today && st > 0) {
-      var reward = Math.max(1, Math.min(10, st));
-      setLegacyBal(legacyBal() + reward);
-      showHint('Day ' + st + ' streak! +' + reward + '✦ Legacy · Today: ' + todayTide().name);
-      setTimeout(function () { var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#9ef0b0', '#ffe08a', '#d9b8ff'], speed: 200, life: 1.1 }); sfx('score'); }, 400);
-    } else if (last === today) {
-      showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
-    }
+    var today = Retention.todayStr();
+    var st = Retention.touchStreak(GAME);                              // advance / read the login streak
+    if (Retention.get(GAME, 'fortuneDay', null) !== today && st > 0) showFortune(st);   // claim-gated daily draw
+    else showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
+  }
+
+  // ---- Daily Fortune (Phase 8a): a free once-per-day draw, escalating with the login streak.
+  // Ethical: free, generous, claim-gated (not lost if you don't open it), feeds the whole economy. ----
+  var fortuneModal = null;
+  function ensureFortuneModal() {
+    if (fortuneModal) return;
+    fortuneModal = document.createElement('div'); fortuneModal.id = 'fortunemodal'; fortuneModal.className = 'evm';
+    fortuneModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ft-ic">🧭</div><div class="ev-name" id="ft-name"></div><div class="ev-desc" id="ft-desc"></div><div class="ev-btns" id="ft-btns"></div></div>';
+    wrap.appendChild(fortuneModal);
+  }
+  function rollFortune(streak) {
+    var s = SIM.state(), r = Math.random(), sb = 1 + Math.min(streak, 14) * 0.15;
+    if (r < 0.45) { var cash = Math.round(Math.max(200, (s.lifetimeMoney || 0) * 0.02) * sb); if (SIM.raw()) { SIM.raw().money += cash; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + cash; } return { icon: '💰', title: '+£' + fmt(cash), sub: 'Treasury windfall' }; }
+    if (r < 0.72) { var lg = Math.max(2, Math.round(streak * 0.7)); setLegacyBal(legacyBal() + lg); computeMeta(); return { icon: '✦', title: '+' + lg + ' Legacy', sub: 'Fortune favours you' }; }
+    if (r < 0.90) { var n = streak >= 7 ? 2 : 1; grantCrate(n); return { icon: '🎁', title: n + ' crate' + (n > 1 ? 's' : ''), sub: 'Salvage delivered' }; }
+    if (r < 0.97) { seasonAdd(60); return { icon: '🎟️', title: '+60 season points', sub: 'Harbour Pass progress' }; }
+    var rel = grantRandomRelic(); if (rel) return { icon: '🏺', title: rel.name, sub: rel.set + (rel.completed ? ' — set complete!' : ''), rel: rel }; var lg2 = 12; setLegacyBal(legacyBal() + lg2); computeMeta(); return { icon: '✦', title: '+' + lg2 + ' Legacy', sub: 'Rare fortune' };
+  }
+  function showFortune(streak) {
+    ensureFortuneModal();
+    fortuneModal.querySelector('#ft-ic').textContent = '🧭';
+    fortuneModal.querySelector('#ft-name').textContent = 'Daily Fortune';
+    fortuneModal.querySelector('#ft-desc').textContent = '🔥 Day ' + streak + ' streak — draw your daily reward!';
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var draw = document.createElement('button'); draw.className = 'ev-btn primary'; draw.textContent = 'Draw 🎰';
+    draw.addEventListener('click', function () { drawFortune(streak); });
+    bw.appendChild(draw);
+    fortuneModal.classList.add('show'); sfx('score'); haptic(12);
+  }
+  function drawFortune(streak) {
+    if (window.Retention) Retention.set(GAME, 'fortuneDay', Retention.todayStr());
+    var rew = rollFortune(streak);
+    fortuneModal.querySelector('#ft-ic').textContent = rew.icon;
+    fortuneModal.querySelector('#ft-name').textContent = rew.title;
+    fortuneModal.querySelector('#ft-desc').textContent = rew.sub;
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var ok = document.createElement('button'); ok.className = 'ev-btn primary'; ok.textContent = 'Collect';
+    ok.addEventListener('click', function () { fortuneModal.classList.remove('show'); }); bw.appendChild(ok);
+    sfx('win'); haptic(24); confettiBurst(); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#9ef0b0', '#d9b8ff'], speed: 210, life: 1.1, size: 5 });
+    updateHUD();
   }
 
   // ---- Automation (idle comfort, unlocked via the Legacy tree) ----
@@ -1938,7 +1973,8 @@
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
-    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); }
+    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
+    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); }
   };
 
   if (canvas && canvas.getContext) boot();
