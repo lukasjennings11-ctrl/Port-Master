@@ -924,6 +924,70 @@
     }
   }
 
+  // ---- dynamic events (Phase 7a): ambient surprises via the hint toast, choices via a modal ----
+  var eventModal = null, shownEvtSeq = 0;
+  function evIcon(id) { return ({ goldrush: '💰', festival: '🎆', castaway: '🛟', raid: '🏴‍☠️', gamble: '🎲', commission: '👑' })[id] || '⚓'; }
+  function evDesc(ev) {
+    var d = ev.data || {};
+    if (ev.id === 'castaway') return 'A castaway raft drifts toward your harbour — haul it in for salvage?';
+    if (ev.id === 'raid') return 'Pirates threaten the port! Pay them off, or fight them off and risk damage for loot.';
+    if (ev.id === 'gamble') return 'A merchant offers a risky venture: wager £' + fmt(d.wager) + ' for a ' + Math.round(d.odds * 100) + '% shot to double it.';
+    if (ev.id === 'commission') return 'The Crown will pay £' + fmt(d.reward) + ' for ' + fmt(d.amt) + ' ' + d.res + ' delivered right now.';
+    return '';
+  }
+  function evButtons(ev) {
+    var d = ev.data || {};
+    if (ev.id === 'castaway') return [{ t: 'Haul it in 🛟', i: 0, cls: 'primary' }];
+    if (ev.id === 'raid') return [{ t: 'Pay £' + fmt(d.tribute), i: 0 }, { t: 'Fight! ⚔ ' + Math.round(d.winOdds * 100) + '%', i: 1, cls: 'primary' }];
+    if (ev.id === 'gamble') return [{ t: 'Decline', i: 1 }, { t: 'Gamble £' + fmt(d.wager), i: 0, cls: 'primary' }];
+    if (ev.id === 'commission') { var s = SIM.state(); var can = ((s.res && s.res[d.res]) || 0) >= d.amt; return [{ t: 'Decline', i: 1 }, { t: 'Fulfil · ' + fmt(d.amt) + ' ' + d.res, i: 0, cls: 'primary', dis: !can }]; }
+    return [{ t: 'OK', i: 1 }];
+  }
+  function ensureEventModal() {
+    if (eventModal) return;
+    eventModal = document.createElement('div'); eventModal.id = 'eventmodal';
+    eventModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ev-ic">⚓</div><div class="ev-name" id="ev-name"></div><div class="ev-desc" id="ev-desc"></div><div class="ev-btns" id="ev-btns"></div></div>';
+    wrap.appendChild(eventModal);
+  }
+  function showEventModal(ev) {
+    ensureEventModal();
+    eventModal.querySelector('#ev-ic').textContent = evIcon(ev.id);
+    eventModal.querySelector('#ev-name').textContent = ev.name;
+    eventModal.querySelector('#ev-desc').textContent = evDesc(ev);
+    var bw = eventModal.querySelector('#ev-btns'); bw.innerHTML = '';
+    evButtons(ev).forEach(function (b) {
+      var el = document.createElement('button'); el.className = 'ev-btn' + (b.cls ? ' ' + b.cls : ''); el.textContent = b.t; if (b.dis) el.disabled = true;
+      el.addEventListener('click', function () { onEventChoice(b.i); });
+      bw.appendChild(el);
+    });
+    eventModal.classList.add('show'); sfx('score'); haptic(12);
+  }
+  function onEventChoice(i) {
+    var out = SIM.resolveEvent(i); if (eventModal) eventModal.classList.remove('show');
+    if (!out) return;
+    if (!out.ok) { showHint(out.text || 'Cannot do that yet.'); sfx('lose'); return; }
+    if (out.crate) grantCrate(out.crate);
+    var pw = portWorld();
+    if (out.cash > 0) {
+      if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(out.cash), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: out.win ? 36 : 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 210, life: 1.1, size: 5 }); }
+      sfx('win'); haptic(24); if (out.win) confettiBurst();
+    } else if (out.cash < 0) { sfx('lose'); haptic(16); }
+    else sfx('tap');
+    if (out.text) showHint(out.text);
+    updateHUD();
+  }
+  function handleEvent(s) {
+    var ev = s.event;
+    if (!ev) { if (eventModal) eventModal.classList.remove('show'); return; }
+    if (ev.seq === shownEvtSeq) return;                                // already surfaced this one
+    shownEvtSeq = ev.seq;
+    if (ev.kind === 'ambient') {                                       // gold rush / festival — a felt boost, toast + sparkle
+      showHint(evIcon(ev.id) + ' ' + ev.name + '! +' + Math.round((ev.data.mult - 1) * 100) + '% output');
+      var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.1, size: 5 });
+      sfx('win'); haptic(18);
+    } else showEventModal(ev);                                         // choice / collect — a decision modal
+  }
+
   // ---- Legacy / Prestige: meta progression persisted across runs (via Retention, survives a wipe) ----
   var LEGACY_TREE = [
     { id: 'prod', name: 'Master Shipwrights', desc: '+25% global production / lvl', base: 3, mul: 1.6, per: 0.25, max: 30, meta: 'prodMul' },
@@ -1225,7 +1289,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v39';
+  var BUILD_TAG = 'v40';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen && manageOpen) { manageOpen = false; managePanel.classList.remove('show'); }
@@ -1322,6 +1386,7 @@
     if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
     checkGoals(s);
     handleHazard(s);
+    handleEvent(s);
     checkAchievements(s);
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
@@ -1571,7 +1636,10 @@
     grantCrate: function (n) { grantCrate(n || 1); return crateCount(); }, crates: function () { return crateCount(); }, openCrate: function () { openCrate(); },
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); },
-    startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; }
+    startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; },
+    fireEvent: function (id) { var ev = SIM.fireEvent(id); if (ev) { updateHUD(); } return ev; },
+    chooseEvent: function (i) { return onEventChoice(i); },
+    event: function () { return SIM.event(); }
   };
 
   if (canvas && canvas.getContext) boot();

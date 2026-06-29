@@ -255,6 +255,20 @@ html, body {
 #cratemodal .cm-sub { font-family: 'Fredoka', sans-serif; font-size: 12px; color: var(--muted); margin-top: 2px; }
 #cratemodal .cm-btn { margin-top: 16px; width: 100%; padding: 12px; border: 0; border-radius: 12px; font-family: 'Lilita', cursive; font-weight: 400; font-size: 16px; color: #20140a; background: var(--brass); cursor: pointer; }
 
+/* dynamic event choice modal (Phase 7a) */
+#eventmodal { position: absolute; inset: 0; z-index: 14; display: none; align-items: center; justify-content: center; background: rgba(4,8,16,.72); }
+#eventmodal.show { display: flex; }
+#eventmodal .ev-card { width: min(300px,86%); text-align: center; background: linear-gradient(180deg, #1a2740, #0e1726); border: 2px solid rgba(124,240,208,.5); border-radius: 20px; padding: 22px 20px; box-shadow: 0 18px 60px rgba(0,0,0,.6); animation: evPop .4s cubic-bezier(.2,1.4,.4,1); }
+@keyframes evPop { from { transform: scale(.82) translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+#eventmodal .ev-ic { font-size: 50px; line-height: 1.1; }
+#eventmodal .ev-name { font-family: 'Lilita', cursive; font-weight: 400; font-size: 21px; color: var(--text); margin-top: 4px; }
+#eventmodal .ev-desc { font-family: 'Fredoka', sans-serif; font-size: 13px; line-height: 1.5; color: var(--muted); margin: 8px 0 4px; }
+#eventmodal .ev-btns { display: flex; gap: 8px; margin-top: 14px; }
+#eventmodal .ev-btn { flex: 1; padding: 12px 8px; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; font-family: 'Lilita', cursive; font-weight: 400; font-size: 14px; color: var(--text); background: rgba(255,255,255,.08); cursor: pointer; transition: transform .08s; }
+#eventmodal .ev-btn.primary { color: #20140a; background: var(--brass); border-color: transparent; }
+#eventmodal .ev-btn:not(:disabled):active { transform: scale(.95); }
+#eventmodal .ev-btn:disabled { opacity: .4; cursor: default; }
+
 /* first-run welcome */
 #welcomemodal { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center; background: rgba(4,10,16,0); transition: background .35s ease; }
 #welcomemodal.show { background: rgba(4,12,20,.78); }
