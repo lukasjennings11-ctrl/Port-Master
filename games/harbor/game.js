@@ -946,7 +946,7 @@
   }
   function ensureEventModal() {
     if (eventModal) return;
-    eventModal = document.createElement('div'); eventModal.id = 'eventmodal';
+    eventModal = document.createElement('div'); eventModal.id = 'eventmodal'; eventModal.className = 'evm';
     eventModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ev-ic">⚓</div><div class="ev-name" id="ev-name"></div><div class="ev-desc" id="ev-desc"></div><div class="ev-btns" id="ev-btns"></div></div>';
     wrap.appendChild(eventModal);
   }
@@ -974,6 +974,7 @@
       sfx('win'); haptic(24); if (out.win) confettiBurst();
     } else if (out.cash < 0) { sfx('lose'); haptic(16); }
     else sfx('tap');
+    if (out.cash > 0) seasonAdd(12);
     if (out.text) showHint(out.text);
     updateHUD();
   }
@@ -986,6 +987,7 @@
       showHint(evIcon(ev.id) + ' ' + ev.name + '! +' + Math.round((ev.data.mult - 1) * 100) + '% output');
       var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.1, size: 5 });
       sfx('win'); haptic(18);
+      if (ev.id === 'festival') startFever();                          // Festival kicks off the active tap-frenzy
     } else showEventModal(ev);                                         // choice / collect — a decision modal
   }
 
@@ -1031,7 +1033,176 @@
     showHint('⛵ ' + out.name + ' returned! +£' + fmt(out.cash) + extra + (out.crate ? ' + a crate 🎁' : ''));
     sfx('win'); haptic(26); confettiBurst();
     if (rel) announceRelic(rel);
+    seasonAdd(8 * (out.tier || 1));
     renderExp(); updateHUD();
+  }
+
+  // ---- the Rival: Baron Krall (Phase 7d) — recurring antagonist with taunts + head-to-head races ----
+  var RIVAL_NAME = 'Baron Krall';
+  var RIVAL_TAUNTS = [
+    'You call that a harbour? Let me show you how a real magnate trades.',
+    'Beginner’s luck. I’ll bury you in cargo.',
+    'Still here? Persistent little barnacle. Try THIS.',
+    'You’re becoming a nuisance. Let’s settle this on the water.',
+    'Impossible… how are you keeping pace with me?!'
+  ];
+  var RIVAL_LOSE = ['“Pathetic. The sea favours the bold — and that’s me.”', '“Was that your best? My grandmother ships faster.”', '“Run home, harbourmaster.”'];
+  var RIVAL_WIN = ['“You… beat me? Bah! A fluke!”', '“Impossible! I’ll have my revenge, PortMaster.”', '“Enjoy your trophy. It won’t happen again.”'];
+  var rivalModal = null, rivalPending = false, raceBanner = null;
+  function rivalGet() { var d = { stage: 0, wins: 0, losses: 0, race: null }; return (window.Retention && Retention.get(GAME, 'rival', d)) || d; }
+  function rivalSet(r) { if (window.Retention) Retention.set(GAME, 'rival', r); }
+  function rivalThreshold(stage) { return 2 + stage * 2; }                       // era at which the next challenge appears
+  function raceCounter(kind) { var s = SIM.state(); return kind === 'ship' ? ((s.stats && s.stats.shipped) || 0) : (s.lifetimeMoney || 0); }
+  function rivalTarget(kind, era, stage) {
+    if (kind === 'ship') return Math.round(40 * (1 + era * 0.7) * (1 + stage * 0.4));
+    return Math.round(Math.max(800, (SIM.state().lifetimeMoney || 0) * 0.03 + 500 * Math.pow(1.8, era)) * (1 + stage * 0.25));
+  }
+  function ensureRivalModal() {
+    if (rivalModal) return;
+    rivalModal = document.createElement('div'); rivalModal.id = 'rivalmodal'; rivalModal.className = 'evm';
+    rivalModal.innerHTML = '<div class="ev-card rival"><div class="ev-ic">🎩</div><div class="ev-name" id="rv-name"></div><div class="ev-desc" id="rv-desc"></div><div class="ev-btns" id="rv-btns"></div></div>';
+    wrap.appendChild(rivalModal);
+  }
+  function rvButtons(list) { var bw = rivalModal.querySelector('#rv-btns'); bw.innerHTML = ''; list.forEach(function (b) { var el = document.createElement('button'); el.className = 'ev-btn' + (b.cls ? ' ' + b.cls : ''); el.textContent = b.t; el.addEventListener('click', b.fn); bw.appendChild(el); }); }
+  function showRivalChallenge() {
+    var r = rivalGet(), s = SIM.state(), kind = (r.stage % 2 === 0) ? 'earn' : 'ship', target = rivalTarget(kind, s.era, r.stage);
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = RIVAL_NAME;
+    var goal = kind === 'ship' ? ('ship ' + fmt(target) + ' cargo') : ('earn £' + fmt(target));
+    rivalModal.querySelector('#rv-desc').textContent = '“' + RIVAL_TAUNTS[Math.min(r.stage, RIVAL_TAUNTS.length - 1)] + '” — Race him: ' + goal + ' within 3 minutes.';
+    rvButtons([
+      { t: 'Back down', fn: function () { declineRival(); rivalModal.classList.remove('show'); } },
+      { t: 'Accept ⚔', cls: 'primary', fn: function () { startRace(kind, target, 180); rivalModal.classList.remove('show'); } }
+    ]);
+    rivalModal.classList.add('show'); sfx('score'); haptic(14);
+  }
+  function startRace(kind, target, secs) { var r = rivalGet(); r.race = { kind: kind, target: target, base: raceCounter(kind), endsAt: Date.now() + secs * 1000 }; rivalPending = false; rivalSet(r); showHint('🏁 Race on! Beat ' + RIVAL_NAME + '!'); updateHUD(); }
+  function declineRival() { var r = rivalGet(); r.losses = (r.losses || 0) + 1; r.stage = (r.stage || 0) + 1; rivalPending = false; rivalSet(r); showHint(RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)]); }
+  function resolveRace(win) {
+    var r = rivalGet(); r.race = null; r.stage = (r.stage || 0) + 1;
+    if (win) {
+      r.wins = (r.wins || 0) + 1; rivalSet(r);
+      var prize = Math.round(Math.max(1000, (SIM.state().lifetimeMoney || 0) * 0.03));
+      if (SIM.raw()) { SIM.raw().money += prize; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + prize; }
+      var rel = grantRandomRelic(); seasonAdd(40); showRivalResult(true, prize, rel);
+    } else { r.losses = (r.losses || 0) + 1; rivalSet(r); showRivalResult(false, 0, null); }
+    updateHUD();
+  }
+  function showRivalResult(win, prize, rel) {
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = win ? (RIVAL_NAME + ' — defeated!') : (RIVAL_NAME + ' wins this round');
+    rivalModal.querySelector('#rv-desc').textContent = win ? ((RIVAL_WIN[Math.floor(Math.random() * RIVAL_WIN.length)]) + ' You won £' + fmt(prize) + (rel ? ' and a relic — ' + rel.name + '!' : '!')) : RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)];
+    rvButtons([{ t: win ? 'Victory! 🏆' : 'Hmph.', cls: 'primary', fn: function () { rivalModal.classList.remove('show'); } }]);
+    rivalModal.classList.add('show');
+    if (win) { sfx('win'); haptic([10, 40, 20, 40]); confettiBurst(); if (rel && rel.completed) announceRelic(rel); } else { sfx('lose'); haptic(20); }
+  }
+  function maybeTriggerRival(s) {
+    if (rivalPending) return; var r = rivalGet();
+    if (r.race) return;
+    if (eventModal && eventModal.classList.contains('show')) return;             // don't collide with an event modal
+    if (s.era >= rivalThreshold(r.stage || 0)) { rivalPending = true; showRivalChallenge(); }
+  }
+  function updateRaceBanner() {
+    if (!raceBanner) return; var r = rivalGet();
+    if (r.race) {
+      var prog = raceCounter(r.race.kind) - r.race.base, rem = Math.ceil((r.race.endsAt - Date.now()) / 1000);
+      if (prog >= r.race.target) { resolveRace(true); return; }
+      if (rem <= 0) { resolveRace(false); return; }
+      var label = r.race.kind === 'ship' ? (fmt(Math.max(0, Math.floor(prog))) + '/' + fmt(r.race.target) + ' cargo') : ('£' + fmt(Math.max(0, Math.floor(prog))) + ' / £' + fmt(r.race.target));
+      raceBanner.querySelector('.rb-txt').textContent = '🏁 vs ' + RIVAL_NAME + ': ' + label;
+      raceBanner.querySelector('.rb-cd').textContent = rem + 's';
+      raceBanner.classList.add('show');
+    } else raceBanner.classList.remove('show');
+  }
+
+  // ---- active Fever (Phase 7e): a Festival opens a tap-frenzy — coins rain over the harbour, a
+  // combo meter rewards rapid taps. Pure upside; ignoring it just means normal idle play. ----
+  var feverEnd = 0, feverSpawnT = null, feverLoopT = null, combo = 0, comboT = 0, feverLayer = null, comboEl = null;
+  function ensureFeverUI() {
+    if (feverLayer) return;
+    feverLayer = document.createElement('div'); feverLayer.id = 'fever'; wrap.appendChild(feverLayer);
+    comboEl = document.createElement('div'); comboEl.id = 'combo'; comboEl.innerHTML = '<span class="cb-x"></span><div class="cb-bar"><i></i></div>'; wrap.appendChild(comboEl);
+  }
+  function feverActive() { return Date.now() < feverEnd; }
+  function comboMult() { return 1 + Math.min(combo * 0.12, 4); }
+  function startFever(secs) {
+    ensureFeverUI(); secs = secs || 14; feverEnd = Date.now() + secs * 1000; combo = 0; comboT = 0;
+    showHint('🎆 FEVER! Tap the coins!'); sfx('win'); haptic(20);
+    spawnLoop(); clearTimeout(feverLoopT); feverTick();
+  }
+  function spawnLoop() {
+    clearTimeout(feverSpawnT); if (!feverActive()) return;
+    spawnCoin(); feverSpawnT = setTimeout(spawnLoop, 380 + Math.random() * 340);
+  }
+  function spawnCoin() {
+    ensureFeverUI();
+    var gem = Math.random() < 0.25;
+    var c = document.createElement('button'); c.className = 'coin'; c.textContent = gem ? '💎' : '🪙'; c.dataset.gem = gem ? '1' : '';
+    var x = 28 + Math.random() * (Math.max(120, CW) - 56), y = (CH || 700) * 0.34 + Math.random() * ((CH || 700) * 0.4);
+    c.style.left = x + 'px'; c.style.top = y + 'px';
+    c.addEventListener('click', function (e) { e.stopPropagation(); collectCoin(c); });
+    feverLayer.appendChild(c);
+    setTimeout(function () { if (c.parentNode) c.parentNode.removeChild(c); }, 2600);
+  }
+  function collectCoin(c) {
+    if (!feverActive()) { if (c.parentNode) c.parentNode.removeChild(c); return; }
+    combo++; comboT = 1.6;
+    var era = SIM.state().era || 0, mult = comboMult() * (c.dataset.gem ? 3 : 1);
+    var base = Math.max(20, Math.round((SIM.state().lifetimeMoney || 0) * 0.0008) + 28 * Math.pow(1.6, era));
+    var gain = Math.round(base * mult);
+    if (SIM.raw()) { SIM.raw().money += gain; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + gain; }
+    var r = c.getBoundingClientRect();
+    if (FX) { FX.pop.add(r.left + r.width / 2, r.top, '+£' + fmt(gain), { color: c.dataset.gem ? '#bfe9ff' : '#ffe08a', size: 16, life: 1.0, vy: -50 }); FX.p.burst(r.left + r.width / 2, r.top + r.height / 2, { count: 8, colors: ['#ffe08a', '#fff3c4'], speed: 140, life: 0.7, size: 4 }); }
+    sfx('score'); haptic(7); seasonAdd(1);
+    if (c.parentNode) c.parentNode.removeChild(c);
+    updateComboUI();
+  }
+  function updateComboUI() {
+    if (!comboEl) return;
+    if (combo > 1 && feverActive()) { comboEl.classList.add('show'); comboEl.querySelector('.cb-x').textContent = '×' + comboMult().toFixed(1) + ' COMBO'; comboEl.querySelector('.cb-bar i').style.width = Math.min(100, comboT / 1.6 * 100) + '%'; }
+    else comboEl.classList.remove('show');
+  }
+  function feverTick() {
+    if (!feverActive()) { combo = 0; if (comboEl) comboEl.classList.remove('show'); if (feverLayer) feverLayer.innerHTML = ''; updateHUD(); return; }
+    comboT -= 0.1; if (comboT <= 0) combo = 0;
+    updateComboUI();
+    feverLoopT = setTimeout(feverTick, 100);
+  }
+
+  // ---- seasons & the free Harbour Pass (Phase 7f): a rotating themed season; earn season points
+  // from everything you do and claim a free milestone reward track. Ethical: no paid tier, no
+  // punishing expiry — rewards are applied the moment you claim them and are yours forever. ----
+  var SEASON_EPOCH = Date.UTC(2026, 0, 1), SEASON_LEN = 14 * 24 * 3600 * 1000;
+  var SEASON_THEMES = ['Tides of Fortune', 'Monsoon Trade Winds', 'The Gold Run', 'Harvest of the Sea', 'Lanterns & Lighthouses', 'Stormwatch Season', 'The Great Regatta', 'Frostwater Passage'];
+  var PASS_TIERS = [
+    { at: 60, reward: { crate: 1 }, label: 'Salvage crate' },
+    { at: 150, reward: { legacy: 3 }, label: '+3 ✦ Legacy' },
+    { at: 320, reward: { crate: 2 }, label: '2 crates' },
+    { at: 560, reward: { relic: 1 }, label: 'A relic' },
+    { at: 880, reward: { legacy: 8 }, label: '+8 ✦ Legacy' },
+    { at: 1300, reward: { crate: 3 }, label: '3 crates' },
+    { at: 1850, reward: { relic: 1 }, label: 'A relic' },
+    { at: 2600, reward: { legacy: 20 }, label: '+20 ✦ Legacy' },
+    { at: 3600, reward: { crate: 5 }, label: '5 crates' },
+    { at: 5000, reward: { relic: 1, legacy: 30 }, label: 'Relic + 30 ✦ Legacy' }
+  ];
+  function seasonId() { return Math.floor((Date.now() - SEASON_EPOCH) / SEASON_LEN); }
+  function seasonTheme() { var i = seasonId() % SEASON_THEMES.length; return SEASON_THEMES[(i + SEASON_THEMES.length) % SEASON_THEMES.length]; }
+  function seasonGet() { var s = window.Retention && Retention.get(GAME, 'season', null), id = seasonId(); if (!s || s.id !== id) { s = { id: id, points: 0, claimed: [] }; if (window.Retention) Retention.set(GAME, 'season', s); } return s; }
+  function seasonSet(s) { if (window.Retention) Retention.set(GAME, 'season', s); }
+  function seasonAdd(n) { if (!n) return; var s = seasonGet(); s.points = (s.points || 0) + n; seasonSet(s); }
+  function seasonDaysLeft() { return Math.max(1, Math.ceil((SEASON_EPOCH + (seasonId() + 1) * SEASON_LEN - Date.now()) / (24 * 3600 * 1000))); }
+  function passClaimable(i) { var s = seasonGet(); return (s.points || 0) >= PASS_TIERS[i].at && s.claimed.indexOf(i) < 0; }
+  function claimPass(i) {
+    if (!passClaimable(i)) return false;
+    var rw = PASS_TIERS[i].reward, s = seasonGet(); s.claimed.push(i); seasonSet(s);
+    if (rw.crate) grantCrate(rw.crate);
+    if (rw.legacy) setLegacyBal(legacyBal() + rw.legacy);
+    if (rw.relic) { var rel = grantRandomRelic(); if (rel) announceRelic(rel); }
+    sfx('win'); haptic(26); confettiBurst();
+    showHint('🎟️ Harbour Pass: ' + PASS_TIERS[i].label + ' claimed!');
+    computeMeta(); updateHUD();
+    return true;
   }
 
   // ---- Legacy / Prestige: meta progression persisted across runs (via Retention, survives a wipe) ----
@@ -1160,7 +1331,19 @@
     pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
       '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £' + fmt(p.threshold || 250000) + ' lifetime to prestige') + '</button>' +
       '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
-    var tree = legacyPanel.querySelector('#lg-tree'), html = '<div class="lg-sec">Permanent upgrades</div>';
+    var tree = legacyPanel.querySelector('#lg-tree'), html = '';
+    // Harbour Pass — the free seasonal reward track
+    var ss = seasonGet(), maxAt = PASS_TIERS[PASS_TIERS.length - 1].at;
+    html += '<div class="lg-sec">🎟️ Harbour Pass · ' + seasonTheme() + ' · ' + seasonDaysLeft() + 'd left</div>';
+    html += '<div class="lg-passbar"><i style="width:' + Math.min(100, Math.round((ss.points / maxAt) * 100)) + '%"></i></div>';
+    html += '<div class="lg-passpts">' + fmt(ss.points) + ' season points</div>';
+    html += '<div class="lg-pass">';
+    PASS_TIERS.forEach(function (t, ti) {
+      var claimed = ss.claimed.indexOf(ti) >= 0, can = passClaimable(ti);
+      html += '<div class="pass-tier' + (claimed ? ' done' : '') + (can ? ' can' : '') + '"' + (can ? ' data-pass="' + ti + '"' : '') + '><span class="pt-at">' + fmt(t.at) + '</span><span class="pt-l">' + t.label + '</span><span class="pt-s">' + (claimed ? '✓' : can ? 'CLAIM' : '') + '</span></div>';
+    });
+    html += '</div>';
+    html += '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {
       var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
       html += '<button class="lg-node" data-leg="' + nd.id + '"' + ((can && !maxed) ? '' : ' disabled') + '>' +
@@ -1191,6 +1374,7 @@
     tree.innerHTML = html;
     pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-pass]').forEach(function (el) { el.addEventListener('click', function () { if (claimPass(+el.getAttribute('data-pass'))) renderLegacy(); }); });
   }
 
   // ---- Daily cadence: rotating market tide, daily missions, login streak (reuses Progress/Retention) ----
@@ -1373,6 +1557,10 @@
     goalBanner.innerHTML = '<span class="gb-tick">◎</span><span class="gb-text"></span><span class="gb-rew"></span>';
     wrap.appendChild(goalBanner);
 
+    raceBanner = document.createElement('div'); raceBanner.id = 'racebar';
+    raceBanner.innerHTML = '<span class="rb-txt"></span><span class="rb-cd"></span>';
+    wrap.appendChild(raceBanner);
+
     managePanel = document.createElement('div'); managePanel.id = 'managepanel';
     wrap.appendChild(managePanel);
 
@@ -1384,7 +1572,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v42';
+  var BUILD_TAG = 'v45';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1456,7 +1644,7 @@
     var on = simReady();
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
-    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } return; }
+    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
     if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
@@ -1482,6 +1670,8 @@
     checkGoals(s);
     handleHazard(s);
     handleEvent(s);
+    updateRaceBanner();
+    maybeTriggerRival(s);
     checkAchievements(s);
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
@@ -1581,7 +1771,7 @@
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
-    managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); seasonAdd(15); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
   function plopFeedback(tier, label) {
@@ -1636,6 +1826,7 @@
     for (var bk in SIM.BT) if (SIM.BT[bk].era === toEra) newBuilds.push(SIM.BT[bk].name);
     var unlockTxt = newBuilds.concat(newWorlds).slice(0, 4).join(' · ');
     grantCrate(1);                                                  // every era-up drops a salvage crate
+    seasonAdd(30);                                                  // era-ups award season points
     if (window.Juice) Juice.Audio.unlock();
     startAscension(toEra, name, unlockTxt, bonus);                  // cinematic does buildBiome + bonus at the bloom
   }
@@ -1742,7 +1933,12 @@
     collectVoyage: function (seq) { return collectVoyageUI(seq); },
     openExp: function () { if (!expOpen) toggleExp(); },
     relics: function () { return { count: relicCount(), total: totalRelics(), owned: ownedRelics(), meta: SIM.meta() }; },
-    grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; }
+    grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; },
+    rival: function () { return rivalGet(); },
+    triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
+    raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
+    startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
+    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); }
   };
 
   if (canvas && canvas.getContext) boot();
