@@ -323,7 +323,8 @@
     { id: 'castaway', kind: 'collect', name: 'Castaway Raft', minEra: 0, w: 2 },
     { id: 'raid', kind: 'choice', name: 'Pirate Raid', minEra: 2, w: 2 },
     { id: 'gamble', kind: 'choice', name: "Merchant's Gamble", minEra: 1, w: 2 },
-    { id: 'commission', kind: 'choice', name: 'Royal Commission', minEra: 1, w: 2 }
+    { id: 'commission', kind: 'choice', name: 'Royal Commission', minEra: 1, w: 2 },
+    { id: 'smuggler', kind: 'choice', name: 'Smuggler’s Offer', minEra: 1, w: 2 }
   ];
   function evRand(a, b) { return a + Math.random() * (b - a); }
   function evDef(id) { for (var i = 0; i < EV_DEFS.length; i++) if (EV_DEFS[i].id === id) return EV_DEFS[i]; return null; }
@@ -344,6 +345,7 @@
     if (def.id === 'raid') return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(0.45 + 0.12 * d.wall + 0.06 * d.light, 0.45, 0.92) };
     if (def.id === 'gamble') return { wager: Math.round(Math.max(40, Math.min(money * 0.15, 90 * Math.pow(2, era)))), odds: 0.6 };
     if (def.id === 'commission') { var res = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)] : 'fish'; var amt = Math.round(40 * (1 + era * 0.6)); return { res: res, amt: amt, reward: Math.round(amt * basePrice(res) * 2.4) }; }
+    if (def.id === 'smuggler') { var sr = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)] : 'fish'; var sa = Math.round(60 * (1 + era * 0.7)); return { res: sr, amt: sa, cost: Math.round(sa * basePrice(sr) * 0.55) }; }
     return {};
   }
   function applyAmbient(ev) { if (ev.id === 'goldrush' || ev.id === 'festival') setBoost(ev.data.mult, ev.data.secs); }
@@ -388,6 +390,10 @@
     else if (ev.id === 'commission') {
       if (choice === 0) { var p = CUR; if (p && (p.res[ev.data.res] || 0) >= ev.data.amt) { p.res[ev.data.res] -= ev.data.amt; out.cash = ev.data.reward; S.money += out.cash; out.text = 'Commission fulfilled!'; } else { out.ok = false; out.text = 'Not enough ' + ev.data.res + '.'; return out; } }
       else out.text = 'Declined the commission.';
+    }
+    else if (ev.id === 'smuggler') {
+      if (choice === 0) { if (S.money >= ev.data.cost) { S.money -= ev.data.cost; var sp = CUR; if (sp) sp.res[ev.data.res] = (sp.res[ev.data.res] || 0) + ev.data.amt; out.cash = -ev.data.cost; out.text = 'Contraband stowed below decks.'; } else { out.ok = false; out.text = 'Not enough cash.'; return out; } }
+      else out.text = 'Waved the smuggler off.';
     }
     if (out.cash > 0) S.lifetimeMoney = (S.lifetimeMoney || 0) + out.cash;
     S.evt.lastId = ev.id; S.evt.active = null; S.evt.t = 0; S.evt.next = evRand(95, 200);
