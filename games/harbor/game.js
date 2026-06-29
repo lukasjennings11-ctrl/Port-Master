@@ -927,13 +927,14 @@
 
   // ---- dynamic events (Phase 7a): ambient surprises via the hint toast, choices via a modal ----
   var eventModal = null, shownEvtSeq = 0;
-  function evIcon(id) { return ({ goldrush: '💰', festival: '🎆', castaway: '🛟', raid: '🏴‍☠️', gamble: '🎲', commission: '👑' })[id] || '⚓'; }
+  function evIcon(id) { return ({ goldrush: '💰', festival: '🎆', castaway: '🛟', raid: '🏴‍☠️', gamble: '🎲', commission: '👑', smuggler: '🦜' })[id] || '⚓'; }
   function evDesc(ev) {
     var d = ev.data || {};
     if (ev.id === 'castaway') return 'A castaway raft drifts toward your harbour — haul it in for salvage?';
     if (ev.id === 'raid') return 'Pirates threaten the port! Pay them off, or fight them off and risk damage for loot.';
     if (ev.id === 'gamble') return 'A merchant offers a risky venture: wager £' + fmt(d.wager) + ' for a ' + Math.round(d.odds * 100) + '% shot to double it.';
     if (ev.id === 'commission') return 'The Crown will pay £' + fmt(d.reward) + ' for ' + fmt(d.amt) + ' ' + d.res + ' delivered right now.';
+    if (ev.id === 'smuggler') return 'A smuggler offers ' + fmt(d.amt) + ' ' + d.res + ' for £' + fmt(d.cost) + ' — well below market. No questions asked.';
     return '';
   }
   function evButtons(ev) {
@@ -942,6 +943,7 @@
     if (ev.id === 'raid') return [{ t: 'Pay £' + fmt(d.tribute), i: 0 }, { t: 'Fight! ⚔ ' + Math.round(d.winOdds * 100) + '%', i: 1, cls: 'primary' }];
     if (ev.id === 'gamble') return [{ t: 'Decline', i: 1 }, { t: 'Gamble £' + fmt(d.wager), i: 0, cls: 'primary' }];
     if (ev.id === 'commission') { var s = SIM.state(); var can = ((s.res && s.res[d.res]) || 0) >= d.amt; return [{ t: 'Decline', i: 1 }, { t: 'Fulfil · ' + fmt(d.amt) + ' ' + d.res, i: 0, cls: 'primary', dis: !can }]; }
+    if (ev.id === 'smuggler') { var afford = (SIM.state().money || 0) >= d.cost; return [{ t: 'Decline', i: 1 }, { t: 'Buy £' + fmt(d.cost), i: 0, cls: 'primary', dis: !afford }]; }
     return [{ t: 'OK', i: 1 }];
   }
   function ensureEventModal() {
@@ -1034,6 +1036,7 @@
     sfx('win'); haptic(26); confettiBurst();
     if (rel) announceRelic(rel);
     seasonAdd(8 * (out.tier || 1));
+    if (achUnlock('voy1')) popAch('First Expedition!', true);
     renderExp(); updateHUD();
   }
 
@@ -1084,7 +1087,7 @@
       r.wins = (r.wins || 0) + 1; rivalSet(r);
       var prize = Math.round(Math.max(1000, (SIM.state().lifetimeMoney || 0) * 0.03));
       if (SIM.raw()) { SIM.raw().money += prize; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + prize; }
-      var rel = grantRandomRelic(); seasonAdd(40); showRivalResult(true, prize, rel);
+      var rel = grantRandomRelic(); seasonAdd(40); if (achUnlock('rival1')) popAch('Bested Baron Krall!', true); showRivalResult(true, prize, rel);
     } else { r.losses = (r.losses || 0) + 1; rivalSet(r); showRivalResult(false, 0, null); }
     updateHUD();
   }
@@ -1154,6 +1157,7 @@
     var r = c.getBoundingClientRect();
     if (FX) { FX.pop.add(r.left + r.width / 2, r.top, '+£' + fmt(gain), { color: c.dataset.gem ? '#bfe9ff' : '#ffe08a', size: 16, life: 1.0, vy: -50 }); FX.p.burst(r.left + r.width / 2, r.top + r.height / 2, { count: 8, colors: ['#ffe08a', '#fff3c4'], speed: 140, life: 0.7, size: 4 }); }
     sfx('score'); haptic(7); seasonAdd(1);
+    if (combo >= 10 && achUnlock('combo')) popAch('Fever Pitch — 10 combo!', true);
     if (c.parentNode) c.parentNode.removeChild(c);
     updateComboUI();
   }
@@ -1200,6 +1204,7 @@
     if (rw.legacy) setLegacyBal(legacyBal() + rw.legacy);
     if (rw.relic) { var rel = grantRandomRelic(); if (rel) announceRelic(rel); }
     sfx('win'); haptic(26); confettiBurst();
+    if (achUnlock('pass1')) popAch('Season Sailor!', true);
     showHint('🎟️ Harbour Pass: ' + PASS_TIERS[i].label + ' claimed!');
     computeMeta(); updateHUD();
     return true;
@@ -1257,7 +1262,7 @@
   function grantRandomRelic() { var pool = unownedRelicIds(); if (!pool.length) return null; return grantRelicById(pool[Math.floor(Math.random() * pool.length)]); }
   function announceRelic(rel) {
     if (!rel) return;
-    if (rel.completed) { showHint('🏺 ' + rel.name + ' — ' + rel.set + ' COMPLETE! ' + rel.bonus); confettiBurst(); sfx('win'); haptic([10, 40, 20, 40]); }
+    if (rel.completed) { showHint('🏺 ' + rel.name + ' — ' + rel.set + ' COMPLETE! ' + rel.bonus); confettiBurst(); sfx('win'); haptic([10, 40, 20, 40]); if (achUnlock('relset')) popAch('Relic Set Complete!', true); }
     else { showHint('🏺 Relic found: ' + rel.name + ' · ' + rel.set); sfx('score'); haptic(20); }
   }
 
@@ -1417,16 +1422,51 @@
   }
   function showStreak() {                                             // once-per-day login reward
     if (!window.Retention) return;
-    var last = Retention.get(GAME, 'lastDay', null), today = Retention.todayStr();
-    var st = Retention.touchStreak(GAME);
-    if (last !== today && st > 0) {
-      var reward = Math.max(1, Math.min(10, st));
-      setLegacyBal(legacyBal() + reward);
-      showHint('Day ' + st + ' streak! +' + reward + '✦ Legacy · Today: ' + todayTide().name);
-      setTimeout(function () { var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#9ef0b0', '#ffe08a', '#d9b8ff'], speed: 200, life: 1.1 }); sfx('score'); }, 400);
-    } else if (last === today) {
-      showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
-    }
+    var today = Retention.todayStr();
+    var st = Retention.touchStreak(GAME);                              // advance / read the login streak
+    if (Retention.get(GAME, 'fortuneDay', null) !== today && st > 0) showFortune(st);   // claim-gated daily draw
+    else showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
+  }
+
+  // ---- Daily Fortune (Phase 8a): a free once-per-day draw, escalating with the login streak.
+  // Ethical: free, generous, claim-gated (not lost if you don't open it), feeds the whole economy. ----
+  var fortuneModal = null;
+  function ensureFortuneModal() {
+    if (fortuneModal) return;
+    fortuneModal = document.createElement('div'); fortuneModal.id = 'fortunemodal'; fortuneModal.className = 'evm';
+    fortuneModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ft-ic">🧭</div><div class="ev-name" id="ft-name"></div><div class="ev-desc" id="ft-desc"></div><div class="ev-btns" id="ft-btns"></div></div>';
+    wrap.appendChild(fortuneModal);
+  }
+  function rollFortune(streak) {
+    var s = SIM.state(), r = Math.random(), sb = 1 + Math.min(streak, 14) * 0.15;
+    if (r < 0.45) { var cash = Math.round(Math.max(200, (s.lifetimeMoney || 0) * 0.02) * sb); if (SIM.raw()) { SIM.raw().money += cash; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + cash; } return { icon: '💰', title: '+£' + fmt(cash), sub: 'Treasury windfall' }; }
+    if (r < 0.72) { var lg = Math.max(2, Math.round(streak * 0.7)); setLegacyBal(legacyBal() + lg); computeMeta(); return { icon: '✦', title: '+' + lg + ' Legacy', sub: 'Fortune favours you' }; }
+    if (r < 0.90) { var n = streak >= 7 ? 2 : 1; grantCrate(n); return { icon: '🎁', title: n + ' crate' + (n > 1 ? 's' : ''), sub: 'Salvage delivered' }; }
+    if (r < 0.97) { seasonAdd(60); return { icon: '🎟️', title: '+60 season points', sub: 'Harbour Pass progress' }; }
+    var rel = grantRandomRelic(); if (rel) return { icon: '🏺', title: rel.name, sub: rel.set + (rel.completed ? ' — set complete!' : ''), rel: rel }; var lg2 = 12; setLegacyBal(legacyBal() + lg2); computeMeta(); return { icon: '✦', title: '+' + lg2 + ' Legacy', sub: 'Rare fortune' };
+  }
+  function showFortune(streak) {
+    ensureFortuneModal();
+    fortuneModal.querySelector('#ft-ic').textContent = '🧭';
+    fortuneModal.querySelector('#ft-name').textContent = 'Daily Fortune';
+    fortuneModal.querySelector('#ft-desc').textContent = '🔥 Day ' + streak + ' streak — draw your daily reward!';
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var draw = document.createElement('button'); draw.className = 'ev-btn primary'; draw.textContent = 'Draw 🎰';
+    draw.addEventListener('click', function () { drawFortune(streak); });
+    bw.appendChild(draw);
+    fortuneModal.classList.add('show'); sfx('score'); haptic(12);
+  }
+  function drawFortune(streak) {
+    if (window.Retention) Retention.set(GAME, 'fortuneDay', Retention.todayStr());
+    var rew = rollFortune(streak);
+    fortuneModal.querySelector('#ft-ic').textContent = rew.icon;
+    fortuneModal.querySelector('#ft-name').textContent = rew.title;
+    fortuneModal.querySelector('#ft-desc').textContent = rew.sub;
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var ok = document.createElement('button'); ok.className = 'ev-btn primary'; ok.textContent = 'Collect';
+    ok.addEventListener('click', function () { fortuneModal.classList.remove('show'); }); bw.appendChild(ok);
+    sfx('win'); haptic(24); confettiBurst(); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#9ef0b0', '#d9b8ff'], speed: 210, life: 1.1, size: 5 });
+    updateHUD();
   }
 
   // ---- Automation (idle comfort, unlocked via the Legacy tree) ----
@@ -1572,7 +1612,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v45';
+  var BUILD_TAG = 'v46';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1788,7 +1828,9 @@
     { id: 'p3', name: 'Three Harbours' }, { id: 'p5', name: 'Master of Five Seas' },
     { id: 'r1', name: 'First Trade Route' }, { id: 'nl3', name: 'Network Insured' }, { id: 'nl5', name: 'Network Lv 5' },
     { id: 's1', name: 'First Storm Survived' }, { id: 's10', name: 'Storm-Hardened' },
-    { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' }
+    { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' },
+    { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
+    { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' }
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -1938,7 +1980,8 @@
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
-    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); }
+    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
+    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); }
   };
 
   if (canvas && canvas.getContext) boot();
