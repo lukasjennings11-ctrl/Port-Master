@@ -185,10 +185,19 @@
   var V_SKY = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.999,1.0); }`;
   var F_SKY = `#version 300 es
-  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol; uniform vec2 uSun; out vec4 frag;
+  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol; uniform vec2 uSun; uniform float uNight,uTime; out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
     float d=distance(vUv,uSun); c+=uSunCol*smoothstep(0.05,0.0,d)*1.5; c+=uSunCol*smoothstep(0.3,0.02,d)*0.16;
+    if(uNight>0.01){
+      vec2 grid=vec2(140.0,90.0); vec2 cell=floor(vUv*grid); float h=hash(cell);
+      vec2 f=fract(vUv*grid)-0.5+(vec2(hash(cell+1.7),hash(cell+4.2))-0.5)*0.6;
+      float pt=smoothstep(0.15,0.0,length(f));
+      float tw=0.55+0.45*sin(uTime*2.0+h*30.0);
+      float star=step(0.965,h)*pt*tw*smoothstep(0.20,0.62,vUv.y);
+      c+=vec3(0.92,0.95,1.0)*star*uNight*1.25;
+    }
     frag=vec4(aces(c*1.05),1.0); }`;
 
   var V_WATER = `#version 300 es

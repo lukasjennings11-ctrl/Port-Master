@@ -274,6 +274,7 @@
     var S = E.P_sky; gl.useProgram(S.p);
     gl.uniform3fv(S.u.uTop, en.top); gl.uniform3fv(S.u.uBot, en.bot); gl.uniform3fv(S.u.uSunCol, en.sun);
     gl.uniform2fv(S.u.uSun, [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5]);
+    gl.uniform1f(S.u.uNight, en.night); gl.uniform1f(S.u.uTime, clock);   // night starfield
     drawMesh(S, E.quad); gl.depthMask(true); gl.enable(gl.CULL_FACE);
 
     // scene meshes
@@ -1224,7 +1225,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v38';
+  var BUILD_TAG = 'v39';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen && manageOpen) { manageOpen = false; managePanel.classList.remove('show'); }
