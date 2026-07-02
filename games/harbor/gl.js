@@ -307,7 +307,7 @@
     T[1]=vec2( 0.318, 0.318); T[2]=vec2(-0.318, 0.318); T[3]=vec2(-0.318,-0.318); T[4]=vec2( 0.318,-0.318);
     T[5]=vec2( 1.000, 0.000); T[6]=vec2( 0.623, 0.782); T[7]=vec2(-0.223, 0.975); T[8]=vec2(-0.901, 0.434);
     T[9]=vec2(-0.901,-0.434); T[10]=vec2(-0.223,-0.975); T[11]=vec2( 0.623,-0.782);
-    vec2 rad = uTexel * (b * 9.0);                   // up to ~9px blur radius at full strength
+    vec2 rad = uTexel * (b * 11.0);                  // up to ~11px blur radius at full strength
     vec3 acc = vec3(0.0); float bloom = 0.0;
     for (int i = 0; i < 12; i++) {
       vec3 c = texture(uTex, vUv + T[i] * rad).rgb;
@@ -353,8 +353,38 @@
 
     var quad = mesh({ positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), indices: new Uint16Array([0, 1, 2, 0, 2, 3]) });
     var blobQuad = mesh(plane(2, 1)); // unit XZ plane (-1..1), uvs 0..1 — for ground shadow decals
-    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex,
-      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), quad: quad, blobQuad: blobQuad };
+    // offscreen render target for the Phase 10c post pass: RGBA8 colour + depth renderbuffer.
+    // Returns null on any failure so callers can fall back to direct-to-screen rendering.
+    function createRT(w, h) {
+      try {
+        var tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        var rb = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+        var fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+        var complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindRenderbuffer(gl.RENDERBUFFER, null); gl.bindTexture(gl.TEXTURE_2D, null);
+        if (!complete) { gl.deleteFramebuffer(fb); gl.deleteRenderbuffer(rb); gl.deleteTexture(tex); return null; }
+        var rt = { fb: fb, tex: tex, rb: rb, w: w, h: h };
+        rt.resize = function (nw, nh) {
+          if (nw === rt.w && nh === rt.h) return true;
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, nw, nh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, nw, nh); gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+            rt.w = nw; rt.h = nh; return true;
+          } catch (e) { return false; }
+        };
+        return rt;
+      } catch (e) { return null; }
+    }
+    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex, createRT: createRT,
+      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), P_post: prog(V_POST, F_POST), quad: quad, blobQuad: blobQuad };
   }
 
   global.HGL = { mat4: mat4, Builder: Builder, geom: { plane: plane }, createEngine: createEngine };
