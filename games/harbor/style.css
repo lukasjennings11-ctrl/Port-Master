@@ -236,6 +236,25 @@ html, body {
 #legacypanel .rs-dots { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
 #legacypanel .rs-dot { font-size: 10px; color: #5a6a72; }
 #legacypanel .rs-dot.on { color: #bdeee6; font-weight: 700; }
+/* Phase 9c: doctrine branch pick — two side-by-side path cards + capstone row */
+#legacypanel .lg-doct { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#legacypanel .lg-doc { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 9px 10px; border-radius: 11px; font-family: 'Fredoka', sans-serif; background: rgba(120,180,255,.07); border: 1px solid rgba(120,180,255,.22); }
+#legacypanel .lg-doc.on { background: rgba(255,210,74,.12); border-color: rgba(255,210,74,.55); }
+#legacypanel .lg-doc .ld-i { font-size: 17px; }
+#legacypanel .lg-doc .ld-n { font-size: 12px; font-weight: 700; color: #ece4fb; }
+#legacypanel .lg-doc.on .ld-n { color: var(--brass); }
+#legacypanel .lg-doc .ld-d { font-size: 10px; line-height: 1.35; color: #a596c4; }
+#legacypanel .lg-doc .ld-tag { font-size: 10px; font-weight: 800; letter-spacing: .05em; color: var(--brass); margin-top: 2px; }
+#legacypanel .lg-doc .ld-btn { margin-top: 3px; padding: 5px 10px; border: 0; border-radius: 8px; font-family: 'Fredoka', sans-serif; font-size: 10.5px; font-weight: 800; color: #1a0f2e; background: linear-gradient(180deg, #d9b8ff, #b884f0); cursor: pointer; }
+#legacypanel .lg-doc .ld-btn:disabled { opacity: .45; cursor: default; }
+#legacypanel .lg-doc .ld-btn:not(:disabled):active { transform: scale(.96); }
+#legacypanel .lg-cap { background: rgba(255,210,74,.09); border-color: rgba(255,210,74,.35); }
+/* Phase 9c: relic loadout — owned relics are tappable equip chips */
+#legacypanel .lg-lohint { font-family: 'Fredoka', sans-serif; font-size: 10px; color: #8c7bb0; margin: -2px 0 2px; }
+#legacypanel .rs-each { font-family: 'Fredoka', sans-serif; font-size: 9.5px; font-weight: 700; color: #8fb7c9; margin-top: 2px; }
+#legacypanel .rs-dot.chip { border: 1px solid rgba(124,224,214,.35); background: rgba(124,224,214,.10); border-radius: 999px; padding: 3px 9px; cursor: pointer; font-family: 'Fredoka', sans-serif; transition: background .12s, transform .08s; }
+#legacypanel .rs-dot.chip:active { transform: scale(.94); }
+#legacypanel .rs-dot.chip.eq { background: rgba(255,210,74,.18); border-color: rgba(255,210,74,.6); color: #ffe9a8; }
 #legacypanel .lg-passbar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; }
 #legacypanel .lg-passbar i { display: block; height: 100%; background: linear-gradient(90deg, #2f8f7e, #ffd24a); }
 #legacypanel .lg-passpts { font-family: 'Fredoka', sans-serif; font-size: 10px; font-weight: 700; color: var(--brass); margin: 2px 0; }

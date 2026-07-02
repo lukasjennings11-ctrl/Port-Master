@@ -1485,6 +1485,63 @@
     return info;
   }
   function grantRandomRelic() { var pool = unownedRelicIds(); if (!pool.length) return null; return grantRelicById(pool[Math.floor(Math.random() * pool.length)]); }
+
+  // ---- Phase 9c: Doctrines — a mutually-exclusive branch pick on top of the flat Legacy tree.
+  // Unlocks at ≥3 charters; pick costs ✦, respec swaps the branch for a higher ✦ fee (no refunds).
+  // Each branch has one capstone (max 1); a bought capstone stays owned but only counts while
+  // its branch is the active pick, so respecing back re-activates it. Survives prestige. ----
+  var DOCTRINE_UNLOCK = 3, DOCTRINE_PICK_COST = 25, DOCTRINE_RESPEC_COST = 50;
+  var DOCTRINES = [
+    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+35% sales · +10% route capacity',
+      cap: { name: 'Monopoly', desc: '+1 permanent contract slot', cost: 120 } },
+    { id: 'explorer', icon: '🧭', name: 'Explorer Doctrine', desc: '+35% voyage speed · +1 voyage slot',
+      cap: { name: 'Flagship', desc: '+40% voyage rewards', cost: 120 } }
+  ];
+  function doctrineDef(id) { for (var i = 0; i < DOCTRINES.length; i++) if (DOCTRINES[i].id === id) return DOCTRINES[i]; return null; }
+  function doctrineGet() { var d = (window.Retention && Retention.get(GAME, 'doctrine', null)) || {}; return { pick: d.pick || null, caps: d.caps || {} }; }
+  function doctrineSet(d) { if (window.Retention) Retention.set(GAME, 'doctrine', d); }
+  function doctrineUnlocked() { return chartersCount() >= DOCTRINE_UNLOCK; }
+  function doctrinePickCost() { return doctrineGet().pick ? DOCTRINE_RESPEC_COST : DOCTRINE_PICK_COST; }
+  function pickDoctrine(id) {
+    if (!doctrineUnlocked() || !doctrineDef(id)) return false;
+    var d = doctrineGet(); if (d.pick === id) return false;              // already on this path
+    var cost = doctrinePickCost(); if (legacyBal() < cost) return false;
+    setLegacyBal(legacyBal() - cost); d.pick = id; doctrineSet(d);
+    computeMeta(); return true;
+  }
+  function buyCapstone() {
+    var d = doctrineGet(), def = d.pick && doctrineDef(d.pick);
+    if (!def || d.caps[d.pick]) return false;                            // needs a pick; max 1 per branch
+    if (legacyBal() < def.cap.cost) return false;
+    setLegacyBal(legacyBal() - def.cap.cost); d.caps[d.pick] = true; doctrineSet(d);
+    computeMeta(); return true;
+  }
+
+  // ---- Phase 9c: Relic loadout — equip up to 3 owned relics (4th slot at ≥9 relics owned) for a
+  // small INDIVIDUAL bonus per relic by set family, on top of the set-completion passives. ----
+  var LOADOUT_BONUS = {
+    carto: { meta: 'voyageSpeed', amt: 0.06, label: '+6% voyage speed' },
+    smug: { meta: 'sellMul', amt: 0.04, label: '+4% sales' },
+    salt: { meta: 'hazardResist', amt: 0.05, label: '+5% storm resist' },
+    prince: { meta: 'prodMul', amt: 0.06, label: '+6% production' }
+  };
+  var LOADOUT_CAP = 0.25;                                                // each bonus type ≤ +25% from the loadout
+  function loadoutSlots() { return 3 + (relicCount() >= 9 ? 1 : 0); }
+  function loadoutGet() {                                                // sanitised: owned, unique, within slots
+    var raw = (window.Retention && Retention.get(GAME, 'loadout', [])) || [];
+    if (!Array.isArray(raw)) raw = [];
+    var seen = {}, out = [];
+    for (var i = 0; i < raw.length && out.length < loadoutSlots(); i++) { var id = raw[i]; if (typeof id === 'string' && hasRelic(id) && !seen[id]) { seen[id] = 1; out.push(id); } }
+    return out;
+  }
+  function loadoutSet(a) { if (window.Retention) Retention.set(GAME, 'loadout', a); }
+  function equipped(id) { return loadoutGet().indexOf(id) >= 0; }
+  function equipRelic(id) {                                              // tap-to-toggle; false when full/unowned
+    var lo = loadoutGet(), i = lo.indexOf(id);
+    if (i >= 0) lo.splice(i, 1);
+    else { if (!hasRelic(id) || lo.length >= loadoutSlots()) return false; lo.push(id); }
+    loadoutSet(lo); computeMeta(); return true;
+  }
   function announceRelic(rel) {
     if (!rel) return;
     if (rel.completed) { showHint('🏺 ' + rel.name + ' — ' + rel.set + ' COMPLETE! ' + rel.bonus); confettiBurst(); sfx('win'); haptic([10, 40, 20, 40]); if (achUnlock('relset')) popAch('Relic Set Complete!', true); }
@@ -1492,7 +1549,7 @@
   }
 
   function computeMeta() {
-    var tr = legacyTreeMap(), M = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0 };
+    var tr = legacyTreeMap(), M = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
     LEGACY_TREE.forEach(function (nd) {
       var amt = nd.per * (tr[nd.id] || 0);
       if (nd.meta === 'prodMul') M.prodMul = 1 + amt;
@@ -1518,6 +1575,22 @@
       else if (set.meta === 'voyageSpeed') M.voyageSpeed += set.amt;
       else if (set.meta === 'voyageSlots') M.voyageSlots += set.amt;
     });
+    // Phase 9c: active doctrine branch (+ its capstone, only while that branch is picked)
+    var doc = doctrineGet();
+    if (doc.pick === 'merchant') {
+      M.sellMul += 0.35; M.routeMul += 0.10;
+      if (doc.caps.merchant) M.contractSlots += 1;                       // Monopoly
+    } else if (doc.pick === 'explorer') {
+      M.voyageSpeed += 0.35; M.voyageSlots += 1;
+      if (doc.caps.explorer) M.voyageYield += 0.40;                      // Flagship
+    }
+    // Phase 9c: relic loadout — small per-relic bonuses, capped per bonus type
+    var loAcc = {};
+    loadoutGet().forEach(function (id) {
+      var fam = LOADOUT_BONUS[id.replace(/[0-9]+$/, '')]; if (!fam) return;
+      loAcc[fam.meta] = Math.min(LOADOUT_CAP, (loAcc[fam.meta] || 0) + fam.amt);
+    });
+    for (var lk in loAcc) M[lk] += loAcc[lk];
     if (SIM && SIM.applyMeta) SIM.applyMeta(M);
     return M;
   }
@@ -1573,6 +1646,25 @@
       html += '<div class="pass-tier' + (claimed ? ' done' : '') + (can ? ' can' : '') + '"' + (can ? ' data-pass="' + ti + '"' : '') + '><span class="pt-at">' + fmt(t.at) + '</span><span class="pt-l">' + t.label + '</span><span class="pt-s">' + (claimed ? '✓' : can ? 'CLAIM' : '') + '</span></div>';
     });
     html += '</div>';
+    // ---- Phase 9c: Doctrine — a choose-a-path branch (unlocks at ≥3 charters) ----
+    if (doctrineUnlocked()) {
+      var doc = doctrineGet(), pcost = doctrinePickCost();
+      html += '<div class="lg-sec">Doctrine — choose your path</div><div class="lg-doct">';
+      DOCTRINES.forEach(function (d) {
+        var on = doc.pick === d.id, canPick = !on && legacyBal() >= pcost;
+        html += '<div class="lg-doc' + (on ? ' on' : '') + '"><span class="ld-i">' + d.icon + '</span><span class="ld-n">' + d.name + '</span><span class="ld-d">' + d.desc + '</span>' +
+          (on ? '<span class="ld-tag">ACTIVE ✓</span>'
+              : '<button class="ld-btn" data-doct="' + d.id + '"' + (canPick ? '' : ' disabled') + '>' + (doc.pick ? 'Respec' : 'Pick') + ' · ✦ ' + pcost + '</button>') +
+          '</div>';
+      });
+      html += '</div>';
+      if (doc.pick) {                                                    // capstone row for the active branch
+        var dd = doctrineDef(doc.pick), owned9c = !!doc.caps[doc.pick], canCap = !owned9c && legacyBal() >= dd.cap.cost;
+        html += '<button class="lg-node lg-cap" data-cap="1"' + ((canCap) ? '' : ' disabled') + '>' +
+          '<span class="ln-n">👑 ' + dd.cap.name + (owned9c ? ' <i>OWNED</i>' : '') + '</span><span class="ln-d">' + dd.cap.desc + ' — ' + dd.name + ' capstone</span>' +
+          '<span class="ln-c">' + (owned9c ? '✓' : '✦ ' + dd.cap.cost) + '</span></button>';
+      }
+    }
     html += '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {
       var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
@@ -1590,11 +1682,18 @@
     var owned = ownedBlueprints().length;
     html += '<div class="lg-sec">Blueprints (' + owned + '/' + BLUEPRINTS.length + ')</div>';
     BLUEPRINTS.forEach(function (bp) { var has = window.Progress && Progress.unlocked(GAME, bp.id); html += '<div class="lg-bp' + (has ? '' : ' locked') + '"><span class="bp-n">' + (has ? '📜 ' + bp.name : '🔒 ???') + '</span><span class="bp-d">' + (has ? bp.desc : 'Find in a Legendary crate') + '</span></div>'; });
-    html += '<div class="lg-sec">Relics (' + relicCount() + '/' + totalRelics() + ')</div>';
+    var lo = loadoutGet(), loMax = loadoutSlots();
+    html += '<div class="lg-sec">Relics (' + relicCount() + '/' + totalRelics() + ') · Loadout ' + lo.length + '/' + loMax + '</div>';
+    if (relicCount() > 0) html += '<div class="lg-lohint">Tap an owned relic to equip it — each equipped relic adds its family bonus' + (relicCount() >= 9 ? '' : ' (own 9 relics for a 4th slot)') + '.</div>';
     RELIC_SETS.forEach(function (set) {
-      var done = setComplete(set);
-      html += '<div class="lg-relset' + (done ? ' done' : '') + '"><div class="rs-head"><span class="rs-n">' + set.name + '</span><span class="rs-b">' + set.bonus + (done ? ' ✓' : '') + '</span></div><div class="rs-dots">';
-      set.relics.forEach(function (rn, ri) { var has = hasRelic(set.id + ri); html += '<span class="rs-dot' + (has ? ' on' : '') + '">' + (has ? '◆ ' + rn : '◇ ???') + '</span>'; });
+      var done = setComplete(set), fam = LOADOUT_BONUS[set.id];
+      html += '<div class="lg-relset' + (done ? ' done' : '') + '"><div class="rs-head"><span class="rs-n">' + set.name + '</span><span class="rs-b">' + set.bonus + (done ? ' ✓' : '') + '</span></div>' +
+        (fam ? '<div class="rs-each">Equip: ' + fam.label + ' each</div>' : '') + '<div class="rs-dots">';
+      set.relics.forEach(function (rn, ri) {
+        var id = set.id + ri, has = hasRelic(id), eq = has && lo.indexOf(id) >= 0;
+        if (has) html += '<button class="rs-dot on chip' + (eq ? ' eq' : '') + '" data-relic="' + id + '">' + (eq ? '◈ ' : '◆ ') + rn + (eq ? ' ✓' : '') + '</button>';
+        else html += '<span class="rs-dot">◇ ???</span>';
+      });
       html += '</div></div>';
     });
     var got = 0; ACHIEVEMENTS.forEach(function (a) { if (achOwned(a.id)) got++; });
@@ -1605,6 +1704,9 @@
     pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
     tree.querySelectorAll('[data-pass]').forEach(function (el) { el.addEventListener('click', function () { if (claimPass(+el.getAttribute('data-pass'))) renderLegacy(); }); });
+    tree.querySelectorAll('[data-doct]').forEach(function (el) { el.addEventListener('click', function () { if (pickDoctrine(el.getAttribute('data-doct'))) { sfx('win'); haptic(22); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-cap]').forEach(function (el) { el.addEventListener('click', function () { if (buyCapstone()) { sfx('win'); haptic([10, 30, 20]); confettiBurst(); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-relic]').forEach(function (el) { el.addEventListener('click', function () { if (equipRelic(el.getAttribute('data-relic'))) { sfx('tap'); haptic(12); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
   }
 
   // ---- Daily cadence: rotating market tide, daily missions, login streak (reuses Progress/Retention) ----
@@ -1837,7 +1939,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v52';
+  var BUILD_TAG = 'v53';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -2225,6 +2327,11 @@
     collectVoyage: function (seq) { return collectVoyageUI(seq); },
     openExp: function () { if (!expOpen) toggleExp(); },
     relics: function () { return { count: relicCount(), total: totalRelics(), owned: ownedRelics(), meta: SIM.meta() }; },
+    doctrine: function () { var d = doctrineGet(); return { pick: d.pick, caps: d.caps, unlocked: doctrineUnlocked(), pickCost: doctrinePickCost(), meta: SIM.meta() }; },
+    pickDoctrine: function (id) { var r = pickDoctrine(id); if (r && legacyOpen) renderLegacy(); return r; },
+    buyCapstone: function () { var r = buyCapstone(); if (r && legacyOpen) renderLegacy(); return r; },
+    loadout: function () { return { equipped: loadoutGet(), slots: loadoutSlots(), meta: SIM.meta() }; },
+    equipRelic: function (id) { var r = equipRelic(id); if (r && legacyOpen) renderLegacy(); return r; },
     grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; },
     rival: function () { return rivalGet(); },
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },

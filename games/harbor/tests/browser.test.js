@@ -62,6 +62,54 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   await page.evaluate(() => ['carto0', 'carto1', 'carto2'].forEach(id => window.__harbor.grantRelic(id)));
   ok('relics: cartographer set → +1 voyage slot in META', await page.evaluate(() => window.HARBOR_SIM.meta().voyageSlots >= 1));
 
+  // Phase 9c: doctrine branch (choose-a-path) — unlock gate, pick cost, respec, capstone
+  const d9 = await page.evaluate(() => {
+    var H = window.__harbor, M = () => window.HARBOR_SIM.meta(), out = {};
+    out.gatedPick = H.pickDoctrine('merchant');                 // <3 charters → locked
+    window.Retention.set('harbor', 'charters', 3);
+    window.Retention.set('harbor', 'legacyBal', 300);
+    out.capGate = H.buyCapstone();                              // no pick yet → gated
+    out.sell0 = M().sellMul;
+    out.pickOk = H.pickDoctrine('merchant');
+    out.bal1 = H.legacy().bal; out.sell1 = M().sellMul; out.route1 = M().routeMul;
+    return out;
+  });
+  ok('9c doctrine: gated <3 charters, capstone gated on pick, pick costs 25✦ → +35% sales +10% routes',
+    d9.gatedPick === false && d9.capGate === false && d9.pickOk === true && d9.bal1 === 275 &&
+    Math.abs(d9.sell1 - d9.sell0 - 0.35) < 1e-6 && d9.route1 >= 1.10 - 1e-6);
+  const r9 = await page.evaluate(() => {
+    var H = window.__harbor, M = () => window.HARBOR_SIM.meta();
+    var slots0 = M().voyageSlots, okR = H.pickDoctrine('explorer');
+    return { okR, bal: H.legacy().bal, pick: H.doctrine().pick, slots0, slots: M().voyageSlots, speed: M().voyageSpeed, sell: M().sellMul, sell0Tree: 1 };
+  });
+  ok('9c doctrine: respec costs 50✦, swaps to explorer (+1 slot, +35% speed, merchant sales gone)',
+    r9.okR === true && r9.bal === 225 && r9.pick === 'explorer' && r9.slots === r9.slots0 + 1 && r9.speed >= 1.35 - 1e-6 && Math.abs(r9.sell - d9.sell0) < 1e-6);
+  const c9 = await page.evaluate(() => {
+    var H = window.__harbor, okC = H.buyCapstone();
+    return { okC, bal: H.legacy().bal, caps: H.doctrine().caps, yieldV: window.HARBOR_SIM.meta().voyageYield };
+  });
+  ok('9c capstone: Flagship 120✦ → META.voyageYield 0.4 (max 1)',
+    c9.okC === true && c9.bal === 105 && c9.caps.explorer === true && Math.abs(c9.yieldV - 0.4) < 1e-6);
+
+  // Phase 9c: relic loadout — equip toggles META, slot cap enforced
+  const l9 = await page.evaluate(() => {
+    var H = window.__harbor, M = () => window.HARBOR_SIM.meta(), out = {};
+    out.slots = H.loadout().slots;                              // 3 owned (<9) → 3 slots
+    out.v0 = M().voyageSpeed;
+    out.eq = H.equipRelic('carto0');
+    out.v1 = M().voyageSpeed;                                   // +6% per Cartographer relic
+    out.uneq = H.equipRelic('carto0');
+    out.v2 = M().voyageSpeed;
+    H.grantRelic('smug0');                                      // 4th owned relic (still <9 → 3 slots)
+    ['carto0', 'carto1', 'carto2'].forEach(id => H.equipRelic(id));
+    out.full = H.equipRelic('smug0');                           // 4th equip must fail
+    out.equipped = H.loadout().equipped.length;
+    return out;
+  });
+  ok('9c loadout: equip +6% voyage speed, unequip reverts', l9.slots === 3 && l9.eq === true &&
+    Math.abs(l9.v1 - l9.v0 - 0.06) < 1e-6 && l9.uneq === true && Math.abs(l9.v2 - l9.v0) < 1e-6);
+  ok('9c loadout: 3-slot cap enforced (4th equip rejected)', l9.full === false && l9.equipped === 3);
+
   // living fleet (Phase 9b): visible expedition ships derive from the voyage list
   ok('fleet: empty baseline', await page.evaluate(() => { var f = window.__harbor.fleet(); return f.expedition === 0 && f.route === 0 && f.rival === 0; }));
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.startVoyage('reef'); });
@@ -100,10 +148,11 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   // prestige → meta persists
   const relicsBefore = await page.evaluate(() => window.__harbor.relics().count);
   await page.evaluate(() => { window.HARBOR_SIM.raw().lifetimeMoney = 1e7; window.__harbor.prestige(); }); await sleep(400);
-  const after = await page.evaluate(() => ({ relics: window.__harbor.relics().count, rivalWins: window.__harbor.rival().wins, slots: window.HARBOR_SIM.meta().voyageSlots, webgl: window.__harbor.state().webgl }));
+  const after = await page.evaluate(() => ({ relics: window.__harbor.relics().count, rivalWins: window.__harbor.rival().wins, slots: window.HARBOR_SIM.meta().voyageSlots, webgl: window.__harbor.state().webgl, doct: window.__harbor.doctrine().pick, caps: window.__harbor.doctrine().caps, lo: window.__harbor.loadout().equipped.length, yieldV: window.HARBOR_SIM.meta().voyageYield }));
   ok('prestige: relics persist', after.relics === relicsBefore && after.relics >= 3);
   ok('prestige: rival wins persist', after.rivalWins >= 1);
   ok('prestige: relic-set META bonus persists', after.slots >= 1);
+  ok('9c prestige: doctrine + capstone + loadout survive', after.doct === 'explorer' && after.caps.explorer === true && after.lo === 3 && Math.abs(after.yieldV - 0.4) < 1e-6);
   ok('prestige: WebGL still alive', after.webgl);
 
   // Phase 10a: colour & light — authored time-of-day scripts + fog + shadow ramp

@@ -126,6 +126,29 @@ var S = SIM.raw();
   SIM.applyMeta({ prodMul: 1, sellMul: 1, voyageSlots: 0, voyageSpeed: 1 });   // reset
 })();
 
+// ---------------------------------------------------------------- Phase 9c: doctrine capstone META fields
+(function metaPhase9c() {
+  SIM.__setRng(mulberry32(777));
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(4); SIM.raw().money = 1e6;
+  SIM.applyMeta({ contractSlots: 0, voyageYield: 0 });
+  ok('9c: baseline contract board holds 3', SIM.port('green').contracts.length === 3);
+  SIM.applyMeta({ contractSlots: 1 });                              // Monopoly capstone
+  ok('9c: META.contractSlots=1 fills the board to 4 live', SIM.port('green').contracts.length === 4);
+  // Flagship capstone: voyageYield multiplies rollVoyage cash — same seed, with vs without
+  function voyageCash(yieldAmt, seed) {
+    SIM.applyMeta({ voyageYield: yieldAmt });
+    SIM.raw().money = 1e6;
+    SIM.startVoyage('cove');
+    SIM.raw().voyages[0].endsAt = Date.now() - 1;                   // force ready
+    SIM.__setRng(mulberry32(seed));                                 // identical reward roll
+    return SIM.collectVoyage(SIM.voyages().active[0].seq).cash;
+  }
+  var c0 = voyageCash(0, 4321), c1 = voyageCash(0.4, 4321);
+  ok('9c: META.voyageYield=0.4 multiplies voyage cash ×1.4', near(c1 / c0, 1.4, 0.01));
+  ok('9c: yielded cash finite and strictly larger', isFinite(c1) && c1 > c0);
+  SIM.applyMeta({ contractSlots: 0, voyageYield: 0 });              // reset for later sections
+})();
+
 // ---------------------------------------------------------------- balance bounds (accelerated auto-play)
 (function balance() {
   SIM.__setRng(mulberry32(999)); SIM.newGame(); SIM.foundPort('green'); var b = SIM.raw();

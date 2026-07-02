@@ -123,8 +123,8 @@
 
   // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
   // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
-  var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0 };
-  function applyMeta(m) { if (!m) return; for (var k in META) if (typeof m[k] === 'number') META[k] = m[k]; }
+  var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
+  function applyMeta(m) { if (!m) return; for (var k in META) if (typeof m[k] === 'number') META[k] = m[k]; if (CUR) ensureContracts(); }   // Phase 9c: Monopoly capstone widens the contract board live
 
   // TIDE: today's daily market modifier (computed in game.js from the seeded daily RNG, fed in here).
   // A rotating positive bonus that rewards logging in — production and/or per-resource sale boosts.
@@ -248,7 +248,7 @@
     var who = ORDER_LABELS[(seq * 5) % ORDER_LABELS.length];
     return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward };
   }
-  function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var guard = 0; while (CUR.contracts.length < 3 && guard++ < 20) CUR.contracts.push(genContract()); }
+  function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var want = 3 + (META.contractSlots || 0), guard = 0; while (CUR.contracts.length < want && guard++ < 20) CUR.contracts.push(genContract()); }
   function findContract(id) { for (var i = 0; i < (CUR.contracts || []).length; i++) if (CUR.contracts[i].id === id) return i; return -1; }
   function canFulfill(id) { var i = findContract(id); return i >= 0 && CUR.res[CUR.contracts[i].res] >= CUR.contracts[i].amt; }
   function fulfillContract(id) {
@@ -469,7 +469,7 @@
   function voyageReady(v) { return now() >= v.endsAt; }
   function rollVoyage(d) {
     var era = S.era || 0, cost = voyageCost(d), out = { cash: 0, res: null, crate: 0, relic: 0 };
-    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5));
+    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)));   // Flagship capstone: richer hauls
     if (_rng() < 0.5) { var r = ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)]; out.res = {}; out.res[r] = Math.round(20 * d.tier * (1 + era * 0.4)); }
     if (_rng() < 0.12 * d.tier) out.crate = 1;
     if (_rng() < 0.05 * d.tier) out.relic = 1;                  // relics wired up in Phase 7c
