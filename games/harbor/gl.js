@@ -284,6 +284,42 @@
     col += (dth(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(col),1.0); }`;
 
+  // Phase 10c post pass: tilt-shift "miniature diorama" DoF + bloom-lite in ONE kernel.
+  // The scene is rendered into an offscreen RT, then this fullscreen composite runs a single
+  // 12-tap 2-ring poisson blur whose radius grows with vertical distance from a focus band
+  // (crisp port, dreamy top/bottom = miniature look). The SAME taps feed a bloom-lite term:
+  // luma above uBloomThresh accumulates and is added back slightly warm — no ping-pong,
+  // no second target, so night windows / sun glints get a gentle halo for one texture fetch set.
+  var V_POST = `#version 300 es
+  layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.0,1.0); }`;
+  var F_POST = `#version 300 es
+  precision highp float; in vec2 vUv;
+  uniform sampler2D uTex; uniform vec2 uTexel;
+  uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
+  out vec4 frag;
+  void main(){
+    // blur strength: 0 inside the focus band, easing to 1 at the screen edges (quadratic onset keeps the band edge creamy)
+    float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b;
+    vec3 sharp = texture(uTex, vUv).rgb;
+    // 12 taps: centre + 4 inner ring (r=0.45) + 7 outer ring (r=1.0), rotated so no axis lines up
+    vec2 T[12];
+    T[0]=vec2(0.0,0.0);
+    T[1]=vec2( 0.318, 0.318); T[2]=vec2(-0.318, 0.318); T[3]=vec2(-0.318,-0.318); T[4]=vec2( 0.318,-0.318);
+    T[5]=vec2( 1.000, 0.000); T[6]=vec2( 0.623, 0.782); T[7]=vec2(-0.223, 0.975); T[8]=vec2(-0.901, 0.434);
+    T[9]=vec2(-0.901,-0.434); T[10]=vec2(-0.223,-0.975); T[11]=vec2( 0.623,-0.782);
+    vec2 rad = uTexel * (b * 11.0);                  // up to ~11px blur radius at full strength
+    vec3 acc = vec3(0.0); float bloom = 0.0;
+    for (int i = 0; i < 12; i++) {
+      vec3 c = texture(uTex, vUv + T[i] * rad).rgb;
+      acc += c;
+      bloom += max(dot(c, vec3(0.299, 0.587, 0.114)) - uBloomThresh, 0.0);
+    }
+    acc /= 12.0; bloom /= 12.0;
+    vec3 col = mix(sharp, acc, min(b * 1.15, 1.0));  // crisp in the band, dreamy top/bottom
+    col += bloom * uBloomAmt * vec3(1.0, 0.92, 0.78); // bloom-lite, tinted slightly warm
+    frag = vec4(col, 1.0);
+  }`;
+
   // soft contact-shadow blob: a flat ground decal with radial alpha (no shadow map → no "cloud shadows")
   var V_BLOB = `#version 300 es
   layout(location=0) in vec3 aPos; layout(location=2) in vec2 aUV; uniform mat4 uVP, uModel; out vec2 vUv;
@@ -317,8 +353,38 @@
 
     var quad = mesh({ positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), indices: new Uint16Array([0, 1, 2, 0, 2, 3]) });
     var blobQuad = mesh(plane(2, 1)); // unit XZ plane (-1..1), uvs 0..1 — for ground shadow decals
-    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex,
-      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), quad: quad, blobQuad: blobQuad };
+    // offscreen render target for the Phase 10c post pass: RGBA8 colour + depth renderbuffer.
+    // Returns null on any failure so callers can fall back to direct-to-screen rendering.
+    function createRT(w, h) {
+      try {
+        var tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        var rb = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+        var fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+        var complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindRenderbuffer(gl.RENDERBUFFER, null); gl.bindTexture(gl.TEXTURE_2D, null);
+        if (!complete) { gl.deleteFramebuffer(fb); gl.deleteRenderbuffer(rb); gl.deleteTexture(tex); return null; }
+        var rt = { fb: fb, tex: tex, rb: rb, w: w, h: h };
+        rt.resize = function (nw, nh) {
+          if (nw === rt.w && nh === rt.h) return true;
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, nw, nh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, nw, nh); gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+            rt.w = nw; rt.h = nh; return true;
+          } catch (e) { return false; }
+        };
+        return rt;
+      } catch (e) { return null; }
+    }
+    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex, createRT: createRT,
+      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), P_post: prog(V_POST, F_POST), quad: quad, blobQuad: blobQuad };
   }
 
   global.HGL = { mat4: mat4, Builder: Builder, geom: { plane: plane }, createEngine: createEngine };

@@ -32,8 +32,12 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   const errs = [];
   page.on('pageerror', e => errs.push('PAGEERR ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/404|favicon/.test(m.text())) errs.push('CONSOLE ' + m.text()); });
+  // GL validation failures (e.g. framebuffer feedback loops) surface as console *warnings* in Chrome — catch those too
+  page.on('console', m => { if (m.type() === 'warning' && /GL_INVALID|INVALID_OPERATION|INVALID_ENUM|INVALID_VALUE|[Ff]eedback loop/.test(m.text())) errs.push('GLWARN ' + m.text()); });
 
-  await page.goto(`http://localhost:${PORT}/games/harbor/?biome=green`, { waitUntil: 'load' });
+  // nopost-probe: swiftshader is slow — the 10c frame-time probe would trip and auto-disable
+  // the post pass mid-test. The flag disarms the probe so the pass stays on deterministically.
+  await page.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
   await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
   await page.reload({ waitUntil: 'load' });
   const booted = await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).then(() => true).catch(() => false);
@@ -134,6 +138,28 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
     envDusk2.sparkle > 0.5 && envNight2.sparkle > 0 && envNight2.sparkle < 0.3);
   await page.evaluate(() => window.__harbor.setTod(0.5)); await sleep(150);
   ok('10b: sky/water/sparkle uniforms render with zero new errors', errs.length === errsBeforeSweep);
+
+  // Phase 10c: quality-gated post pass — tilt-shift miniature DoF + bloom-lite composite
+  const errsBefore10c = errs.length;
+  const p0 = await page.evaluate(() => window.__harbor.post());
+  ok('10c: post defaults ON first-run and probe is disarmed by ?nopost-probe', p0 && p0.on === true && p0.armed === false && p0.fail === false);
+  await sleep(400);   // several frames through the FBO + composite path
+  ok('10c: post pass renders with zero errors', errs.length === errsBefore10c);
+  await page.evaluate(() => window.__harbor.setPost(false)); await sleep(300);
+  ok('10c: setPost(false) → direct path renders with zero errors', errs.length === errsBefore10c &&
+    await page.evaluate(() => window.__harbor.post().on === false));
+  ok('10c: toggle back ON works (hook reports state + persisted)', await page.evaluate(() => {
+    window.__harbor.setPost(true);
+    var p = window.__harbor.post();
+    return p.on === true && p.auto === false && window.Retention.get('harbor', 'post', null) === true;
+  }));
+  for (const t of [0, 0.25, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(150); }
+  ok('10c: ToD sweep with post ON renders zero errors', errs.length === errsBefore10c);
+  await page.setViewportSize({ width: 700, height: 500 }); await sleep(350);
+  await page.setViewportSize({ width: 414, height: 820 }); await sleep(350);
+  ok('10c: resize (FBO recreate both ways) renders zero errors, post still on', errs.length === errsBefore10c &&
+    await page.evaluate(() => window.__harbor.post().on === true));
+  await page.evaluate(() => window.__harbor.setTod(0.5));
 
   // live ticking after everything — no late errors
   await sleep(2000);

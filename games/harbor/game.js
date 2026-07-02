@@ -17,6 +17,37 @@
   var PANX = 1140, PANZ0 = -90, PANZ1 = 280;   // pan clamp over the long coast
   var biomeId = 'green', biome = null, unlocked = ['green'];
 
+  // ---- Phase 10c: quality-gated post pass (tilt-shift miniature DoF + bloom-lite) ----
+  // ONE optional render-to-texture composite: scene → offscreen RT → fullscreen quad that
+  // blurs away from a horizontal focus band (diorama look) and adds a warm bloom-lite halo
+  // from the same taps. Default ON; a first-boot frame-time probe auto-disables it on weak
+  // devices (persisted via 'postAuto' so they don't re-probe every boot). The Settings
+  // toggle re-arms the probe once when forced back on. Deterministic escape hatches for
+  // headless swiftshader tests/screenshots: a '?nopost-probe' query flag disarms the probe,
+  // and __harbor.setPost() disarms it too (forced state). Any FBO failure → direct path.
+  var POST_FOCUS_Y = 0.44, POST_FOCUS_W = 0.17, POST_BLOOM_T = 0.78, POST_BLOOM_A = 0.35;
+  var postUserOn = window.Retention ? !!Retention.get(GAME, 'post', true) : true;
+  var postAutoOff = window.Retention ? !!Retention.get(GAME, 'postAuto', false) : false;
+  var postFail = false, postRT = null;
+  var postProbe = { armed: !postAutoOff && !/[?&]nopost-probe\b/.test(window.location.search), done: false, t: 0, n: 0, warm: 0, avgMs: 0 };
+  function postEnabled() { return postUserOn && !postAutoOff && !postFail && !!gl; }
+  function setPost(v, fromUI) {
+    postUserOn = !!v; if (window.Retention) Retention.set(GAME, 'post', postUserOn);
+    if (postUserOn) {
+      postAutoOff = false; if (window.Retention) Retention.set(GAME, 'postAuto', false);
+      postFail = false;                                                       // give the FBO another chance
+      if (fromUI) postProbe = { armed: true, done: false, t: 0, n: 0, warm: 0, avgMs: postProbe.avgMs };  // Settings re-arms the probe once
+      else postProbe.armed = false;                                           // forced (tests) → no probe, deterministic
+    }
+    if (settingsOpen) renderSettings();
+  }
+  function ensurePostRT() {   // (re)create / resize the offscreen RT; null (and direct path) on any failure
+    if (postFail || !E || !E.createRT) return null;
+    if (!postRT) { postRT = E.createRT(canvas.width, canvas.height); if (!postRT) { postFail = true; return null; } }
+    else if (postRT.w !== canvas.width || postRT.h !== canvas.height) { if (!postRT.resize(canvas.width, canvas.height)) { postFail = true; return null; } }
+    return postRT;
+  }
+
   // ---- 2D FX overlay (juice: particles / popups / screenshake), drawn over the WebGL canvas ----
   var fxCanvas = null, fxCtx = null, FX = null;
   function ensureFX() {
@@ -411,8 +442,10 @@
     var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
     var parts = scene.crane ? craneParts() : [];
 
-    // main (shadows removed — cleaner cartoon look)
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+    // main (shadows removed — cleaner cartoon look). Phase 10c: when the miniature look is on,
+    // the whole scene renders into an offscreen RT and composites to screen at the end.
+    var rt = postEnabled() ? ensurePostRT() : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fb : null); gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(en.bot[0], en.bot[1], en.bot[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     mat4.perspective(mProj, 0.82, canvas.width / canvas.height, 0.5, 1600); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
     var i;
@@ -483,6 +516,22 @@
     gl.uniform1f(W.u.uSparkle, en.sparkle);   // ToD-authored sparkle: strong day/dusk, faint moon-glints at night
     gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
+
+    // Phase 10c composite: tilt-shift miniature DoF + bloom-lite, one fullscreen kernel.
+    // (The 2D cinematic/FX layers are DOM canvases ABOVE the WebGL canvas — untouched.)
+    if (rt) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      var PP = E.P_post; gl.useProgram(PP.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rt.tex); gl.uniform1i(PP.u.uTex, 0);
+      gl.uniform2fv(PP.u.uTexel, [1 / rt.w, 1 / rt.h]);
+      gl.uniform1f(PP.u.uFocusY, POST_FOCUS_Y); gl.uniform1f(PP.u.uFocusW, POST_FOCUS_W);
+      gl.uniform1f(PP.u.uBloomThresh, POST_BLOOM_T); gl.uniform1f(PP.u.uBloomAmt, POST_BLOOM_A);
+      drawMesh(PP, E.quad);
+      gl.bindTexture(gl.TEXTURE_2D, null);   // CRITICAL: unbind rt.tex from unit 0 — P_main's uShadow sampler defaults to 0, so leaving it bound = feedback loop next frame (P_main draws dropped)
+      gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.enable(gl.CULL_FACE);
+      gl.activeTexture(gl.TEXTURE1);   // scene passes bind their textures on unit 1 — restore
+    }
   }
 
   // ---- founding a harbour (tap the wild coast; rated) ----
@@ -731,6 +780,23 @@
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
+    // frame is > ~26ms (below ~38fps) auto-disable the miniature look for this device
+    // (persisted, so weak devices don't re-probe every boot; Settings can re-arm it).
+    if (postProbe.armed && !postProbe.done && postEnabled()) {
+      if (postProbe.warm < 0.8) postProbe.warm += dt;                    // let shaders/JIT warm up first
+      else {
+        postProbe.t += dt; postProbe.n++;
+        if (postProbe.t >= 5) {
+          postProbe.done = true; postProbe.avgMs = postProbe.t / postProbe.n * 1000;
+          if (postProbe.avgMs > 26) {
+            postAutoOff = true; if (window.Retention) Retention.set(GAME, 'postAuto', true);
+            showHint('✨ Miniature look off — keeping things smooth');
+            if (settingsOpen) renderSettings();
+          }
+        }
+      }
+    }
     if (cine) updateCine(dt);
     if (ptrs.size === 0) {
       C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0;
@@ -1771,7 +1837,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v51';
+  var BUILD_TAG = 'v52';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1787,6 +1853,7 @@
     h += '<div class="mp-sec">Audio & feedback</div><div class="mp-grid">';
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
+    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
     h += '<div class="mp-sec">How to play</div>';
     h += '<div class="set-help">⚓ Tap the glowing harbour, then <b>Found village</b>.<br>' +
@@ -1813,6 +1880,7 @@
         var a = el.getAttribute('data-set');
         if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
+        else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
         else if (a === 'reset') {
           if (!resetArm) { resetArm = true; haptic(20); renderSettings(); setTimeout(function () { resetArm = false; if (settingsOpen) renderSettings(); }, 4000); }
@@ -2123,6 +2191,8 @@
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
+    post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail }; },
+    setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
