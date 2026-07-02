@@ -79,6 +79,7 @@
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
   var sites = [], selSite = -1;                              // curated harbour candidates + selected index
   var ambient = null;                                        // living port: sailing boats + wheeling gulls
+  var geomStats = null;                                      // static-scene vertex/index counts (budget guard)
   function buildBiome(id) {
     if (!HARBOR_BIOMES[id]) id = 'green';
     biomeId = id; biome = HARBOR_BIOMES[id]; ambient = null;
@@ -91,6 +92,8 @@
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
     var port = founded[id] || null;
     scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era, port) || { city: [], blobs: [], crane: false, era: era, founded: !!port, port: null };
+    geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3,
+      verts: (fac.P.length + grit.P.length + flat.P.length) / 3, indices: fac.I.length + grit.I.length + flat.I.length };   // vertex-budget guard (Phase 10b)
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
     sites = port ? [] : HARBOR_MODELS.sites(); selSite = -1;  // curated candidates only when wild
     if (window.Retention) Retention.set(GAME, 'biome', id);
@@ -143,26 +146,30 @@
       top: m3(b.skyTop, [0.10, 0.14, 0.34]), bot: m3(b.skyBot, [0.09, 0.13, 0.30]),
       sun: [0.16, 0.22, 0.38],
       ambTop: [0.16, 0.21, 0.38], ambBot: [0.09, 0.11, 0.22],
-      fog: m3(b.fog, [0.09, 0.12, 0.26]), fogD: 0.0011, shadowK: 0.40, water: [0.11, 0.15, 0.42]
+      fog: m3(b.fog, [0.09, 0.12, 0.26]), fogD: 0.0011, shadowK: 0.40, water: [0.11, 0.15, 0.42],
+      horizon: [0.05, 0.07, 0.16], sparkle: 0.16                 // near-black blue rim; faint moon-glints
     };
     var dawn = { // golden-pink sunrise: violet zenith, peach horizon, long warm light
       top: lerp3(m3(b.skyTop, [0.52, 0.48, 0.80]), [0.46, 0.36, 0.66], 0.35),
       bot: lerp3(m3(b.skyBot, [1.00, 0.72, 0.62]), [1.10, 0.62, 0.46], 0.5),
       sun: [1.42, 0.92, 0.56],
       ambTop: [0.42, 0.37, 0.54], ambBot: [0.32, 0.22, 0.28],
-      fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68]
+      fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68],
+      horizon: [1.28, 0.74, 0.50], sparkle: 0.62                 // warm peach sunrise glow
     };
     var day = { // bright, clean, cheerful — the biome palette as painted
       top: b.skyTop.slice(), bot: b.skyBot.slice(), sun: b.sun.slice(),
       ambTop: [0.50, 0.56, 0.70], ambBot: [0.27, 0.245, 0.225],
-      fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1]
+      fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1],
+      horizon: lerp3(b.skyBot, [1.0, 0.99, 0.94], 0.55), sparkle: 0.55   // soft bright haze
     };
     var dusk = { // molten gold-rose sunset, a touch redder than dawn
       top: lerp3(m3(b.skyTop, [0.46, 0.40, 0.74]), [0.42, 0.30, 0.60], 0.4),
       bot: lerp3(m3(b.skyBot, [1.05, 0.66, 0.52]), [1.15, 0.55, 0.36], 0.55),
       sun: [1.48, 0.86, 0.44],
       ambTop: [0.42, 0.33, 0.50], ambBot: [0.33, 0.21, 0.25],
-      fog: lerp3(m3(b.fog, [1.02, 0.66, 0.54]), [1.05, 0.55, 0.42], 0.45), fogD: 0.0009, shadowK: 0.78, water: [0.76, 0.60, 0.64]
+      fog: lerp3(m3(b.fog, [1.02, 0.66, 0.54]), [1.05, 0.55, 0.42], 0.45), fogD: 0.0009, shadowK: 0.78, water: [0.76, 0.60, 0.64],
+      horizon: [1.42, 0.68, 0.38], sparkle: 0.70                 // molten peach-gold band low over the sea
     };
     // sun crosses the horizon at tod≈0.23 / 0.77 (see sunDir) — keys straddle those moments
     return [[0.00, night], [0.185, night], [0.25, dawn], [0.34, day], [0.66, day], [0.755, dusk], [0.84, night], [1.00, night]];
@@ -180,8 +187,9 @@
       top: lerp3(A.top, B.top, t), bot: lerp3(A.bot, B.bot, t),
       sun: lerp3(A.sun, B.sun, t), fog: lerp3(A.fog, B.fog, t),
       ambTop: lerp3(A.ambTop, B.ambTop, t), ambBot: lerp3(A.ambBot, B.ambBot, t),
-      water: lerp3(A.water, B.water, t),
-      fogD: A.fogD + (B.fogD - A.fogD) * t, shadowK: A.shadowK + (B.shadowK - A.shadowK) * t
+      water: lerp3(A.water, B.water, t), horizon: lerp3(A.horizon, B.horizon, t),
+      fogD: A.fogD + (B.fogD - A.fogD) * t, shadowK: A.shadowK + (B.shadowK - A.shadowK) * t,
+      sparkle: A.sparkle + (B.sparkle - A.sparkle) * t
     };
   }
   function sunDir() { var ang = (tod - 0.25) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
@@ -274,6 +282,10 @@
     }
     ambient = { boats: boats, gulls: gulls, cx: cx, cz: cz, dev: dev };
   }
+  // Phase 10b wind: one shared breeze, per-boat phase. Sails wobble a few degrees around their
+  // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
+  function sailSway(ph) { return Math.sin(clock * 1.7 + ph) * 0.07 + Math.sin(clock * 0.53 + ph * 0.7) * 0.025; }   // ±~5.5°
+  function sailBillow(ph) { return 1 + Math.sin(clock * 2.4 + ph * 1.9) * 0.045; }                                  // ±4.5% width
   // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
   function drawAmbient(M) {
     if (!ambient) return;
@@ -291,9 +303,9 @@
       // little deck cabin
       gl.uniform3fv(M.u.uBase, [b.hull[0] * 0.8, b.hull[1] * 0.8, b.hull[2] * 0.78]);
       composeRYS(mModel, x, 1.2 + bob, z, 1.5 * sc, 1.0, 1.2 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // tall triangular sail
+      // tall triangular sail — swaying + billowing in the shared breeze
       gl.uniform3fv(M.u.uBase, [0.96, 0.95, 0.92]);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc, 4.6 * sc, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc * sailBillow(b.a0), 4.6 * sc, 0.5, yaw + sailSway(b.a0)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
@@ -363,7 +375,7 @@
       gl.uniform3fv(M.u.uBase, EXP_CABIN);
       composeRYS(mModel, x, 1.2 + bob, z, 1.95, 1.0, 1.56, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
       gl.uniform3fv(M.u.uBase, e.sail);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.86, 5.98, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      composeRYS(mModel, x, 1.4 + bob, z, 2.86 * sailBillow(e.ph), 5.98, 0.5, yaw + sailSway(e.ph)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
     for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters (resource-tinted hull + deck cargo)
       r = fleet.routes[i];
@@ -377,7 +389,7 @@
       gl.uniform3fv(M.u.uBase, r.cargo);
       composeRYS(mModel, x, 1.35 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
       gl.uniform3fv(M.u.uBase, RTE_SAIL);
-      composeRYS(mModel, x, 1.4 + bob, z, 1.9, 3.7, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      composeRYS(mModel, x, 1.4 + bob, z, 1.9 * sailBillow(r.ph * 3), 3.7, 0.5, yaw + sailSway(r.ph * 3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
     if (fleet.rival) {                                             // Baron Krall patrols while the race is on
       var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
@@ -389,7 +401,7 @@
       gl.uniform3fv(M.u.uBase, RVL_CABIN);
       composeRYS(mModel, x, 1.3 + bob, z, 2.4, 1.1, 1.9, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
       gl.uniform3fv(M.u.uBase, RVL_SAIL);
-      composeRYS(mModel, x, 1.5 + bob, z, 3.5, 7.4, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      composeRYS(mModel, x, 1.5 + bob, z, 3.5 * sailBillow(1.3), 7.4, 0.5, yaw + sailSway(1.3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
   }
 
@@ -409,6 +421,12 @@
     gl.depthMask(false); gl.disable(gl.CULL_FACE);
     var S = E.P_sky; gl.useProgram(S.p);
     gl.uniform3fv(S.u.uTop, en.top); gl.uniform3fv(S.u.uBot, en.bot); gl.uniform3fv(S.u.uSunCol, en.sun);
+    gl.uniform3fv(S.u.uHorizon, en.horizon);                    // 3rd stop: authored horizon glow band
+    // anchor the glow to the real sea horizon: project a far sea-level point along the view heading
+    var hfl = Math.hypot(target[0] - ev[0], target[2] - ev[2]) || 1;
+    var hpx = ev[0] + (target[0] - ev[0]) / hfl * 1400, hpz = ev[2] + (target[2] - ev[2]) / hfl * 1400;
+    var hcy = mVP[1] * hpx + mVP[9] * hpz + mVP[13], hcw = mVP[3] * hpx + mVP[11] * hpz + mVP[15];
+    gl.uniform1f(S.u.uHorizonY, clamp((hcy / (hcw || 1)) * 0.5 + 0.5, 0.04, 0.8));
     gl.uniform2fv(S.u.uSun, [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5]);
     gl.uniform1f(S.u.uNight, en.night); gl.uniform1f(S.u.uTime, clock);   // night starfield
     drawMesh(S, E.quad); gl.depthMask(true); gl.enable(gl.CULL_FACE);
@@ -460,8 +478,9 @@
     var W = E.P_water; gl.useProgram(W.p); gl.uniformMatrix4fv(W.u.uVP, false, mVP); gl.uniform1f(W.u.uTime, clock);
     gl.uniform3fv(W.u.uCam, ev); gl.uniform3fv(W.u.uSunDir, sd); gl.uniform3fv(W.u.uSunCol, en.sun);
     gl.uniform3fv(W.u.uDeep, m3(biome.deep, en.water)); gl.uniform3fv(W.u.uShallow, m3(biome.shallow, en.water));   // ToD-lit water body
-    gl.uniform3fv(W.u.uSky, en.bot); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient
+    gl.uniform3fv(W.u.uSky, lerp3(en.bot, en.horizon, 0.4)); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient incl. the horizon glow
     gl.uniform3fv(W.u.uFog, en.fog); gl.uniform1f(W.u.uFogD, en.fogD);
+    gl.uniform1f(W.u.uSparkle, en.sparkle);   // ToD-authored sparkle: strong day/dusk, faint moon-glints at night
     gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
   }
@@ -671,7 +690,9 @@
       smokeT -= every;
       var pw = portWorld(); if (!pw) return; var sc = worldToScreen(pw.x - 18 + Math.random() * 36, pw.y + 8, pw.z - 4 + Math.random() * 8); if (!sc) continue;
       var g = 0.55 + Math.random() * 0.2;
-      FX.p.list.push({ x: sc.x, y: sc.y, vx: (Math.random() - 0.3) * 14, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
+      // steady drift in the same shared breeze that sways the sails (+x, gently gusting)
+      var wind = 8 + Math.sin(clock * 0.53) * 4;
+      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
     }
   }
 
@@ -1750,7 +1771,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v50';
+  var BUILD_TAG = 'v51';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -2102,6 +2123,7 @@
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
+    geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
     setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },

@@ -116,6 +116,25 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   for (const t of [0, 0.25, 0.3, 0.5, 0.8, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(150); }
   ok('env: full ToD sweep renders with zero GL/console errors', errs.length === errsBeforeSweep);
 
+  // Phase 10b: shape & motion — bevelled geometry, 3-stop sky horizon, water sparkle
+  const gs = await page.evaluate(() => window.__harbor.geomStats());
+  ok('geom: static-scene stats exposed and within vertex budget', gs && gs.verts > 10000 && gs.verts < 250000 && gs.indices > 0);
+  const bb = await page.evaluate(() => { var b = new window.HGL.Builder().bbox(0, 0, 0, 6, 4, 6, [1, 0, 0], 0.3, 0.7); var d = b.data();
+    var fin = true; for (var i = 0; i < d.positions.length; i++) if (!isFinite(d.positions[i])) fin = false;
+    return { v: d.positions.length / 3, i: d.indices.length, n: d.normals.length / 3, fin: fin }; });
+  ok('bbox: chamfered box builds watertight (40 verts / 60 idx, finite)', bb && bb.v === 40 && bb.i === 60 && bb.n === 40 && bb.fin);
+  const bbTiny = await page.evaluate(() => new window.HGL.Builder().bbox(0, 0, 0, 0.2, 3, 0.2, [1, 1, 1], 0, 0.5).data().positions.length / 3);
+  ok('bbox: tiny/thin boxes fall back to plain box (no inverted chamfer)', bbTiny === 24);
+  const envDusk2 = await page.evaluate(() => { window.__harbor.setTod(0.755); return window.__harbor.env(); });
+  const envNight2 = await page.evaluate(() => { window.__harbor.setTod(0.0); return window.__harbor.env(); });
+  ok('env: horizon glow authored per ToD (dusk warm peach, night near-black blue)',
+    Array.isArray(envDusk2.horizon) && envDusk2.horizon[0] > envDusk2.horizon[2] && envDusk2.horizon[0] > 1.0 &&
+    envNight2.horizon[2] > envNight2.horizon[0] && (envNight2.horizon[0] + envNight2.horizon[1] + envNight2.horizon[2]) < 0.5);
+  ok('env: water sparkle scales with ToD (dusk strong, night faint)',
+    envDusk2.sparkle > 0.5 && envNight2.sparkle > 0 && envNight2.sparkle < 0.3);
+  await page.evaluate(() => window.__harbor.setTod(0.5)); await sleep(150);
+  ok('10b: sky/water/sparkle uniforms render with zero new errors', errs.length === errsBeforeSweep);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

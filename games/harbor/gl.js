@@ -71,6 +71,42 @@
     }
     return this;
   };
+  // BEVELLED box (Phase 10b shape language): same as box() but the TOP edges are chamfered —
+  // an inset top face joined to full-height sides by 4 sloped strips whose 45° normals catch the
+  // warm key light against the cool shadow ramp (the Townscaper/Tiny Glade roundness read).
+  // bev is in world units, clamped so tiny/thin boxes never invert. 40 verts vs box's 24.
+  Builder.prototype.bbox = function (cx, cy, cz, sx, sy, sz, c, ry, bev, uvr) {
+    var hx = sx / 2, hy = sy / 2, hz = sz / 2;
+    var b = Math.min(bev == null ? Math.min(sx, sz) * 0.11 : bev, hx * 0.45, hz * 0.45, sy * 0.42);
+    if (b <= 0.1) return this.box(cx, cy, cz, sx, sy, sz, c, ry, 0, uvr);   // masts/posts/trim: chamfer would be invisible — keep the cheap box
+    ry = ry || 0; uvr = uvr || 1;
+    var yr = hy - b, ix = hx - b, iz = hz - b, K = 0.70710678;
+    var faces = [
+      [[-hx, -hy, hz], [hx, -hy, hz], [hx, yr, hz], [-hx, yr, hz], [0, 0, 1]],
+      [[hx, -hy, -hz], [-hx, -hy, -hz], [-hx, yr, -hz], [hx, yr, -hz], [0, 0, -1]],
+      [[hx, -hy, hz], [hx, -hy, -hz], [hx, yr, -hz], [hx, yr, hz], [1, 0, 0]],
+      [[-hx, -hy, -hz], [-hx, -hy, hz], [-hx, yr, hz], [-hx, yr, -hz], [-1, 0, 0]],
+      [[-ix, hy, iz], [ix, hy, iz], [ix, hy, -iz], [-ix, hy, -iz], [0, 1, 0]],
+      [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], [-hx, -hy, hz], [0, -1, 0]],
+      // 4 chamfer strips (trapezoids sharing the sloped corner edges — watertight)
+      [[-hx, yr, hz], [hx, yr, hz], [ix, hy, iz], [-ix, hy, iz], [0, K, K]],
+      [[hx, yr, -hz], [-hx, yr, -hz], [-ix, hy, -iz], [ix, hy, -iz], [0, K, -K]],
+      [[hx, yr, hz], [hx, yr, -hz], [ix, hy, -iz], [ix, hy, iz], [K, K, 0]],
+      [[-hx, yr, -hz], [-hx, yr, hz], [-ix, hy, iz], [-ix, hy, -iz], [-K, K, 0]]
+    ];
+    var cy_ = Math.cos(ry), sy_ = Math.sin(ry), s1 = [1, 1, 1], t = [cx, cy, cz];
+    var uvs = [[0, 0], [uvr, 0], [uvr, uvr], [0, uvr]];
+    for (var f = 0; f < faces.length; f++) {
+      var fc = faces[f], base = this.P.length / 3, p = [0, 0, 0], n = [0, 0, 0];
+      for (var i = 0; i < 4; i++) {
+        xf(p, fc[i][0], fc[i][1], fc[i][2], s1, 1, 0, cy_, sy_, t);
+        xfN(n, fc[4][0], fc[4][1], fc[4][2], 1, 0, cy_, sy_);
+        this._v(p, n, uvs[i], c);
+      }
+      this.I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return this;
+  };
   // vertical cylinder (base at cy, height h)
   Builder.prototype.cyl = function (cx, cy, cz, r, h, seg, c, taper) {
     seg = seg || 12; taper = taper == null ? 1 : taper;
@@ -191,10 +227,13 @@
   var V_SKY = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.999,1.0); }`;
   var F_SKY = `#version 300 es
-  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol; uniform vec2 uSun; uniform float uNight,uTime; out vec4 frag;
+  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun; uniform float uNight,uTime,uHorizonY; out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float hash(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
+    // 3rd stop: a soft authored horizon band anchored to the projected sea horizon (uHorizonY) — a glow, not a stripe
+    float hb=exp(-pow(max(vUv.y-uHorizonY,0.0)*4.2,1.5));
+    c=mix(c,uHorizon,hb*0.60);
     float d=distance(vUv,uSun); c+=uSunCol*smoothstep(0.05,0.0,d)*1.5; c+=uSunCol*smoothstep(0.3,0.02,d)*0.16;
     if(uNight>0.01){
       vec2 grid=vec2(140.0,90.0); vec2 cell=floor(vUv*grid); float h=hash(cell);
@@ -215,7 +254,7 @@
     float dz=cos(p.z*0.23-t*0.9)*0.021+cos((p.x+p.z)*0.4+t*1.7)*0.016;
     vN=normalize(vec3(-dx,1.0,-dz)); vW=p; gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
-  precision highp float; in vec3 vW; in vec3 vN; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat;
+  precision highp float; in vec3 vW; in vec3 vN; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uSparkle;
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
@@ -229,6 +268,18 @@
     vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),140.0); col+=uSunCol*smoothstep(0.35,0.75,gl)*0.85; // soft toon glint
     float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
+    // animated toon sparkle: hashed world-XZ grid of crisp glints popping in/out with uTime,
+    // denser along the sun lane, brightness authored per ToD via uSparkle (faint moon-glints at night)
+    if(uSparkle>0.003){
+      vec2 gid=floor(vW.xz*0.85); float h1=dth(gid), h2=dth(gid+7.31);
+      vec2 gp=fract(vW.xz*0.85)-0.5+(vec2(h1,h2)-0.5)*0.62;
+      float tw=0.5+0.5*sin(uTime*(1.4+h1*2.6)+h2*40.0);
+      float spot=smoothstep(0.12+h2*0.05,0.03,length(gp));
+      vec2 vd=normalize(vW.xz-uCam.xz+vec2(1e-4,0.0));
+      float lane=0.35+0.65*smoothstep(0.15,0.9,dot(vd,normalize(uSunDir.xz+vec2(1e-4,0.0))));
+      float sp=step(0.70,h1)*spot*smoothstep(0.58,0.95,tw)*lane*exp(-dist*0.006);
+      col+=uSunCol*sp*uSparkle;
+    }
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
     col += (dth(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(col),1.0); }`;

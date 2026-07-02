@@ -201,7 +201,7 @@
   function hut(flat, x, z, rng, b) {
     var wood = pick([[0.55, 0.40, 0.26], [0.62, 0.46, 0.30], [0.48, 0.34, 0.22], [0.66, 0.54, 0.40]], rng);
     var w = 4 + rng() * 2, h = 3 + rng() * 1.5, d = 4 + rng() * 2, rot = (rng() - 0.5) * 0.5;
-    flat.box(x, h / 2, z, w, h, d, wood, rot);
+    flat.bbox(x, h / 2, z, w, h, d, wood, rot, Math.min(w, d) * 0.11);   // softened top edges (10b shape language)
     var roof = b.build ? b.build.roof : [0.4, 0.2, 0.15];
     flat.box(x - w * 0.26, h + 1.0, z, w * 0.62, 0.5, d * 1.08, roof, rot, 0.7);
     flat.box(x + w * 0.26, h + 1.0, z, w * 0.62, 0.5, d * 1.08, roof, rot, -0.7);
@@ -220,40 +220,40 @@
     flat.box(x, 0.8, 8, 6, 0.5, 18, [0.52, 0.4, 0.27], 0);
     for (var sx = -2; sx <= 2; sx += 2) for (var sz = 1; sz <= 15; sz += 7) flat.cyl(x + sx, -2.5, sz, 0.45, 3.3, 6, [0.36, 0.26, 0.17], 1);
   }
-  function concreteQuay(grit, flat, era) { var w = 150 + era * 18; grit.box(0, 1.1, 15, w, 2.2, 24, [0.64, 0.64, 0.66], 0, 0, 7); grit.box(0, 1.0, 3.6, w, 1.8, 1.4, [0.5, 0.5, 0.52], 0); for (var bx = -w / 2 + 6; bx <= w / 2 - 6; bx += 12) grit.cyl(bx, 0, 4.4, 0.5, 1.5, 6, [0.16, 0.17, 0.19], 0.8); }
+  function concreteQuay(grit, flat, era) { var w = 150 + era * 18; grit.bbox(0, 1.1, 15, w, 2.2, 24, [0.64, 0.64, 0.66], 0, 0.7, 7); grit.box(0, 1.0, 3.6, w, 1.8, 1.4, [0.5, 0.5, 0.52], 0); for (var bx = -w / 2 + 6; bx <= w / 2 - 6; bx += 12) grit.cyl(bx, 0, 4.4, 0.5, 1.5, 6, [0.16, 0.17, 0.19], 0.8); }
   function freighter(grit, flat, x, z, rng) {
     var L = 38, B = 11, deck = 1.8, hb = -2.6, hull = [0.30, 0.34, 0.42];
-    grit.box(x, hb + 2.2, z, L * 0.76, 4.4, B, hull, 0, 0, 3); grit.box(x - L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.66, hull, 0.2); grit.box(x + L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.82, hull, -0.13);
+    grit.bbox(x, hb + 2.2, z, L * 0.76, 4.4, B, hull, 0, 1.0, 3); grit.bbox(x - L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.66, hull, 0.2, 0.8); grit.bbox(x + L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.82, hull, -0.13, 0.8);
     flat.box(x, hb + 0.4, z, L * 0.9, 0.7, B + 0.2, [0.82, 0.26, 0.2], 0);
-    var ci = 0; for (var cx = -10; cx <= 8; cx += 4.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.box(x + cx, deck + 0.9 + r * 2.0, z, 4.2, 1.9, B - 1.5, CONT[(ci + r) % CONT.length], 0); ci++; }
-    grit.box(x + L * 0.36, deck + 3.0, z, 5, 5.5, B * 0.8, [0.9, 0.92, 0.95], 0, 0, 2); flat.cyl(x + L * 0.36 + 1.5, deck + 6, z, 1.3, 3.2, 9, [0.2, 0.22, 0.26], 1);
+    var ci = 0; for (var cx = -10; cx <= 8; cx += 4.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.bbox(x + cx, deck + 0.9 + r * 2.0, z, 4.2, 1.9, B - 1.5, CONT[(ci + r) % CONT.length], 0, 0.3); ci++; }
+    grit.bbox(x + L * 0.36, deck + 3.0, z, 5, 5.5, B * 0.8, [0.9, 0.92, 0.95], 0, 0.6, 2); flat.cyl(x + L * 0.36 + 1.5, deck + 6, z, 1.3, 3.2, 9, [0.2, 0.22, 0.26], 1);
   }
   function containerShip(grit, flat, x, z, rng, scale) {
     var s = scale || 1, L = 72 * s, B = 18 * s, deck = 2.4, hb = -4.0, hull = [0.12, 0.16, 0.24], accent = [0.90, 0.24, 0.18];
-    grit.box(x, hb + 3.2, z, L * 0.72, 6.4, B, hull, 0, 0, 3); grit.box(x - L * 0.41, hb + 3.4, z, L * 0.16, 6.0, B * 0.66, hull, 0.2); grit.box(x + L * 0.42, hb + 3.2, z, L * 0.14, 6.4, B * 0.86, hull, -0.12);
+    grit.bbox(x, hb + 3.2, z, L * 0.72, 6.4, B, hull, 0, 1.2, 3); grit.bbox(x - L * 0.41, hb + 3.4, z, L * 0.16, 6.0, B * 0.66, hull, 0.2, 1.0); grit.bbox(x + L * 0.42, hb + 3.2, z, L * 0.14, 6.4, B * 0.86, hull, -0.12, 1.0);
     flat.cyl(x - L * 0.5, hb + 1.0, z, 1.8, B * 0.5, 8, mul(hull, 1.2), 0.5);
     flat.box(x, hb + 0.6, z, L * 0.94, 1.0, B + 0.3, accent, 0); flat.box(x, deck + 0.05, z, L * 0.9, 0.3, B - 0.5, [0.18, 0.2, 0.24], 0);
     for (var rr = -1; rr <= 1; rr += 2) flat.box(x, deck + 0.8, z + rr * (B / 2 - 0.3), L * 0.9, 0.12, 0.12, [0.85, 0.87, 0.9], 0);
-    var ci = 0; for (var cx = -L * 0.36; cx <= L * 0.28; cx += 5.6 * s) for (var row = -1; row <= 1; row++) { var stk = 2 + (rng() * 4 | 0); for (var r = 0; r < stk; r++) flat.box(x + cx, deck + 0.6 + r * 2.5, z + row * 4.2 * s, 5.2 * s, 2.4, 3.8 * s, CONT[(ci + r) % CONT.length], 0); ci++; }
-    var bx = x + L * 0.40; grit.box(bx, deck + 6, z, 8 * s, 12, B * 0.82, [0.93, 0.94, 0.96], 0, 0, 2);
+    var ci = 0; for (var cx = -L * 0.36; cx <= L * 0.28; cx += 5.6 * s) for (var row = -1; row <= 1; row++) { var stk = 2 + (rng() * 4 | 0); for (var r = 0; r < stk; r++) flat.bbox(x + cx, deck + 0.6 + r * 2.5, z + row * 4.2 * s, 5.2 * s, 2.4, 3.8 * s, CONT[(ci + r) % CONT.length], 0, 0.32); ci++; }
+    var bx = x + L * 0.40; grit.bbox(bx, deck + 6, z, 8 * s, 12, B * 0.82, [0.93, 0.94, 0.96], 0, 0.8, 2);
     for (var wy = 0; wy < 4; wy++) flat.box(bx - 4.1 * s, deck + 3 + wy * 2.4, z, 0.3, 1.2, B * 0.74, [0.10, 0.16, 0.26], 0);
-    flat.box(bx + 1.6, deck + 13.5, z, 4.4 * s, 3.0, 4.4 * s, accent, 0); flat.cyl(bx + 1.6, deck + 12, z, 2.0, 2.0, 10, [0.18, 0.2, 0.24], 1);
+    flat.bbox(bx + 1.6, deck + 13.5, z, 4.4 * s, 3.0, 4.4 * s, accent, 0, 0.45); flat.cyl(bx + 1.6, deck + 12, z, 2.0, 2.0, 10, [0.18, 0.2, 0.24], 1);
     flat.cyl(bx - 2, deck + 12, z, 0.2, 6, 6, [0.7, 0.72, 0.75], 1); flat.box(bx - 2, deck + 18, z, 3.2, 0.3, 0.3, [0.7, 0.72, 0.75], 0);
   }
   function warehouse(grit, flat, x, z, w, d, rng, b) {
     var h = 8 + rng() * 3, col = jit([0.64, 0.66, 0.70], 0.1, rng);
-    grit.box(x, h / 2, z, w, h, d, col, 0, 0, 2); grit.box(x, h + 0.5, z, w + 1.2, 1.2, d + 1.2, mul(b.build ? b.build.roof : [0.4, 0.3, 0.3], 0.9), 0, 0, 1);
+    grit.bbox(x, h / 2, z, w, h, d, col, 0, Math.min(w, d) * 0.09, 2); grit.bbox(x, h + 0.5, z, w + 1.2, 1.2, d + 1.2, mul(b.build ? b.build.roof : [0.4, 0.3, 0.3], 0.9), 0, 0.5, 1);
     var dn = Math.max(2, Math.round(w / 7)); for (var i = 0; i < dn; i++) flat.box(x - w / 2 + (i + 0.5) * w / dn, 2.6, z + d / 2 + 0.05, w / dn * 0.7, 5, 0.4, [0.22, 0.23, 0.26], 0);
   }
   function craneStatic(grit, baseX, z) {
     var col = [0.98, 0.80, 0.20], h = 32, lx = [baseX - 11, baseX + 11], lz = [z + 9, z - 9];
     for (var a = 0; a < 2; a++) for (var bI = 0; bI < 2; bI++) { grit.box(lx[a], h / 2, lz[bI], 2.2, h, 2.2, col); grit.box(lx[a], h * 0.5, lz[bI], 1.1, h * 0.9, 1.1, mul(col, 0.92), 0, (a ? -0.5 : 0.5)); }
     grit.box(lx[0], h, z, 2.4, 2.4, 20, col); grit.box(lx[1], h, z, 2.4, 2.4, 20, col); grit.box(baseX, h, lz[0], 24, 2.4, 2.6, col); grit.box(baseX, h, lz[1], 24, 2.4, 2.6, col);
-    grit.box(baseX, h + 2.1, z - 14, 30, 2.6, 3.0, col); grit.box(baseX, h + 2.1, z + 5, 30, 2.6, 3.0, col); grit.box(baseX - 7, h + 2.6, z, 7, 4.8, 9, [0.22, 0.24, 0.28]);
+    grit.box(baseX, h + 2.1, z - 14, 30, 2.6, 3.0, col); grit.box(baseX, h + 2.1, z + 5, 30, 2.6, 3.0, col); grit.bbox(baseX - 7, h + 2.6, z, 7, 4.8, 9, [0.22, 0.24, 0.28], 0, 0.6);
   }
   function props(grit, flat, rng, era) {
     for (var mx = -56; mx <= 56; mx += 28) { grit.cyl(mx, 0, 12, 0.4, 12, 6, [0.3, 0.31, 0.33], 1); flat.box(mx, 12, 12, 2.4, 0.5, 0.8, [1.0, 0.95, 0.7], 0); }
-    var ci = 0; for (var yx = 28; yx <= 28 + era * 8; yx += 5.4) for (var yz = 16; yz <= 22; yz += 5.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.box(yx, 0.4 + r * 2.4, yz, 5, 2.3, 5, CONT[(ci + r) % CONT.length], 0); ci++; }
+    var ci = 0; for (var yx = 28; yx <= 28 + era * 8; yx += 5.4) for (var yz = 16; yz <= 22; yz += 5.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.bbox(yx, 0.4 + r * 2.4, yz, 5, 2.3, 5, CONT[(ci + r) % CONT.length], 0, 0.35); ci++; }
   }
   function lighthouse(grit, flat, x, z) {
     grit.cyl(x, 0, z, 5, 2.5, 8, [0.3, 0.31, 0.33], 0.9);
