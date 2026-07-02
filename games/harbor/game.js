@@ -1612,7 +1612,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v47';
+  var BUILD_TAG = 'v48';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1783,6 +1783,22 @@
       });
       html += '</div>';
     }
+    // Phase 9a: composition synergies readout — shows which building combos are firing right now
+    if (s.portFounded && s.synergies && s.synergies.length) {
+      html += '<div class="mp-sec">Synergies</div><div class="mp-grid">';
+      s.synergies.forEach(function (sy) {
+        html += '<div class="mp-item syn' + (sy.active ? ' on' : '') + '"><span class="mi-n">' + sy.name + (sy.active ? ' ✓' : '') + '</span><span class="mi-c">' + sy.effect + '</span></div>';
+      });
+      html += '</div>';
+    }
+    // Phase 9a: port focus / specialisation — a strategic tradeoff, one active per port
+    if (s.portFounded && SIM.FOCUS_DEFS) {
+      html += '<div class="mp-sec">Port focus</div><div class="mp-grid">';
+      SIM.FOCUS_DEFS.forEach(function (f) {
+        html += '<button class="mp-item focus' + (s.focus === f.id ? ' on' : '') + '" data-focus="' + f.id + '"><span class="mi-n">' + f.name + '</span><span class="mi-d">' + f.effect + '</span></button>';
+      });
+      html += '</div>';
+    }
     // managers: permanent multipliers — a real money sink that defines your port's strengths
     if (s.managers) {
       html += '<div class="mp-sec">Managers</div><div class="mp-grid">';
@@ -1811,6 +1827,7 @@
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
+    managePanel.querySelectorAll('[data-focus]').forEach(function (el) { el.addEventListener('click', function () { var f = el.getAttribute('data-focus'); if (s.focus === f) { sfx('tap'); return; } if (SIM.setFocus(null, f)) { plopFeedback(2, 'Focus set'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); seasonAdd(15); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
@@ -1948,6 +1965,8 @@
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
+    setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },
+    synergies: function (id) { return SIM ? SIM.synergies(id) : []; },
     foundPort: function (x, z) { if (E) foundHere(x, z); }, autoFound: function () { if (E) autoFound(); }, rate: function (x, z) { return HARBOR_MODELS.rate(x, z); },
     sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },

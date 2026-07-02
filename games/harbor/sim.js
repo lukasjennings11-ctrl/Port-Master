@@ -52,6 +52,47 @@
   var WORLD_ORDER = ['green', 'mountain', 'desert', 'tropical', 'nordic'];
   function spec(id) { return WORLD_SPEC[id] || WORLD_SPEC.green; }
 
+  // ---- building synergies (Phase 9a) ----
+  // Count-based (NOT spatial): a per-port multiplier read from the port's building COMPOSITION.
+  // Modest, stackable bonuses that turn "spend money" into an optimisation puzzle. chan: 'prod'|'sales'.
+  var SYNERGY_DEFS = [
+    { id: 'tradehub',  name: 'Trade Hub',   effect: '+12% sales',      chan: 'sales', amt: 0.12, test: function (c) { return (c.warehouse || 0) >= 1 && (c.market || 0) >= 1; } },
+    { id: 'boomtown',  name: 'Boomtown',    effect: '+15% production', chan: 'prod',  amt: 0.15, test: function (c) { return (c.cottage || 0) >= 3; } },
+    { id: 'millforge', name: 'Mill & Forge', effect: '+15% goods',     chan: 'prod',  amt: 0.15, test: function (c) { return (c.sawmill || 0) >= 1 && (c.factory || 0) >= 1; } },
+    { id: 'freeport',  name: 'Free Port',   effect: '+10% sales',      chan: 'sales', amt: 0.10, test: function (c) { return (c.market || 0) >= 1 && (c.dock || 0) >= 1; } }
+  ];
+  var SYN_MAX = 1.6;                                   // clamp: synergies stack but never runaway
+  function portCounts(port) { var c = {}, B = port.buildings || []; for (var i = 0; i < B.length; i++) { var t = B[i].type; c[t] = (c[t] || 0) + 1; } return c; }
+  // pure: given a port, return {prod, sales} composition multipliers (no CUR / DOM dependency)
+  function synergyMul(port) {
+    var c = portCounts(port), prod = 1, sales = 1;
+    for (var i = 0; i < SYNERGY_DEFS.length; i++) { var d = SYNERGY_DEFS[i]; if (d.test(c)) { if (d.chan === 'sales') sales += d.amt; else prod += d.amt; } }
+    return { prod: Math.min(prod, SYN_MAX), sales: Math.min(sales, SYN_MAX) };
+  }
+  function synergyList(port) {
+    var c = portCounts(port);
+    return SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: !!d.test(c) }; });
+  }
+
+  // ---- port specialisation / focus (Phase 9a) ----
+  // A per-port pickable tradeoff. Default 'none'. Applied inside tickPort alongside synergies.
+  var FOCUS_IDS = ['none', 'fishing', 'industry', 'trade'];
+  var FOCUS_DEFS = [
+    { id: 'none',     name: 'Balanced', effect: 'Even output — no bias' },
+    { id: 'fishing',  name: 'Fishing',  effect: '+25% fish, −15% goods' },
+    { id: 'industry', name: 'Industry', effect: '+25% goods, −15% fish' },
+    { id: 'trade',    name: 'Trade',    effect: '+15% sales & routes, −10% raw' }
+  ];
+  // per-resource production multiplier for a focus (raw = fish/timber; goods is manufactured)
+  function focusProdMul(focus, res) {
+    if (focus === 'fishing') return res === 'fish' ? 1.25 : (res === 'goods' ? 0.85 : 1);
+    if (focus === 'industry') return res === 'goods' ? 1.25 : (res === 'fish' ? 0.85 : 1);
+    if (focus === 'trade') return (res === 'fish' || res === 'timber') ? 0.90 : 1;   // −10% raw extraction
+    return 1;
+  }
+  function focusSalesMul(focus) { return focus === 'trade' ? 1.15 : 1; }
+  function focusRouteMul(focus) { return focus === 'trade' ? 1.15 : 1; }
+
   // managers: permanent EMPIRE-WIDE multipliers bought with money (a real spend sink)
   var MANAGERS = {
     fishing: { name: 'Master Angler', desc: '+18% all production', cost: 200, costMul: 1.85, per: 0.18, max: 10 },
@@ -102,7 +143,7 @@
   // ---- construction ----
   function freshPort(id) {
     return {
-      id: id, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0,
+      id: id, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, focus: 'none',
       demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0
     };
   }
@@ -146,6 +187,7 @@
       if (!pt.res) pt.res = { fish: 0, timber: 0, goods: 0 };
       if (!pt.demand) pt.demand = { fish: 1, timber: 1, goods: 1 };
       if (!pt.buildings) pt.buildings = [];
+      if (FOCUS_IDS.indexOf(pt.focus) < 0) pt.focus = 'none';   // backfill port specialisation on old saves
       if (!pt.contracts) pt.contracts = [];
       if (typeof pt.contractSeq !== 'number') pt.contractSeq = 0;
       for (var bi = 0; bi < pt.buildings.length; bi++) if (pt.buildings[bi].hp == null) pt.buildings[bi].hp = 100;
@@ -250,7 +292,8 @@
     var rs = S.network.routes, income = 0, shipped = 0;
     for (var i = 0; i < rs.length; i++) {
       var r = rs[i], pa = S.ports[r.a], pb = S.ports[r.b]; if (!pa || !pb) continue;
-      var want = routeCap(r.level) * dt;
+      var fb = Math.max(focusRouteMul(pa.focus || 'none'), focusRouteMul(pb.focus || 'none'));   // trade-focus ports ship more
+      var want = routeCap(r.level) * fb * dt;
       var space = Math.max(0, capsOf(pb)[r.res] - (pb.res[r.res] || 0));
       var amt = Math.min(want, pa.res[r.res] || 0, space);
       if (amt <= 0) continue;
@@ -468,7 +511,10 @@
     // soft-locking at zero output, and softens the blow when a storm wrecks your cottages.
     var labor = j > 0 ? clamp(p / j, 0.12, 1) : 1;
     labor = Math.min(1.25, labor * mgrMul('labour'));
-    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul(), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × Legacy × tide × crate surge
+    // Phase 9a: composition synergies + port specialisation fold in alongside the existing multipliers
+    var syn = synergyMul(port), focus = port.focus || 'none';
+    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul() * syn.prod;   // managers × Legacy × tide × crate surge × synergy
+    var salesMul = mgrMul('sales') * (META.sellMul || 1) * syn.sales * focusSalesMul(focus);
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
     var taper = {};
     for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
@@ -477,8 +523,8 @@
     for (var i = 0; i < port.buildings.length; i++) {
       var b = port.buildings[i], t = BT[b.type]; if (t.cat === 'defense') continue;
       var m = lvlMul(t, b.level) * (bhp(b) / 100);                   // storm-damaged buildings produce less (wrecked = 0)
-      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * sp[r] * taper[r] * dt;
-      if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
+      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * focusProdMul(focus, r) * sp[r] * taper[r] * dt;
+      if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * focusProdMul(focus, t.convert.to) * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
       if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sold = Math.min(have, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
       if (t.money) money += t.money * m * labor * salesMul * dt;
     }
@@ -515,6 +561,13 @@
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
   function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < bmax(b.type) && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
+  // pick a port's specialisation focus (none|fishing|industry|trade); default port is the active one
+  function setFocus(portId, focus) {
+    if (!S || !S.ports) return false;
+    var pid = (portId == null) ? S.active : portId, p = S.ports[pid];
+    if (!p || FOCUS_IDS.indexOf(focus) < 0) return false;
+    p.focus = focus; save(); return true;
+  }
 
   function canAdvance() {
     if (!S) return false;                                            // no era cap — endless
@@ -595,9 +648,11 @@
       v.damaged = port.buildings.filter(function (b) { return bhp(b) < 100; }).length;
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
       v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
+      v.synergies = synergyList(port); v.focus = port.focus || 'none';   // Phase 9a: composition bonuses + specialisation
     } else {
       v.res = { fish: 0, timber: 0, goods: 0 }; v.caps = { fish: BASE_CAP.fish, timber: BASE_CAP.timber, goods: BASE_CAP.goods };
       v.pop = 0; v.jobs = 0; v.buildings = []; v.counts = {}; v.demand = { fish: 1, timber: 1, goods: 1 }; v.contracts = [];
+      v.synergies = SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: false }; }); v.focus = 'none';
     }
     CUR = prev;
     return v;
@@ -605,6 +660,10 @@
 
   g.HARBOR_SIM = {
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS, WORLD_SPEC: WORLD_SPEC, WORLD_ORDER: WORLD_ORDER,
+    SYNERGY_DEFS: SYNERGY_DEFS, FOCUS_DEFS: FOCUS_DEFS, FOCUS_IDS: FOCUS_IDS,
+    setFocus: setFocus,
+    synergies: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return p ? synergyList(p) : synergyList({ buildings: [] }); },
+    synergyMul: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return synergyMul(p || { buildings: [] }); },
     eraName: eraName, eraReq: eraReq,
     applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide, setBoost: setBoost, boostT: function () { return BOOST.t; },
     __setRng: setRng,                                               // test-only: seed all gameplay RNG for deterministic tests

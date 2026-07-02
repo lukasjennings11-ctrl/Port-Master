@@ -378,6 +378,20 @@ html, body {
 .mp-item.auto.on { background: rgba(111,208,138,.16); border-color: rgba(111,208,138,.5); }
 .mp-item.auto .mi-c { color: var(--muted); }
 .mp-item.auto.on .mi-c { color: #8ef0a8; }
+/* Phase 9a: synergy readout (informational, non-interactive) — full-width rows, lit when active */
+.mp-item.syn { grid-column: 1 / -1; flex-direction: row; align-items: center; cursor: default; opacity: .5; background: rgba(255,255,255,.05); }
+.mp-item.syn .mi-n { flex: 1; }
+.mp-item.syn .mi-c { color: var(--muted); }
+.mp-item.syn:active { transform: none; }
+.mp-item.syn.on { opacity: 1; background: rgba(111,208,138,.14); border-color: rgba(111,208,138,.45); }
+.mp-item.syn.on .mi-n { color: #bff3cd; }
+.mp-item.syn.on .mi-c { color: #8ef0a8; }
+/* Phase 9a: port focus picker — 2×2 grid of tradeoff buttons, selected one highlighted brass */
+.mp-item.focus { align-items: flex-start; }
+.mp-item.focus .mi-d { font-size: 9px; color: var(--muted); margin-top: 1px; }
+.mp-item.focus.on { background: rgba(214,178,94,.16); border-color: rgba(214,178,94,.55); }
+.mp-item.focus.on .mi-n { color: var(--brass); }
+.mp-item.focus.on .mi-n::after { content: ' ✓'; }
 #legacypanel .lg-stats { font-family: 'Fredoka', sans-serif; font-size: 10.5px; color: #9a8cc0; text-align: center; margin-top: 8px; }
 
 /* daily missions */
