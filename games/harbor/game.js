@@ -2264,7 +2264,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v58';
+  var BUILD_TAG = 'v59';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
