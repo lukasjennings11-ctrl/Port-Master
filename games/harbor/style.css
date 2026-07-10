@@ -353,6 +353,15 @@ html, body {
   border-radius: 12px; padding: 8px 10px; backdrop-filter: blur(8px);
 }
 #managepanel.show, #settingspanel.show, #exppanel.show { display: flex; }
+/* wide screens: dock the sheets to the right so the port (and the building you just
+   bought) stays visible while you shop — mobile keeps the thumb-reachable bottom sheet */
+@media (min-width: 700px) {
+  #managepanel, #settingspanel, #exppanel {
+    left: auto; right: 12px; transform: none;
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    width: 340px; max-height: min(74vh, 660px);
+  }
+}
 .ex-slots { margin-left: auto; margin-right: 8px; font-family: 'Fredoka',sans-serif; font-size: 10px; font-weight: 800; color: var(--teal); }
 .mp-item.ex-go { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; background: rgba(124,224,214,.08); border-color: rgba(124,224,214,.24); }
 .mp-item.ex-go .mi-n { flex: 1; }

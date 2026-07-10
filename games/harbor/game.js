@@ -882,6 +882,7 @@
     applyWeatherGain(stormActive); applyMusicGain();
   }
   document.addEventListener('visibilitychange', function () {
+    metricsVisibility(document.hidden);   // Phase 13d: flush/persist accumulated playtime on hide, resume on foreground
     // Phase 12b: portal gameplay-lifecycle bracket — stop on backgrounded, resume on foreground
     // (only if a port is actually founded; nothing to report on the pre-founding wild-island view).
     if (document.hidden) adsGameplayStop();
@@ -1503,6 +1504,7 @@
   }
   function collectVoyageUI(seq) {
     var out = SIM.collectVoyage(seq); if (!out) return;
+    metricsMilestone('firstVoyage');
     if (out.crate) grantCrate(out.crate);
     var rel = out.relic ? grantRandomRelic() : null;
     var pw = portWorld();
@@ -1849,6 +1851,7 @@
   }
   function doPrestige() {
     if (!SIM || !SIM.canPrestige() || cine) { sfx('lose'); return; }
+    metricsMilestone('firstPrestige');
     var gain = SIM.prestigeGain();
     if (window.Retention) Retention.submitScore(GAME, Math.floor(SIM.raw().lifetimeMoney));   // banked peak net worth
     setLegacyBal(legacyBal() + gain);
@@ -2078,7 +2081,7 @@
   function crateCount() { return window.Retention ? (Retention.get(GAME, 'crates', 0) | 0) : 0; }
   function crateOpenedFlag() { return !!(window.Retention && Retention.get(GAME, 'crateOpened', false)); }
   function setCrates(n) { if (window.Retention) Retention.set(GAME, 'crates', Math.max(0, n | 0)); }
-  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); announceFeature('crate', '🎁', 'Salvage Crate!', 'Tap 🎁 in the bottom bar to open it.'); }
+  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); metricsMilestone('firstCrate'); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); announceFeature('crate', '🎁', 'Salvage Crate!', 'Tap 🎁 in the bottom bar to open it.'); }
   function ownedBlueprints() { var a = []; BLUEPRINTS.forEach(function (b) { if (window.Progress && Progress.unlocked(GAME, b.id)) a.push(b); }); return a; }
   function unownedBlueprints() { return BLUEPRINTS.filter(function (b) { return !(window.Progress && Progress.unlocked(GAME, b.id)); }); }
   // weighted roll → applies the reward, returns { tier, color, title, sub }
@@ -2199,6 +2202,7 @@
   }
   function onBonusReward() {
     bonusBusy = false;
+    metricsMilestone('firstBonus');
     // stacking policy: if a boost is already running (e.g. a crate-surge ambient event fired while
     // the reward was in flight), take the higher multiplier and extend the duration, capped at 15 min,
     // rather than clobbering whichever one happened to land first.
@@ -2264,7 +2268,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v58';
+  var BUILD_TAG = 'v60';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2356,6 +2360,9 @@
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
          (charters > 0 ? ' · ' + charters + ' charter' + (charters > 1 ? 's' : '') : '') +
          (leg > 0 ? ' · ✦' + fmt(leg) + ' Legacy' : '') + '</div>';
+    // Phase 13d: one muted line — players like seeing it, and it doubles as our local debug view
+    var metricsLine = metricsAboutLine();
+    if (metricsLine) h += '<div class="set-about">' + metricsLine + '</div>';
     // Phase 12b: portal builds get no external links and no PWA install prompt (both disallowed
     // by portal hosts) — just a plain version line instead of the privacy/install row.
     if (PORTAL_MODE) {
@@ -2409,6 +2416,82 @@
   function promptInstall() {
     if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(function () { deferredPrompt = null; }); }
     else { showHint('Use your browser menu → “Add to Home Screen” to install PortMaster'); }
+  }
+
+  // ---- Phase 13d: local fun-funnel metrics — a tiny, privacy-safe launch-analytics instrument.
+  // Zero network, zero PII: one record in the existing Retention store per device (never leaves
+  // it — see LAUNCH-KPIS.md for why local-only is fine for the funnel half of the scorecard).
+  // Tracks: sessions (once per boot), totalPlayMs (accumulated only while the tab is visible —
+  // hooked off the existing visibilitychange listener, persisted every ~30s and on hide), and
+  // first-time milestone timestamps (ms since this device's first-ever session) for the funnel:
+  // firstBuild, firstEra, firstCrate, firstVoyage, firstPrestige, firstBonus. Every entry point
+  // is try/catch-guarded — a metrics bug must never throw into gameplay — and writes are
+  // throttled via a dirty flag + min interval so we're not hammering localStorage every frame.
+  var METRICS_KEY = 'metrics', METRICS_SAVE_MS = 30000;
+  var metrics = null, metricsDirty = false, metricsLastSave = 0, metricsVisibleSince = null;
+  function metricsDefaults() {
+    return { sessions: 0, totalPlayMs: 0, firstSeen: null, firstBuild: null, firstEra: null, firstCrate: null, firstVoyage: null, firstPrestige: null, firstBonus: null };
+  }
+  function metricsSave(force) {
+    try {
+      if (!metrics || !window.Retention) return;
+      var now = Date.now();
+      if (!force && (!metricsDirty || now - metricsLastSave < METRICS_SAVE_MS)) return;
+      Retention.set(GAME, METRICS_KEY, metrics);
+      metricsLastSave = now; metricsDirty = false;
+    } catch (e) {}
+  }
+  function metricsFlushPlaytime() {
+    try {
+      if (!metrics || metricsVisibleSince == null) return;
+      var now = Date.now(), dt = now - metricsVisibleSince;
+      metricsVisibleSince = now;
+      if (dt > 0) { metrics.totalPlayMs = (metrics.totalPlayMs || 0) + dt; metricsDirty = true; }
+    } catch (e) {}
+  }
+  function metricsInit() {
+    try {
+      if (!window.Retention) return;
+      var m = Retention.get(GAME, METRICS_KEY, null);
+      if (!m || typeof m !== 'object') m = {};
+      var d = metricsDefaults(); for (var k in d) if (!(k in m)) m[k] = d[k];   // future-proof: fill any missing keys
+      metrics = m;
+      metrics.sessions = (metrics.sessions | 0) + 1;
+      if (!metrics.firstSeen) metrics.firstSeen = Date.now();
+      metricsVisibleSince = (typeof document !== 'undefined' && document.hidden) ? null : Date.now();
+      metricsDirty = true; metricsSave(true);
+      setInterval(function () { metricsFlushPlaytime(); metricsSave(false); }, METRICS_SAVE_MS);   // periodic ~30s flush while open
+    } catch (e) {}
+  }
+  function metricsVisibility(hidden) {
+    try {
+      if (!metrics) return;
+      if (hidden) { metricsFlushPlaytime(); metricsVisibleSince = null; metricsSave(true); }   // persist on hide
+      else metricsVisibleSince = Date.now();
+    } catch (e) {}
+  }
+  function metricsMilestone(key) {
+    try {
+      if (!metrics || metrics[key]) return;   // first-time-only latch
+      metrics[key] = Date.now() - (metrics.firstSeen || Date.now());
+      metricsDirty = true; metricsSave(true);
+    } catch (e) {}
+  }
+  function metricsSnapshot() {
+    try {
+      if (!metrics) return null;
+      metricsFlushPlaytime();
+      var out = {}; for (var k in metrics) out[k] = metrics[k];
+      out.avgSessionMin = metrics.sessions > 0 ? Math.round((metrics.totalPlayMs / 60000 / metrics.sessions) * 10) / 10 : 0;
+      return out;
+    } catch (e) { return null; }
+  }
+  function metricsAboutLine() {   // one muted Settings/About line — also doubles as our debug view
+    try {
+      var snap = metricsSnapshot(); if (!snap) return null;
+      var mins = Math.floor(snap.totalPlayMs / 60000), h = Math.floor(mins / 60), m = mins % 60;
+      return 'Sessions: ' + snap.sessions + ' · playtime: ' + h + 'h ' + m + 'm';
+    } catch (e) { return null; }
   }
 
   function updateHUD() {
@@ -2570,7 +2653,7 @@
     }
     managePanel.innerHTML = html;
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
-    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); bumpDaily('build'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
@@ -2626,6 +2709,7 @@
   }
   function doAdvance() {
     if (!SIM.canAdvance() || cine) return;
+    metricsMilestone('firstEra');
     var req = SIM.eraReq(SIM.raw().era), bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
     SIM.advanceEra(); var toEra = SIM.raw().era;
     var newWorlds = []; HARBOR_BIOME_ORDER.forEach(function (id) { if (HARBOR_BIOMES[id].unlockEra <= toEra && !isUnlocked(id)) { newWorlds.push(HARBOR_BIOMES[id].name); unlockWorld(id); } });
@@ -2639,6 +2723,7 @@
   }
 
   function boot() {
+    metricsInit();   // Phase 13d: local fun-funnel metrics — one row per boot, never blocks/throws
     if (window.Portal) Portal.loadingStart();
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
     if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play PortMaster.</div>'; return; }
@@ -2798,7 +2883,9 @@
     errors: function () { return errLog.slice(); },           // ring buffer copy — last 20 {t,msg,src,line}
     clearErrors: function () { errLog = []; try { localStorage.removeItem(ERRLOG_KEY); } catch (e) {} if (settingsOpen) renderSettings(); },
     portalMode: function () { return PORTAL_MODE; },
-    advance: function () { doAdvance(); return !!cine; }       // test-only: drive the real era-advance path (incl. the commercialBreak hook) without needing to grind the money/building gate live
+    advance: function () { doAdvance(); return !!cine; },      // test-only: drive the real era-advance path (incl. the commercialBreak hook) without needing to grind the money/building gate live
+    // Phase 13d: local fun-funnel metrics (full record + derived avgSessionMin) — also our debug view
+    metrics: function () { return metricsSnapshot(); }
   };
 
   if (canvas && canvas.getContext) boot();
