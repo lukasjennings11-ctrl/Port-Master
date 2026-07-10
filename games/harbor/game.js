@@ -1492,7 +1492,7 @@
   // its branch is the active pick, so respecing back re-activates it. Survives prestige. ----
   var DOCTRINE_UNLOCK = 3, DOCTRINE_PICK_COST = 25, DOCTRINE_RESPEC_COST = 50;
   var DOCTRINES = [
-    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+35% sales · +10% route capacity',
+    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+20% sales · +10% route capacity',
       cap: { name: 'Monopoly', desc: '+1 permanent contract slot', cost: 120 } },
     { id: 'explorer', icon: '🧭', name: 'Explorer Doctrine', desc: '+35% voyage speed · +1 voyage slot',
       cap: { name: 'Flagship', desc: '+40% voyage rewards', cost: 120 } }
@@ -1578,7 +1578,7 @@
     // Phase 9c: active doctrine branch (+ its capstone, only while that branch is picked)
     var doc = doctrineGet();
     if (doc.pick === 'merchant') {
-      M.sellMul += 0.35; M.routeMul += 0.10;
+      M.sellMul += 0.20; M.routeMul += 0.10;   // Phase 11a: was +0.35 — sales compound (income→builds→income); autoplay hit 2.5–2.7× vanilla lifetime vs the 2.5× cap; +0.20 lands ≈2.0×
       if (doc.caps.merchant) M.contractSlots += 1;                       // Monopoly
     } else if (doc.pick === 'explorer') {
       M.voyageSpeed += 0.35; M.voyageSlots += 1;
@@ -1939,7 +1939,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v53';
+  var BUILD_TAG = 'v54';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
