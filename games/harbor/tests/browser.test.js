@@ -394,6 +394,77 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('bonus: daily cap (6/day) hides the button quietly once reached — no nagging', capped.shown === false && capped.hook.available === false);
   await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); window.__harbor.forceHUD(); });
 
+  // Phase 12b: production hardening — error capture, portal lifecycle events, and portal mode.
+  // Run before the AdProvider-resilience block below, which deliberately replaces window.ADS with
+  // a bare object lacking _counts/lifecycle methods (so window.ADS._counts is only meaningful here).
+
+  // error capture: a dispatched 'error' event (not an actual uncaught throw, so it never trips this
+  // harness's own errs[] tracking) lands in the ring buffer with the documented {t,msg,src,line}
+  // shape, and clearErrors() empties it back out.
+  await page.evaluate(() => { window.dispatchEvent(new ErrorEvent('error', { message: 'synthetic test error', filename: 'test.js', lineno: 42 })); });
+  await sleep(50);
+  const errCap = await page.evaluate(() => window.__harbor.errors());
+  const lastErr = errCap[errCap.length - 1] || {};
+  ok('errors: injected error captured in the ring buffer with t/msg/src/line',
+    errCap.length >= 1 && lastErr.msg === 'synthetic test error' && lastErr.src === 'test.js' && lastErr.line === 42 && typeof lastErr.t === 'number');
+  await page.evaluate(() => window.__harbor.clearErrors());
+  ok('errors: clearErrors() empties the ring buffer', await page.evaluate(() => window.__harbor.errors().length === 0));
+
+  // ad lifecycle: loadingFinished() fired exactly once by the time this run's boot hid the loader,
+  // and gameplayStart() has fired at least once (founding the port, right at the top of this run).
+  const lc = await page.evaluate(() => window.ADS._counts);
+  ok('ads lifecycle: loadingFinished() fired once on boot, gameplayStart() fired on founding',
+    lc.loadingFinished === 1 && lc.gameplayStart >= 1);
+
+  // commercialBreak: the one natural-pause hook, at the era-ascension cinematic. Drive a real
+  // advance (money + building gate, same path a player takes) via the __harbor.advance() test hook
+  // rather than setEra() (which bypasses doAdvance()/startAscension() entirely).
+  const cbBefore = await page.evaluate(() => window.ADS._counts.commercialBreak);
+  await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    window.__harbor.setEra(4); S.raw().money = 5e6;
+    if (S.canBuild('dock')) S.build('dock'); if (S.canBuild('dock')) S.build('dock');
+  });
+  await page.evaluate(() => window.__harbor.advance());
+  await sleep(150);
+  const cbAfter = await page.evaluate(() => window.ADS._counts.commercialBreak);
+  ok('ads: commercialBreak() fires on era advance, before the ascension cinematic', cbAfter === cbBefore + 1);
+
+  // portal mode (?portal=1): service worker not registered, "Add to home screen" + privacy link
+  // hidden, plain version line shown instead. Fresh context/page — independent of `page` above.
+  const portalPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
+  const portalErrs = [];
+  portalPage.on('pageerror', e => portalErrs.push('PAGEERR ' + e.message));
+  portalPage.on('console', m => { if (m.type() === 'error' && !/404|favicon/.test(m.text())) portalErrs.push('CONSOLE ' + m.text()); });
+  await portalPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&portal=1`, { waitUntil: 'load' });
+  await portalPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(500);
+  const portalState = await portalPage.evaluate(async () => {
+    document.getElementById('setbtn').click();
+    var regs = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistrations() : [];
+    return {
+      portalMode: window.__harbor.portalMode(),
+      swRegs: regs.length,
+      installRow: !!document.querySelector('[data-set="install"]'),
+      privacyLink: !!document.querySelector('a[href*="privacy.html"]'),
+      aboutText: (document.querySelector('.set-portal-ver') || {}).textContent || ''
+    };
+  });
+  ok('portal mode: ?portal=1 → PORTAL_MODE true, SW not registered, install/privacy rows hidden, plain version shown',
+    portalState.portalMode === true && portalState.swRegs === 0 && portalState.installRow === false &&
+    portalState.privacyLink === false && /PortMaster v\d+/.test(portalState.aboutText));
+  ok('portal mode: zero console/page errors', portalErrs.length === 0);
+  await portalPage.close();
+
+  // non-portal mode: unchanged behaviour — SW registers, install row + privacy link present.
+  const nonPortalState = await page.evaluate(async () => {
+    document.getElementById('setbtn').click();
+    var regs = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistrations() : [];
+    return { swRegs: regs.length, installRow: !!document.querySelector('[data-set="install"]'), privacyLink: !!document.querySelector('a[href*="privacy.html"]') };
+  });
+  ok('non-portal mode: unchanged — SW registers, install row + privacy link present',
+    nonPortalState.swRegs >= 1 && nonPortalState.installRow === true && nonPortalState.privacyLink === true);
+
   // AdProvider resilience: a provider whose init() throws must never break the game — boot/HUD keep
   // running fine, the bonus button just stays hidden rather than the game crashing or console erroring.
   await page.evaluate(() => {
