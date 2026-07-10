@@ -53,8 +53,39 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // Phase 11b: refreshed welcome copy should name the systems a newcomer wouldn't otherwise discover
   const wmFeat = await page.evaluate(() => { var el = document.querySelector('#welcomemodal .wm-feat'); return el ? el.textContent : ''; });
   ok('welcome: refreshed copy mentions Expeditions', /expedition/i.test(wmFeat));
-  await page.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); var H = window.__harbor, S = window.HARBOR_SIM; H.autoFound(); S.setEra(4); S.raw().money = 5e6; S.raw().lifetimeMoney = 5e6; var p = S.port('green'); ['fishing_hut', 'fishing_hut', 'cottage', 'jetty', 'warehouse', 'market'].forEach(t => { if (S.canBuild(t)) S.build(t); }); p.res.fish = 999; p.res.timber = 999; p.res.goods = 999; });
+  await page.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); window.__harbor.autoFound(); });
   ok('found: port founded', await page.evaluate(() => !!window.HARBOR_SIM.raw().founded));
+
+  // Phase 15a: trade-network guidance — first playtest feedback was "I can't set up a trade
+  // network, I can only click on one city": with exactly 1 founded harbour (still true right
+  // after autoFound, era 0) the trade map must explain why, not stay silent.
+  await page.evaluate(() => window.__harbor.openTrade());
+  await sleep(120);
+  const tg1 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('trade guide: card visible with 1 founded harbour', tg1.founded === 1 && tg1.guide === true);
+  // tap the only founded node — selection should show a persistent "tap another harbour" hint
+  await page.evaluate(() => window.__harbor.tradeTapNode('green'));
+  const tg2 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('trade guide: selecting the first node shows the "tap another harbour" link hint', tg2.sel === 'green' && /tap another harbour/i.test(tg2.msg));
+  await page.evaluate(() => window.__harbor.closeTrade());
+
+  // Manage panel clarity — "don't show me items I cannot click, or blank them out" (2nd playtest
+  // complaint). With next to no money, every unaffordable buy row across the panel should be
+  // ghosted (not just faintly dimmer) and say what's missing; the New-buildings section should
+  // also teaser next era's building names so hiding them doesn't look like a dead end.
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 10; document.getElementById('managebtn').click(); });
+  await sleep(120);
+  const mg = await page.evaluate(() => {
+    var rows = Array.from(document.querySelectorAll('#managepanel .mp-item.ghosted'));
+    var teaser = document.querySelector('#managepanel .mp-teaser');
+    return { ghostCount: rows.length, needText: rows.some(r => /Need £/.test(r.textContent)), teaserText: teaser ? teaser.textContent : null };
+  });
+  ok('manage: unaffordable rows carry the .ghosted class', mg.ghostCount > 0);
+  ok('manage: a ghosted row shows a muted "Need £" price', mg.needText);
+  ok('manage: New-buildings teaser lists next-era building names', !!mg.teaserText && /Warehouse/.test(mg.teaserText) && /Fish Market/.test(mg.teaserText));
+  await page.evaluate(() => document.getElementById('managebtn').click());   // close it back up for the rest of the flow
+
+  await page.evaluate(() => { var S = window.HARBOR_SIM; S.setEra(4); S.raw().money = 5e6; S.raw().lifetimeMoney = 5e6; var p = S.port('green'); ['fishing_hut', 'fishing_hut', 'cottage', 'jetty', 'warehouse', 'market'].forEach(t => { if (S.canBuild(t)) S.build(t); }); p.res.fish = 999; p.res.timber = 999; p.res.goods = 999; });
 
   // events: fire + resolve each; modal appears for choices
   for (const id of ['goldrush', 'castaway', 'raid', 'gamble', 'commission', 'smuggler']) {
@@ -129,6 +160,13 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // living fleet: a route touching the active port spawns a shuttling cargo ship
   await page.evaluate(() => { var S = window.HARBOR_SIM; S.foundPort('tropical'); S.setActive('green'); S.raw().money = 1e6; S.addRoute('green', 'tropical', 'fish'); });
   ok('fleet: cargo ship shuttles the active-port route', await page.evaluate(() => window.__harbor.fleet().route === 1));
+
+  // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
+  await page.evaluate(() => window.__harbor.openTrade());
+  await sleep(120);
+  const tg3 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('trade guide: card hidden once 2+ harbours are founded', tg3.founded >= 2 && tg3.guide === false);
+  await page.evaluate(() => window.__harbor.closeTrade());
 
   // rival race → win
   await page.evaluate(() => window.__harbor.triggerRival()); await sleep(120);
