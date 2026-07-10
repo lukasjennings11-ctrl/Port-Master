@@ -653,6 +653,7 @@
   // ---- feel: audio + particle/popup helpers ----
   var muted = !!(window.Retention && Retention.get(GAME, 'muted', false));
   var hapticsOff = !!(window.Retention && Retention.get(GAME, 'hapticsOff', false));
+  var musicOff = !!(window.Retention && Retention.get(GAME, 'musicOff', false));
   var hudShownMoney = 0, prevMoney = 0, incomeTimer = 0, cine = null, ascendBanner = null;
   function sfx(name, a) { if (window.Juice && !muted) Juice.Audio.play(name, a); }
   function haptic(ms) { if (window.Juice && !hapticsOff) Juice.vibrate(ms); }
@@ -663,11 +664,28 @@
     if (settingsOpen) renderSettings();
   }
   function applyHaptics(off) { hapticsOff = !!off; if (window.Retention) Retention.set(GAME, 'hapticsOff', hapticsOff); if (settingsOpen) renderSettings(); }
+  function applyMusicOff(v) {
+    musicOff = !!v; if (window.Retention) Retention.set(GAME, 'musicOff', musicOff);
+    applyMusicGain();
+    if (settingsOpen) renderSettings();
+  }
 
-  // Ambient harbour soundscape — a gentle synthesized wave bed with a slow swell
-  // plus occasional gull cries, on its own WebAudio graph. Subtle, respects the
-  // Sound toggle, pauses when the tab is hidden. No audio assets required.
-  var amb = null, ambGullT = null;
+  // Ambient harbour soundscape (Phase 11c) — three layers hung off one master graph:
+  //  · wave    — brown-noise bed + tidal LFO (existing), quieter/darker at night
+  //  · night   — sparse cricket/owl chirps, day↔night gulls/crickets cross-fade over ~2s
+  //  · weather — bandpass-filtered howl + low rumble one-shots, silent until a storm warns
+  //  · music   — gentle pentatonic sequencer bed, low volume, off at night, ducked in storms
+  // All gains ramp smoothly; the Sound toggle / tab-hidden / master mute stays authoritative
+  // (amb.master gates everything). No audio assets — every layer is synthesized.
+  var amb = null, ambGullT = null, ambCritT = null, ambMusicT = null;
+  var ambMusicPhrase = null, ambMusicIdx = 0, ambTodT = 0, ambWasNight = null, stormActive = false;
+  // last commanded target per ramped layer — the decision our code made, independent of how
+  // fast the browser's audio thread actually gets there (exposed for deterministic testing;
+  // WebAudio ramp convergence timing can't be reliably polled headless under swiftshader load).
+  var ambTarget = { master: 0, wave: 0.5, night: 0, weather: 0, music: 0 };
+  var MUSIC_SCALE = [220.00, 261.63, 293.66, 329.63, 392.00, 440.00];   // A3 C4 D4 E4 G4 A4 — pentatonic
+  var MUSIC_PAD = 110.00;                                               // low pad note, A2
+  var MUSIC_BASE = 0.085;                                               // bed volume — low, background only
   function startAmbient() {
     if (muted) return;
     if (!amb) {
@@ -675,6 +693,8 @@
         var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
         var ctx = new AC();
         var master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+
+        // wave bed: brown-ish noise -> lowpass -> gain, with a slow tidal swell LFO
         var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), d = buf.getChannelData(0), last = 0;
         for (var i = 0; i < d.length; i++) { var w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3.2; }   // brown-ish noise
         var src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
@@ -684,18 +704,39 @@
         var lfo = ctx.createOscillator(); lfo.frequency.value = 0.09; var lfoG = ctx.createGain(); lfoG.gain.value = 0.22;
         lfo.connect(lfoG); lfoG.connect(wave.gain); lfo.start();                                   // slow tidal swell
         src.start();
-        amb = { ctx: ctx, master: master };
-        scheduleGull();
+
+        // night critter layer: silent by day, gulls hand off to crickets/owls after dusk
+        var night = ctx.createGain(); night.gain.value = 0; night.connect(master);
+
+        // weather layer: white-noise -> bandpass (slow LFO on centre freq = "howl") -> gain, silent
+        // until a storm warns; strike moments add a separate low rumble one-shot into the same gain.
+        var wbuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), wd = wbuf.getChannelData(0);
+        for (var j = 0; j < wd.length; j++) wd[j] = Math.random() * 2 - 1;
+        var wsrc = ctx.createBufferSource(); wsrc.buffer = wbuf; wsrc.loop = true;
+        var wbp = ctx.createBiquadFilter(); wbp.type = 'bandpass'; wbp.frequency.value = 900; wbp.Q.value = 0.7;
+        var weather = ctx.createGain(); weather.gain.value = 0;
+        wsrc.connect(wbp); wbp.connect(weather); weather.connect(master);
+        var wlfo = ctx.createOscillator(); wlfo.frequency.value = 0.13; var wlfoG = ctx.createGain(); wlfoG.gain.value = 380;
+        wlfo.connect(wlfoG); wlfoG.connect(wbp.frequency); wlfo.start();
+        wsrc.start();
+
+        // generative music bed: its own low gain, sequenced notes connect in per-note
+        var music = ctx.createGain(); music.gain.value = 0; music.connect(master);
+
+        amb = { ctx: ctx, master: master, wave: wave, waveLP: lp, night: night, weather: weather, music: music };
+        scheduleGull(); scheduleCritter(); scheduleMusic();
       } catch (e) { amb = null; return; }
     }
     if (amb.ctx.state === 'suspended') { try { amb.ctx.resume(); } catch (e) {} }
     var t = amb.ctx.currentTime;
+    ambTarget.master = 0.16;
     amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
     amb.master.gain.linearRampToValueAtTime(0.16, t + 1.5);
   }
   function stopAmbient() {
     if (!amb) return;
     var t = amb.ctx.currentTime;
+    ambTarget.master = 0;
     amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
     amb.master.gain.linearRampToValueAtTime(0, t + 0.6);
   }
@@ -714,11 +755,124 @@
   function scheduleGull() {
     clearTimeout(ambGullT);
     ambGullT = setTimeout(function () {
-      if (amb && !muted && !document.hidden && scene && scene.port) gullCry();
+      if (amb && !muted && !document.hidden && scene && scene.port && env().night <= 0.5) gullCry();   // daylight only
       scheduleGull();
     }, 7000 + Math.random() * 13000);
   }
-  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) startAmbient(); });
+  // sparse cricket chirps (most nights) with an occasional soft owl hoot, very quiet — night only
+  function critterChirp() {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime;
+    if (Math.random() < 0.22) {
+      for (var k = 0; k < 2; k++) {
+        var o = ctx.createOscillator(), g = ctx.createGain(), st = t0 + k * 0.36;
+        o.type = 'sine'; o.frequency.setValueAtTime(320 - k * 40, st);
+        g.gain.setValueAtTime(0.0001, st); g.gain.linearRampToValueAtTime(0.045, st + 0.06); g.gain.exponentialRampToValueAtTime(0.0006, st + 0.5);
+        o.connect(g); g.connect(amb.night); o.start(st); o.stop(st + 0.55);
+      }
+    } else {
+      for (var k2 = 0; k2 < 3; k2++) {
+        var o2 = ctx.createOscillator(), g2 = ctx.createGain(), st2 = t0 + k2 * 0.09;
+        o2.type = 'square'; o2.frequency.setValueAtTime(2600 + Math.random() * 400, st2);
+        g2.gain.setValueAtTime(0.0001, st2); g2.gain.linearRampToValueAtTime(0.02, st2 + 0.01); g2.gain.exponentialRampToValueAtTime(0.0004, st2 + 0.07);
+        o2.connect(g2); g2.connect(amb.night); o2.start(st2); o2.stop(st2 + 0.09);
+      }
+    }
+  }
+  function scheduleCritter() {
+    clearTimeout(ambCritT);
+    ambCritT = setTimeout(function () {
+      if (amb && !muted && !document.hidden && env().night > 0.5) critterChirp();
+      scheduleCritter();
+    }, 6000 + Math.random() * 9000);
+  }
+  // generative pentatonic music bed — soft plucks (+ occasional low pad), lots of rest,
+  // ~56–66bpm, scheduled with a small lookahead against ctx.currentTime for clean timing.
+  function buildMusicPhrase() {
+    var len = 12 + Math.floor(Math.random() * 8), out = [];
+    for (var i = 0; i < len; i++) {
+      var r = Math.random();
+      if (r < 0.46) out.push(null);                                                   // rest — calm, not chiptune-busy
+      else if (r < 0.56) out.push({ pad: true });                                      // occasional low pad note
+      else out.push({ note: MUSIC_SCALE[Math.floor(Math.random() * MUSIC_SCALE.length)] });
+    }
+    return out;
+  }
+  function playMusicNote(step) {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime + 0.05;                                    // small lookahead
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = step.pad ? 'sine' : 'triangle';
+    o.frequency.setValueAtTime(step.pad ? MUSIC_PAD : step.note, t0);
+    var peak = step.pad ? 0.55 : 1.0, dur = step.pad ? 2.6 : 1.2;                       // ~1.2s release on plucks
+    g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(peak, t0 + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    o.connect(g); g.connect(amb.music); o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  function scheduleMusic() {
+    clearTimeout(ambMusicT);
+    var bpm = 56 + Math.random() * 10;                                                 // 56–66 BPM, gently humanized
+    ambMusicT = setTimeout(function () {
+      if (amb && !muted && !document.hidden && !musicOff && env().night <= 0.5) {
+        if (!ambMusicPhrase) ambMusicPhrase = buildMusicPhrase();                      // seeded once per session
+        var step = ambMusicPhrase[ambMusicIdx % ambMusicPhrase.length]; ambMusicIdx++;
+        if (step) playMusicNote(step);
+      }
+      scheduleMusic();
+    }, 60000 / bpm);
+  }
+  // weather layer: ramps between silence and a moderate howl on hazard warn/idle; a strike
+  // moment adds a short 40–60Hz rumble swell. Also ducks the music bed to ~30% during storms.
+  function applyWeatherGain(active) {
+    if (!amb) return;
+    var t = amb.ctx.currentTime, target = active ? 0.14 : 0;
+    ambTarget.weather = target;
+    amb.weather.gain.cancelScheduledValues(t); amb.weather.gain.setValueAtTime(amb.weather.gain.value, t);
+    amb.weather.gain.linearRampToValueAtTime(target, t + (active ? 1.2 : 1.8));
+  }
+  function applyMusicGain() {
+    if (!amb) return;
+    var t = amb.ctx.currentTime, night = env().night > 0.5;
+    var target = (musicOff || night) ? 0 : (stormActive ? MUSIC_BASE * 0.3 : MUSIC_BASE);
+    ambTarget.music = target;
+    amb.music.gain.cancelScheduledValues(t); amb.music.gain.setValueAtTime(amb.music.gain.value, t);
+    amb.music.gain.linearRampToValueAtTime(target, t + (stormActive ? 0.8 : 2));
+  }
+  function stormRumble() {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime;
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(56, t0); o.frequency.exponentialRampToValueAtTime(40, t0 + 0.9);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.22, t0 + 0.12); g.gain.exponentialRampToValueAtTime(0.0008, t0 + 1.1);
+    o.connect(g); g.connect(amb.master); o.start(t0); o.stop(t0 + 1.15);
+  }
+  // per-frame ToD watcher: crosses the day/night threshold at most once per state, ramping the
+  // wave bed, night critters and music bed over ~2s — throttled, cheap even at 60fps.
+  function updateAmbientToD(dt) {
+    if (!amb) return;
+    ambTodT += dt; if (ambTodT < 0.5) return; ambTodT = 0;
+    var night = env().night > 0.5;
+    if (night === ambWasNight) return;
+    ambWasNight = night;
+    var t = amb.ctx.currentTime;
+    ambTarget.wave = night ? 0.32 : 0.5; ambTarget.night = night ? 1 : 0;
+    amb.wave.gain.cancelScheduledValues(t); amb.wave.gain.setValueAtTime(amb.wave.gain.value, t);
+    amb.wave.gain.linearRampToValueAtTime(ambTarget.wave, t + 2);
+    amb.waveLP.frequency.cancelScheduledValues(t); amb.waveLP.frequency.setValueAtTime(amb.waveLP.frequency.value, t);
+    amb.waveLP.frequency.linearRampToValueAtTime(night ? 320 : 540, t + 2);
+    amb.night.gain.cancelScheduledValues(t); amb.night.gain.setValueAtTime(amb.night.gain.value, t);
+    amb.night.gain.linearRampToValueAtTime(ambTarget.night, t + 2);
+    applyMusicGain();
+  }
+  // force an immediate resync of every ramped layer to the current ToD/hazard/mute state,
+  // bypassing the per-frame throttle and the "already applied" dedupe — useful after a long
+  // background pause (visibility resume) and as a deterministic test/debug hook.
+  function refreshAmbientNow() {
+    if (!amb) return;
+    ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
+    applyWeatherGain(stormActive); applyMusicGain();
+  }
+  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -780,6 +934,7 @@
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    if (amb) updateAmbientToD(dt);                              // Phase 11c: day/night audio cross-fade
     // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
     // frame is > ~26ms (below ~38fps) auto-disable the miniature look for this device
     // (persisted, so weak devices don't re-probe every boot; Settings can re-arm it).
@@ -991,6 +1146,58 @@
   function unlockWorld(id) { if (HARBOR_BIOMES[id] && unlocked.indexOf(id) < 0) { unlocked.push(id); saveUnlocked(); if (buildSelector._set) buildSelector._set(); } }
   function showHint(msg) { if (!hintEl) return; hintEl.textContent = msg; hintEl.classList.remove('gone'); clearTimeout(showHint._t); showHint._t = setTimeout(function () { hintEl.classList.add('gone'); }, 1900); }
 
+  // ---- Phase 11b: feature-unlock announcements — a one-time (ever, persisted) celebratory nudge
+  // the first moment a system becomes relevant, so ~15 systems don't just silently appear. Reuses
+  // the hint toast for a quick line, plus a small dismissible card (never a full-screen blocker,
+  // never stacks — a second announce queues behind the first). ----
+  function seenMap() { return (window.Retention && Retention.get(GAME, 'seen2', {})) || {}; }
+  function hasSeenFeature(id) { return !!seenMap()[id]; }
+  function markSeenFeature(id) { var m = seenMap(); if (m[id]) return false; m[id] = 1; if (window.Retention) Retention.set(GAME, 'seen2', m); return true; }
+  var announceQueue = [], announceBusy = false, announceCard = null, announceT = null;
+  function ensureAnnounceCard() {
+    if (announceCard) return;
+    announceCard = document.createElement('div'); announceCard.id = 'announcecard';
+    announceCard.innerHTML = '<div class="an-ic"></div><div class="an-copy"><div class="an-title"></div><div class="an-txt"></div></div>';
+    wrap.appendChild(announceCard);
+    announceCard.addEventListener('click', function () { dismissAnnounce(); });
+  }
+  // don't pop the card over a modal that owns input (event/rival choice, welcome, crate reveal) —
+  // it stays queued and is retried on the next updateHUD tick instead.
+  function announceBlocked() {
+    return (eventModal && eventModal.classList.contains('show')) || (rivalModal && rivalModal.classList.contains('show')) ||
+      (document.getElementById('welcomemodal')) || (crateModal && crateModal.classList.contains('show'));
+  }
+  function dismissAnnounce() {
+    if (!announceCard) return;
+    announceCard.classList.remove('show'); clearTimeout(announceT); announceBusy = false;
+    setTimeout(pumpAnnounceQueue, 260);
+  }
+  function pumpAnnounceQueue() {
+    // a blocking modal (event/rival/welcome/crate) opened *while* the card was already showing —
+    // get out of the way immediately rather than overlap it. The message already landed once
+    // (seen2 is set on fire, not on dismiss), so nothing is lost — it just stops being shown.
+    if (announceBusy && announceCard && announceCard.classList.contains('show') && announceBlocked()) {
+      announceCard.classList.remove('show'); clearTimeout(announceT); announceBusy = false; return;
+    }
+    if (announceBusy || !announceQueue.length || announceBlocked()) return;
+    var item = announceQueue.shift();
+    ensureAnnounceCard(); announceBusy = true;
+    announceCard.querySelector('.an-ic').textContent = item.icon;
+    announceCard.querySelector('.an-title').textContent = item.title;
+    announceCard.querySelector('.an-txt').textContent = item.body || '';
+    announceCard.classList.add('show'); sfx('score'); haptic(14);
+    clearTimeout(announceT); announceT = setTimeout(dismissAnnounce, 6000);
+  }
+  // fires (once per id, ever) the moment a system first becomes relevant. hintOnly skips the card
+  // (used for fever, which is self-explanatory and timed — a toast is enough).
+  function announceFeature(id, icon, title, body, hintOnly) {
+    if (!markSeenFeature(id)) return;
+    if (hintOnly) { showHint(icon + ' ' + title + (body ? ' — ' + body : '')); return; }
+    showHint(icon + ' ' + title);
+    announceQueue.push({ icon: icon, title: title, body: body });
+    pumpAnnounceQueue();
+  }
+
   // ---- world-select UI (unlocked = playable, locked = shows unlock condition) ----
   function buildSelector() {
     var bar = document.createElement('div'); bar.id = 'biomebar';
@@ -1080,7 +1287,17 @@
     { t: 'Weather a storm', ok: function (s) { return s.stats && s.stats.storms >= 1; }, r: 500 },
     { t: 'Raise the trade network to Lv 2', ok: function (s) { return s.network && s.network.level >= 2; }, r: 1000 },
     { t: 'Insure your empire — network Lv 3', ok: function (s) { return s.network && s.network.level >= 3; }, r: 2500 },
-    { t: 'Found all five harbours', ok: function (s) { return (s.ports || []).length >= 5; }, r: 8000 }
+    { t: 'Found all five harbours', ok: function (s) { return (s.ports || []).length >= 5; }, r: 8000 },
+    // Phase 11b: appended (not inserted mid-ladder) — goalIdx is persisted by array index (Retention
+    // 'goal' {i}), so any existing save already sitting at an index below this point resolves to the
+    // exact same goal it always did. These three exist to *surface* systems a player may have missed
+    // (crates, expeditions, the rival) rather than gate progress, so they're deliberately easy/late —
+    // a returning player who already did all three just breezes through them for a small bonus before
+    // rejoining the endless genGoal() tail (which now starts 3 slots later; harmless, since it's
+    // procedurally generated off whatever idx it's asked for).
+    { t: 'Open a salvage crate', ok: function () { return crateOpenedFlag(); }, r: 250 },
+    { t: 'Send your first expedition', ok: function () { return achOwned('voy1'); }, r: 350 },
+    { t: 'Beat Baron Krall in a race', ok: function () { return (rivalGet().wins || 0) >= 1; }, r: 500 }
   ];
   var goalIdx = 0;
   function mgrTotal(s) { var n = 0, m = s.managers || {}; for (var k in m) n += m[k].lvl || 0; return n; }
@@ -1126,11 +1343,16 @@
   function handleHazard(s) {
     var hz = s.hazard || { phase: 'idle', strikeId: 0 };
     ensureStormAlert();
+    // Phase 11c: weather audio layer follows the warn/idle lifecycle — howl up on warn, back
+    // down once it clears; also ducks the music bed to ~30% for the duration.
+    var warnNow = hz.phase === 'warn' && !!hz.port;
+    if (warnNow !== stormActive) { stormActive = warnNow; applyWeatherGain(warnNow); applyMusicGain(); }
     if (hz.phase === 'warn' && hz.port) {
       stormAlert.classList.remove('crash');
       stormAlert.querySelector('.sa-txt').textContent = (hz.kind || 'Storm') + ' approaching ' + wname(hz.port);
       stormAlert.querySelector('.sa-cd').textContent = hz.in + 's';
       stormAlert.classList.add('show');
+      announceFeature('storm', '⚠️', 'Storm incoming!', 'Sea Walls and Lighthouses protect your port.');
     } else if (s.crash) {
       stormAlert.classList.add('crash');
       stormAlert.querySelector('.sa-txt').textContent = 'Market crash — ' + s.crash.res + ' prices slump';
@@ -1140,6 +1362,7 @@
     // a fresh strike fired in the sim — react with juice
     if (hz.strikeId && hz.strikeId !== lastStrikeId) {
       lastStrikeId = hz.strikeId; var last = hz.last;
+      stormRumble();
       shakeFX(11, 0.7); flashT = 0.85; sfx('lose'); haptic([10, 50, 20]); bumpDaily('storm');
       if (Math.random() < 0.35) { grantCrate(1); showHint('Salvage washed ashore — a crate! 🎁'); }   // storms occasionally drop salvage
       if (last && last.crash) { showHint('Market crash — ' + last.res + ' prices slump'); }
@@ -1355,7 +1578,9 @@
   function comboMult() { return 1 + Math.min(combo * 0.12, 4); }
   function startFever(secs) {
     ensureFeverUI(); secs = secs || 14; feverEnd = Date.now() + secs * 1000; combo = 0; comboT = 0;
-    showHint('🎆 FEVER! Tap the coins!'); sfx('win'); haptic(20);
+    if (!hasSeenFeature('fever')) announceFeature('fever', '🎆', 'FEVER!', 'Tap the coins before they sink!', true);
+    else showHint('🎆 FEVER! Tap the coins!');
+    sfx('win'); haptic(20);
     spawnLoop(); clearTimeout(feverLoopT); feverTick();
   }
   function spawnLoop() {
@@ -1419,7 +1644,7 @@
   function seasonTheme() { var i = seasonId() % SEASON_THEMES.length; return SEASON_THEMES[(i + SEASON_THEMES.length) % SEASON_THEMES.length]; }
   function seasonGet() { var s = window.Retention && Retention.get(GAME, 'season', null), id = seasonId(); if (!s || s.id !== id) { s = { id: id, points: 0, claimed: [] }; if (window.Retention) Retention.set(GAME, 'season', s); } return s; }
   function seasonSet(s) { if (window.Retention) Retention.set(GAME, 'season', s); }
-  function seasonAdd(n) { if (!n) return; var s = seasonGet(); s.points = (s.points || 0) + n; seasonSet(s); }
+  function seasonAdd(n) { if (!n) return; var s = seasonGet(); var was0 = !s.points; s.points = (s.points || 0) + n; seasonSet(s); if (was0 && s.points > 0) announceFeature('season', '🎟️', 'Harbour Pass', 'Everything you do earns season rewards. Claim them in Legacy.'); }
   function seasonDaysLeft() { return Math.max(1, Math.ceil((SEASON_EPOCH + (seasonId() + 1) * SEASON_LEN - Date.now()) / (24 * 3600 * 1000))); }
   function passClaimable(i) { var s = seasonGet(); return (s.points || 0) >= PASS_TIERS[i].at && s.claimed.indexOf(i) < 0; }
   function claimPass(i) {
@@ -1492,7 +1717,7 @@
   // its branch is the active pick, so respecing back re-activates it. Survives prestige. ----
   var DOCTRINE_UNLOCK = 3, DOCTRINE_PICK_COST = 25, DOCTRINE_RESPEC_COST = 50;
   var DOCTRINES = [
-    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+35% sales · +10% route capacity',
+    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+20% sales · +10% route capacity',
       cap: { name: 'Monopoly', desc: '+1 permanent contract slot', cost: 120 } },
     { id: 'explorer', icon: '🧭', name: 'Explorer Doctrine', desc: '+35% voyage speed · +1 voyage slot',
       cap: { name: 'Flagship', desc: '+40% voyage rewards', cost: 120 } }
@@ -1578,7 +1803,7 @@
     // Phase 9c: active doctrine branch (+ its capstone, only while that branch is picked)
     var doc = doctrineGet();
     if (doc.pick === 'merchant') {
-      M.sellMul += 0.35; M.routeMul += 0.10;
+      M.sellMul += 0.20; M.routeMul += 0.10;   // Phase 11a: was +0.35 — sales compound (income→builds→income); autoplay hit 2.5–2.7× vanilla lifetime vs the 2.5× cap; +0.20 lands ≈2.0×
       if (doc.caps.merchant) M.contractSlots += 1;                       // Monopoly
     } else if (doc.pick === 'explorer') {
       M.voyageSpeed += 0.35; M.voyageSlots += 1;
@@ -1823,8 +2048,9 @@
     { id: 'bp_route', name: 'Old Sea Maps', desc: '+15% route capacity forever', meta: 'routeMul', amt: 0.15 }
   ];
   function crateCount() { return window.Retention ? (Retention.get(GAME, 'crates', 0) | 0) : 0; }
+  function crateOpenedFlag() { return !!(window.Retention && Retention.get(GAME, 'crateOpened', false)); }
   function setCrates(n) { if (window.Retention) Retention.set(GAME, 'crates', Math.max(0, n | 0)); }
-  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); }
+  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); announceFeature('crate', '🎁', 'Salvage Crate!', 'Tap 🎁 in the bottom bar to open it.'); }
   function ownedBlueprints() { var a = []; BLUEPRINTS.forEach(function (b) { if (window.Progress && Progress.unlocked(GAME, b.id)) a.push(b); }); return a; }
   function unownedBlueprints() { return BLUEPRINTS.filter(function (b) { return !(window.Progress && Progress.unlocked(GAME, b.id)); }); }
   // weighted roll → applies the reward, returns { tier, color, title, sub }
@@ -1874,6 +2100,7 @@
     var b = crateModal.querySelector('#cm-btn');
     if (b.textContent === 'Open') {
       if (crateCount() <= 0 || crateBusy) return; crateBusy = true; setCrates(crateCount() - 1);
+      if (window.Retention && !Retention.get(GAME, 'crateOpened', false)) Retention.set(GAME, 'crateOpened', true);
       var rew = rollCrate();
       var box = crateModal.querySelector('#cm-box'); box.classList.add('opening'); sfx('move');
       setTimeout(function () {
@@ -1939,7 +2166,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v53';
+  var BUILD_TAG = 'v56';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1954,6 +2181,7 @@
     var h = '<div class="mp-head">Settings<button id="set-close">✕</button></div>';
     h += '<div class="mp-sec">Audio & feedback</div><div class="mp-grid">';
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
+    h += '<button class="mp-item auto' + (!musicOff ? ' on' : '') + '" data-set="music"><span class="mi-n">Music</span><span class="mi-c">' + (musicOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
@@ -1962,8 +2190,13 @@
          '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
          '📈 Fill the <b>era bar</b> (cash + required buildings) to <b>Advance</b> to bigger eras.<br>' +
          '🚢 <b>Trade network</b> links your ports into routes for passive income.<br>' +
+         '⛵ <b>Expeditions</b> send ships on timed voyages — they pay out even while you’re away.<br>' +
+         '🏺 <b>Relics</b> drop from crates &amp; voyages — equip a <b>Loadout</b> in Legacy for permanent perks.<br>' +
          '🌊 Storms damage buildings — repair them in Manage.<br>' +
+         '🏴‍☠️ <b>Baron Krall</b> challenges you to races — beat him for prizes &amp; bragging rights.<br>' +
+         '🎟️ The <b>Harbour Pass</b> earns free season rewards from everything you do.<br>' +
          '✦ When growth slows, <b>Legacy</b> lets you prestige for permanent multipliers.<br>' +
+         '🧭 At 3+ charters, pick a <b>Doctrine</b> in Legacy to specialise your run.<br>' +
          '🖐️ Drag to pan · pinch to zoom · twist to rotate.</div>';
     h += '<div class="mp-sec">About</div>';
     h += '<div class="set-about">PortMaster · build ' + BUILD_TAG +
@@ -1981,6 +2214,7 @@
       el.addEventListener('click', function () {
         var a = el.getAttribute('data-set');
         if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
+        else if (a === 'music') { applyMusicOff(!musicOff); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
@@ -2014,6 +2248,10 @@
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
     if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
+    // a founded port is the moment Expeditions become relevant — the button already exists (in actionBar)
+    announceFeature('exp', '⛵', 'Expeditions', 'Send ships on voyages; they return even while you’re away.');
+    if (chartersCount() >= DOCTRINE_UNLOCK) announceFeature('doctrine', '🧭', 'Doctrines', 'Pick a path in the Legacy panel.');
+    pumpAnnounceQueue();   // retry any announce that was deferred while a modal owned input
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
     if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
@@ -2045,7 +2283,7 @@
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
     // reveal the Legacy button once prestige is relevant; pulse when a prestige is available
-    if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); }
+    if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); if (lp.can) announceFeature('prestige', '✦', 'Legacy', 'Sign a new charter to restart stronger, forever.'); }
     if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
     if (expBtn) { var rd = (s.voyages && s.voyages.ready) || 0; expBtn.classList.toggle('hasready', rd > 0); expBtn.setAttribute('data-n', rd); }
     if (legacyOpen) renderLegacy();
@@ -2282,7 +2520,7 @@
     var ov = document.createElement('div'); ov.id = 'welcomemodal';
     ov.innerHTML = '<div class="wm-card"><div class="wm-logo">PortMaster</div>' +
       '<div class="wm-body">Found a harbour on the glowing coast, then grow a humble fishing village into a global trade empire.</div>' +
-      '<div class="wm-feat">⚓ Build &amp; upgrade · 🚢 trade between islands · 🌊 weather storms · ✦ prestige to grow <i>forever</i></div>' +
+      '<div class="wm-feat">⚓ Build &amp; trade · ⛵ Expeditions &amp; relics · 🏴‍☠️ race a rival · 🎟️ seasons &amp; ✦ prestige <i>forever</i></div>' +
       '<button class="wm-btn">Begin ⚓</button></div>';
     wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); }); sfx('score');
     ov.querySelector('.wm-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('tap'); if (window.Juice) Juice.Audio.unlock(); showHint('Tap the glowing harbour, then “Found village”'); setTimeout(function () { ov.remove(); }, 320); });
@@ -2305,7 +2543,9 @@
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
-    goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; }, tickAuto: function () { autoT = 10; tickAutomation(2); },
+    goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; },
+    goalOkAt: function (i) { return !!(i < GOALS.length ? GOALS[i] : genGoal(i)).ok(SIM.state()); },   // test hook: evaluate any ladder goal's ok() without needing goalIdx to be there yet
+    tickAuto: function () { autoT = 10; tickAutomation(2); },
     lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
@@ -2319,6 +2559,23 @@
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); },
     startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; },
+    refreshAmbient: function () { refreshAmbientNow(); },   // force an immediate resync of every ramped layer to current ToD/hazard/mute state
+    // Phase 11c: layered audio state — the eyeball-equivalent for sound (can't screenshot audio)
+    audio: function () {
+      if (!amb) return null;
+      return {
+        state: amb.ctx.state, master: +amb.master.gain.value.toFixed(3), wave: +amb.wave.gain.value.toFixed(3),
+        weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3), night: +amb.night.gain.value.toFixed(3),
+        muted: muted, musicOff: musicOff, stormActive: stormActive, envNight: +env().night.toFixed(3),
+        target: { master: ambTarget.master, wave: ambTarget.wave, night: ambTarget.night, weather: ambTarget.weather, music: ambTarget.music }   // last commanded value per layer — deterministic, independent of audio-thread ramp timing
+      };
+    },
+    setWeather: function (phase) {   // test-only: force the storm audio state without waiting on the sim's real timer
+      if (phase === 'warn') { stormActive = true; applyWeatherGain(true); applyMusicGain(); }
+      else if (phase === 'strike') { stormRumble(); }
+      else { stormActive = false; applyWeatherGain(false); applyMusicGain(); }
+      return amb ? { weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3) } : null;
+    },
     fireEvent: function (id) { var ev = SIM.fireEvent(id); if (ev) { updateHUD(); } return ev; },
     chooseEvent: function (i) { return onEventChoice(i); },
     event: function () { return SIM.event(); },
@@ -2339,7 +2596,14 @@
     fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0 }; },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
     season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
-    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); }
+    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); },
+    // Phase 11b: onboarding — feature-unlock announce (test/debug hooks)
+    announce: function (id, icon, title, body, hintOnly) { announceFeature(id, icon, title, body, hintOnly); },
+    announceState: function () { return { queueLen: announceQueue.length, busy: announceBusy, showing: !!(announceCard && announceCard.classList.contains('show')), title: announceCard ? announceCard.querySelector('.an-title').textContent : null }; },
+    seenFeature: function (id) { return hasSeenFeature(id); },
+    dismissAnnounce: function () { dismissAnnounce(); },
+    resetAnnounce: function () { announceQueue.length = 0; clearTimeout(announceT); announceBusy = false; if (announceCard) announceCard.classList.remove('show'); },   // test-only: hard-clear any real (already-seen) announce still in flight, for a clean test slate
+    crateOpened: function () { return crateOpenedFlag(); }
   };
 
   if (canvas && canvas.getContext) boot();

@@ -43,6 +43,9 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   const booted = await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).then(() => true).catch(() => false);
   ok('boot: WebGL alive', booted);
   await sleep(400);
+  // Phase 11b: refreshed welcome copy should name the systems a newcomer wouldn't otherwise discover
+  const wmFeat = await page.evaluate(() => { var el = document.querySelector('#welcomemodal .wm-feat'); return el ? el.textContent : ''; });
+  ok('welcome: refreshed copy mentions Expeditions', /expedition/i.test(wmFeat));
   await page.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); var H = window.__harbor, S = window.HARBOR_SIM; H.autoFound(); S.setEra(4); S.raw().money = 5e6; S.raw().lifetimeMoney = 5e6; var p = S.port('green'); ['fishing_hut', 'fishing_hut', 'cottage', 'jetty', 'warehouse', 'market'].forEach(t => { if (S.canBuild(t)) S.build(t); }); p.res.fish = 999; p.res.timber = 999; p.res.goods = 999; });
   ok('found: port founded', await page.evaluate(() => !!window.HARBOR_SIM.raw().founded));
 
@@ -74,9 +77,9 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
     out.bal1 = H.legacy().bal; out.sell1 = M().sellMul; out.route1 = M().routeMul;
     return out;
   });
-  ok('9c doctrine: gated <3 charters, capstone gated on pick, pick costs 25✦ → +35% sales +10% routes',
+  ok('9c doctrine: gated <3 charters, capstone gated on pick, pick costs 25✦ → +20% sales +10% routes',
     d9.gatedPick === false && d9.capGate === false && d9.pickOk === true && d9.bal1 === 275 &&
-    Math.abs(d9.sell1 - d9.sell0 - 0.35) < 1e-6 && d9.route1 >= 1.10 - 1e-6);
+    Math.abs(d9.sell1 - d9.sell0 - 0.20) < 1e-6 && d9.route1 >= 1.10 - 1e-6);   // Phase 11a: merchant sales +0.35→+0.20
   const r9 = await page.evaluate(() => {
     var H = window.__harbor, M = () => window.HARBOR_SIM.meta();
     var slots0 = M().voyageSlots, okR = H.pickDoctrine('explorer');
@@ -128,6 +131,25 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   await page.evaluate(() => { var b = document.querySelector('#rivalmodal.show .ev-btn'); if (b) b.click(); });
   ok('rival: race won recorded', await page.evaluate(() => window.__harbor.rival().wins >= 1));
   ok('fleet: rival ship gone after the race resolves', await page.evaluate(() => window.__harbor.fleet().rival === 0));
+
+  // Phase 11b: onboarding goals — appended to the end of the curated ladder (save-safe: existing
+  // goalIdx saves below this point still resolve to the exact same goal they always did). Verify
+  // each new goal's ok() flips true once its underlying condition is actually driven.
+  const gTotal = await page.evaluate(() => window.__harbor.goal().total);
+  const iCrate = gTotal - 3, iExp = gTotal - 2, iRival = gTotal - 1;
+  const goalNames = await page.evaluate((idx) => idx.map((i) => window.__harbor.goalAt(i)), [iCrate, iExp, iRival]);
+  ok('goals: onboarding trio appended (crate / expedition / rival)',
+    /crate/i.test(goalNames[0]) && /expedition/i.test(goalNames[1]) && /krall/i.test(goalNames[2]));
+  const crateGoalBefore = await page.evaluate((i) => window.__harbor.goalOkAt(i), iCrate);
+  await page.evaluate(() => { window.__harbor.grantCrate(1); window.__harbor.openCrate(); });
+  await sleep(80);
+  await page.evaluate(() => { var b = document.querySelector('#cratemodal #cm-btn'); if (b) b.click(); });
+  await sleep(650);   // crate reveal animation
+  const crateGoalAfter = await page.evaluate((i) => window.__harbor.goalOkAt(i), iCrate);
+  await page.evaluate(() => { var m = document.querySelector('#cratemodal'); if (m) m.classList.remove('show'); });
+  ok('goal: "Open a salvage crate" ok() flips false→true once one is opened', crateGoalBefore === false && crateGoalAfter === true);
+  ok('goal: "Send your first expedition" ok() true once a voyage was collected', await page.evaluate((i) => window.__harbor.goalOkAt(i), iExp));
+  ok('goal: "Beat Baron Krall in a race" ok() true once a race was won', await page.evaluate((i) => window.__harbor.goalOkAt(i), iRival));
 
   // fever
   await page.evaluate(() => window.__harbor.startFever(3)); await sleep(400);
@@ -209,6 +231,109 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('10c: resize (FBO recreate both ways) renders zero errors, post still on', errs.length === errsBefore10c &&
     await page.evaluate(() => window.__harbor.post().on === true));
   await page.evaluate(() => window.__harbor.setTod(0.5));
+
+  // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
+  // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
+  // any real (already-seen — exp/prestige/storm/…) announce still queued from earlier in the run,
+  // so these synthetic ids get a clean slate to test against.
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+  const an1 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: fires with the card visible + correct title/body', an1.showing === true && an1.title === 'Test Feature');
+  ok('announce: seen flag recorded on first fire', await page.evaluate(() => window.__harbor.seenFeature('testfeat11b')));
+  await page.evaluate(() => window.__harbor.dismissAnnounce()); await sleep(300);
+  const an2 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: does not refire the same id again (once ever)', an2.showing === false && an2.queueLen === 0);
+
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+  const q1 = await page.evaluate(() => { window.__harbor.announce('qtest11bA', '🅰️', 'Queue A', 'first'); window.__harbor.announce('qtest11bB', '🅱️', 'Queue B', 'second'); return window.__harbor.announceState(); });
+  ok('announce: a queued second announce does not overlap the first', q1.showing === true && q1.title === 'Queue A' && q1.queueLen === 1);
+  await page.evaluate(() => window.__harbor.dismissAnnounce()); await sleep(350);
+  const q2 = await page.evaluate(() => window.__harbor.announceState());
+  ok('announce: queued second shows only after the first is dismissed', q2.showing === true && q2.title === 'Queue B' && q2.queueLen === 0);
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  const an3 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: "seen" persists across reload — never shows again', an3.showing === false);
+
+  // Phase 11c: layered audio — wave/night/weather/music gain layers driven by ToD + hazard
+  // state, plus a Music toggle. WebAudio can't be screenshotted, so these assert the exposed
+  // __harbor.audio() state at each phase (the eyeball-equivalent for sound). Assertions check
+  // audio().target — the value our own code just committed to each AudioParam ramp — rather
+  // than polling the live interpolated gain: under headless swiftshader + heavy concurrent
+  // WebGL load, live AudioParam reads via CDP were observed to occasionally stick (the ramp is
+  // scheduled correctly every time, confirmed by tracing it, but the audio thread's convergence
+  // isn't reliably observable in this environment). Asserting the committed target is exactly
+  // as strong a regression check on the decision logic and has zero timing dependency.
+  // Paused for the duration of this block: the sim's own hazard timer (tickHazard) keeps
+  // running live otherwise and can auto-resolve our manual hazard.phase mutations mid-check
+  // (a real storm racing our synthetic one). Un-paused before the final live-ticking check.
+  const errsBefore11c = errs.length;
+  const A = () => page.evaluate(() => window.__harbor.audio());
+  // setTod() only moves the `tod` clock; the day/night crossing check itself is throttled to a
+  // per-frame cadence (updateAmbientToD's own 0.5s window). refreshAmbient() forces that check
+  // immediately (bypassing the throttle) so every step below is deterministic with no wait.
+  const setTod = (t) => page.evaluate((tt) => { window.__harbor.setTod(tt); window.__harbor.refreshAmbient(); }, t);
+  await page.evaluate(() => window.__harbor.pause(true));
+  await page.evaluate(() => window.__harbor.startAmbient());   // build the graph deterministically (no real pointer gesture in this harness)
+  await sleep(100);
+  const a0 = await A();
+  ok('audio: graph builds with wave/night/weather/music gain layers reporting', a0 && a0.state === 'running' &&
+    typeof a0.wave === 'number' && typeof a0.weather === 'number' && typeof a0.music === 'number' && typeof a0.night === 'number');
+
+  await setTod(0.5);   // noon
+  const aDay = await A();
+  ok('audio: music bed plays by day (target > 0), crickets silent', aDay.target.music > 0.06 && aDay.target.night === 0);
+
+  await setTod(0.0);   // midnight
+  const aNight = await A();
+  ok('audio: music targets ~0 at night while the night-critter layer targets full', aNight.target.music === 0 && aNight.target.night === 1);
+
+  // Music toggle: OFF kills the music layer even by day, and the choice persists across reload
+  await setTod(0.5);
+  await page.evaluate(() => { document.getElementById('setbtn').click(); document.querySelector('[data-set="music"]').click(); document.getElementById('setbtn').click(); });
+  const aMusicOff = await A();
+  ok('audio: Music toggle OFF targets the music layer to 0', aMusicOff.musicOff === true && aMusicOff.target.music === 0);
+  ok('audio: Music OFF persisted to Retention', await page.evaluate(() => window.Retention.get('harbor', 'musicOff', false) === true));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  ok('audio: Music OFF survives reload', await page.evaluate(() => window.Retention.get('harbor', 'musicOff', false) === true));
+  // restore Music ON + rebuild the ambient graph fresh after reload (which also resets `paused`,
+  // so re-pause here too), for the rest of this block
+  await page.evaluate(() => { window.__harbor.pause(true); document.getElementById('setbtn').click(); document.querySelector('[data-set="music"]').click(); document.getElementById('setbtn').click(); window.__harbor.startAmbient(); });
+  await sleep(100);
+  await setTod(0.5);
+  const aPreStorm = await A();
+  ok('audio: Music re-enabled + day baseline restored after reload', aPreStorm.musicOff === false && aPreStorm.target.music > 0.06);
+
+  // storm warn: drive a real hazard through SIM.raw() + forceHUD() (the real handleHazard path,
+  // same as live play) — the weather layer should rise and the music bed should duck to ~30%
+  await page.evaluate(() => { var S = window.HARBOR_SIM.raw(); S.hazard.phase = 'warn'; S.hazard.port = 'green'; S.hazard.kind = 'Squall'; S.hazard.in = 6; window.__harbor.forceHUD(); });
+  await sleep(150);
+  const aWarn = await A();
+  ok('audio: storm warn targets the weather layer up + ducks the music bed to ~30%', aWarn.target.weather > 0.08 && Math.abs(aWarn.target.music - aPreStorm.target.music * 0.3) < 0.005);
+
+  // strike moment: force it via the real SIM.strikePort test hook, then clear the warn phase
+  // (mirrors what tickHazard does after a real strike) and let handleHazard react
+  await page.evaluate(() => { window.HARBOR_SIM.strikePort('green'); var S = window.HARBOR_SIM.raw(); S.hazard.phase = 'idle'; window.__harbor.forceHUD(); });
+  await sleep(150);
+  const aAfterStrike = await A();
+  ok('audio: weather layer targets back to 0 and the music bed recovers to baseline after the storm clears',
+    aAfterStrike.target.weather === 0 && Math.abs(aAfterStrike.target.music - aPreStorm.target.music) < 1e-6);
+
+  // mute: the master gain gates every layer at once (the authoritative kill switch)
+  await page.evaluate(() => document.getElementById('mutebtn').click()); await sleep(700);
+  const aMuted = await A();
+  ok('audio: mute ramps the master gain to 0 (kills all layers)', aMuted.target.master === 0 && aMuted.master < 0.05 && aMuted.muted === true);
+  await page.evaluate(() => document.getElementById('mutebtn').click()); await sleep(1600);
+  const aUnmuted = await A();
+  ok('audio: unmute restores the master gain', aUnmuted.target.master > 0.1 && aUnmuted.master > 0.1);
+
+  ok('audio: full day→night→storm→mute cycle ran with zero new console/page errors', errs.length === errsBefore11c);
+  await page.evaluate(() => window.__harbor.pause(false));   // resume live sim ticking for the final stability check
 
   // live ticking after everything — no late errors
   await sleep(2000);

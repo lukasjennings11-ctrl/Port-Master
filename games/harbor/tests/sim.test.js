@@ -260,6 +260,152 @@ function buildSet(list) {
   ok('focus trade: +15% sales lifts money delta', trade > none);
 })();
 
+// ---------------------------------------------------------------- Phase 11a: balance mega-pass — deterministic auto-play harness
+// Simulates 90 sim-minutes (180 × 30s ticks) of greedy-but-plausible play, three ways with the SAME
+// seed, and asserts hard bounds on the resulting curve. applyMeta only copies provided keys, so every
+// run applies a FULL defaults object first (metaWith) — otherwise a previous section's META leaks in.
+var FULL_META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
+function metaWith(over) { var m = {}, k; for (k in FULL_META) m[k] = FULL_META[k]; for (k in (over || {})) m[k] = over[k]; return m; }
+
+function autoplay(cfg) {
+  var steps = cfg.steps || 180;                                     // 180 × 30s = 90 sim-minutes
+  SIM.newGame(); SIM.foundPort('green');
+  SIM.applyMeta(metaWith(cfg.meta));                                // FULL reset + this run's META
+  SIM.setTide({ prod: 1, sell: { fish: 1, timber: 1, goods: 1 } }); // neutral tide (module-global)
+  SIM.setBoost(1, 0);                                               // clear any leftover crate surge
+  SIM.__setRng(mulberry32(cfg.seed));                               // seed AFTER setup so rolls line up
+  var st = SIM.raw();
+  // build order: seller (jetty) directly after the first producer — a producer-only port earns
+  // nothing but still pays wages, so it bleeds to exactly 0 money and soft-locks.
+  var order = ['fishing_hut', 'jetty', 'cottage', 'warehouse', 'market', 'sawmill', 'factory', 'dock'];
+  function haveCount(t) { var B = SIM.port('green').buildings, n = 0; for (var i = 0; i < B.length; i++) if (B[i].type === t) n++; return n; }
+  function tryBuild(budget) {
+    // diversify-first: complete the chain (one of each, in order) before duplicating anything —
+    // otherwise "first affordable in order" stacks producers and never buys the seller.
+    for (var oi = 0; oi < order.length; oi++) { var t = order[oi]; if (haveCount(t) === 0 && SIM.canBuild(t) && SIM.buildCost(t) <= budget) { SIM.build(t); return true; } }
+    for (var oj = 0; oj < order.length; oj++) { var u = order[oj]; if (SIM.canBuild(u) && SIM.buildCost(u) <= budget) { SIM.build(u); return true; } }
+    return false;
+  }
+  var evIds = ['goldrush', 'festival', 'castaway', 'raid', 'gamble', 'commission', 'smuggler'];
+  var EV_MIN = { goldrush: 1, festival: 1, castaway: 0, raid: 2, gamble: 1, commission: 1, smuggler: 1 };   // mirrors EV_DEFS minEra — fireEvent itself doesn't gate, but the live scheduler (evPick) does
+  var evI = 0, by = { passive: 0, events: 0, voyages: 0 };
+  function lt() { return st.lifetimeMoney || 0; }
+  for (var step = 0; step < steps; step++) {
+    var l0 = lt();
+    SIM.tick(30);                                                   // dt≥5 → scheduler hazards/events stay off; we drive them below
+    by.passive += lt() - l0;
+    if (SIM.canAdvance()) SIM.advanceEra();                         // era first: advancing gates the whole curve
+    // greedy-but-banking policy: only spend when the price is ≤ half the purse, so cash still climbs
+    // toward era money requirements (a zero-reserve greedy soft-locks at era 0 forever).
+    for (var k = 0; k < 3; k++) {
+      var budget = st.money * 0.5, did = tryBuild(budget);
+      if (!did) {
+        var B = SIM.port('green').buildings, best = -1, bestC = Infinity;
+        for (var bi = 0; bi < B.length; bi++) if (SIM.canUpgrade(bi)) { var c = SIM.upCost(bi); if (c < bestC && c <= budget) { bestC = c; best = bi; } }
+        if (best >= 0) { SIM.upgrade(best); did = true; }
+      }
+      if (!did) break;
+    }
+    if (SIM.canAdvance()) SIM.advanceEra();
+    if (step % 5 === 4) {                                           // every 5th step: exercise the income systems
+      // per-round reseed (derived from seed+step): rollVoyage/evData consume a VARIABLE number of
+      // draws, so without this the three runs drift onto different luck streams after the first
+      // structural divergence and compounding amplifies pure noise into a fake doctrine delta.
+      SIM.__setRng(mulberry32((cfg.seed ^ (step * 0x9E3779B9)) >>> 0));
+      var l1 = lt();
+      var evId = evIds[evI++ % evIds.length];                       // round-robin; ambient sets a boost, choice resolves accept
+      if (st.era >= EV_MIN[evId]) {                                 // skip era-gated events (forcing a raid on an era-0 purse crushes the early snowball in a way live play can't)
+        var ev = SIM.fireEvent(evId);
+        if (ev && ev.kind !== 'ambient') SIM.resolveEvent(0);
+      }
+      by.events += lt() - l1;
+      var l2 = lt();
+      if (SIM.canStartVoyage('cove')) SIM.startVoyage('cove');      // one cove run per round (≈ live cadence)
+      for (var vi = 0; vi < (st.voyages || []).length; vi++) st.voyages[vi].endsAt = Date.now() - 1;
+      SIM.voyages().active.forEach(function (a) { if (a.ready) SIM.collectVoyage(a.seq); });
+      by.voyages += lt() - l2;
+    }
+  }
+  var res = SIM.port('green').res;
+  return { lifetime: lt(), era: st.era, money: st.money, res: { fish: res.fish, timber: res.timber, goods: res.goods }, bySource: by };
+}
+
+(function balanceMegaPass() {
+  var SEED = 20260710;
+  // Merchant doctrine (+20% sales, +10% routes, Monopoly capstone) + 3 equipped Smuggler relics (+4% sales each)
+  // (doctrine sales tuned +0.35→+0.20 in Phase 11a: at +0.35 the compounding curve hit 2.5–2.7×
+  // vanilla across seeds, breaching the 2.5× cap below; at +0.20 it lands ≈2.0× on every seed tried)
+  var MERCHANT = { sellMul: 1.32, routeMul: 1.10, contractSlots: 1 };
+  // Explorer doctrine (+35% voyage speed, +1 slot, Flagship capstone +40% yield) + 3 Cartographer relics
+  // (+6% speed each; full set completes → +1 more expedition ship)
+  var EXPLORER = { voyageSpeed: 1.53, voyageSlots: 2, voyageYield: 0.4 };
+
+  var van = autoplay({ seed: SEED });
+  var mer = autoplay({ seed: SEED, meta: MERCHANT });
+  var exp = autoplay({ seed: SEED, meta: EXPLORER });
+  var van2 = autoplay({ seed: SEED });                              // identical re-run → guards Math.random leaks
+
+  [['vanilla', van], ['merchant', mer], ['explorer', exp]].forEach(function (pair) {
+    var n = pair[0], r = pair[1];
+    ok('11a ' + n + ': money finite & non-negative', isFinite(r.money) && r.money >= 0 && isFinite(r.lifetime));
+    // money on hand can never exceed everything ever earned + the 150 starting purse
+    ok('11a ' + n + ': lifetime covers money on hand', r.lifetime + 150 >= r.money - 1e-6);
+    ok('11a ' + n + ': era advanced ≥2 in 90 sim-min', r.era >= 2);
+    ok('11a ' + n + ': resources non-negative', r.res.fish >= 0 && r.res.timber >= 0 && r.res.goods >= 0);
+    // source mix: no single ACTIVE source may dominate the curve (passive play must stay the backbone)
+    ok('11a ' + n + ': events ≤60% of lifetime', r.bySource.events <= 0.6 * r.lifetime);
+    ok('11a ' + n + ': voyages ≤60% of lifetime', r.bySource.voyages <= 0.6 * r.lifetime);
+  });
+
+  // Prestige-reachability regression floor. Measured baseline with seed 20260710: vanilla lifetime
+  // ≈ 289k after 90 sim-min of semi-active play (passive ≈ 255k / events ≈ 14k / voyages ≈ 19k);
+  // stable at 270k–296k across 6 other seeds. So PRESTIGE_THRESHOLD (250k) is genuinely reachable
+  // inside one active session, with idle accrual on top. The 100k floor is a regression tripwire
+  // (~2.8× headroom below measured), NOT a design target.
+  ok('11a vanilla: prestige floor — lifetime ≥ 100k after 90 sim-min', van.lifetime >= 100000);
+
+  // Doctrine sanity: bonuses matter but never break the curve (each build within 0.9×–2.5× vanilla)
+  ok('11a merchant: lifetime within 0.9×–2.5× vanilla', mer.lifetime >= 0.9 * van.lifetime && mer.lifetime <= 2.5 * van.lifetime);
+  ok('11a explorer: lifetime within 0.9×–2.5× vanilla', exp.lifetime >= 0.9 * van.lifetime && exp.lifetime <= 2.5 * van.lifetime);
+
+  // determinism: same seed twice → IDENTICAL lifetime (any drift = an unrouted Math.random in sim.js)
+  ok('11a determinism: identical seed → identical lifetime', van.lifetime === van2.lifetime);
+  ok('11a determinism: identical seed → identical source mix',
+    van.bySource.passive === van2.bySource.passive && van.bySource.events === van2.bySource.events && van.bySource.voyages === van2.bySource.voyages);
+
+  if (process.env.HARBOR_BASELINES) {
+    console.log('  [11a] vanilla ', JSON.stringify(van));
+    console.log('  [11a] merchant', JSON.stringify(mer));
+    console.log('  [11a] explorer', JSON.stringify(exp));
+  }
+})();
+
+// ---------------------------------------------------------------- Phase 11a: big-number smoke (overflow guard)
+(function bigNumberSmoke() {
+  SIM.__setRng(mulberry32(31337));
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(4);
+  SIM.applyMeta(metaWith(null));
+  var st = SIM.raw();
+  st.money = 1e30; st.lifetimeMoney = 1e30;
+  ['fishing_hut', 'cottage', 'jetty', 'market'].forEach(function (t) { if (SIM.canBuild(t)) SIM.build(t); });
+  SIM.tick(60);
+  var snap = SIM.state();
+  ok('big#: money finite at 1e30 scale', isFinite(st.money) && isFinite(st.lifetimeMoney) && st.money > 0);
+  ok('big#: snapshot fmt-able (no NaN/Infinity)', /^[0-9.e+]+$/.test(String(snap.money)) && isFinite(snap.money) && isFinite(snap.lifetimeMoney));
+  ok('big#: prestige gain finite at 1e30', isFinite(SIM.prestigeGain()) && SIM.prestigeGain() > 0);
+  // voyage math still sane at absurd wealth
+  ok('big#: can start voyage at 1e30', SIM.canStartVoyage('cove'));
+  SIM.startVoyage('cove'); st.voyages[0].endsAt = Date.now() - 1;
+  var out = SIM.collectVoyage(SIM.voyages().active[0].seq);
+  ok('big#: voyage reward finite & positive', out && isFinite(out.cash) && out.cash > 0);
+  // event math still sane (raid tribute derives from money — must not blow up)
+  SIM.fireEvent('raid');
+  var ev = SIM.event();
+  ok('big#: raid tribute finite at 1e30', ev && isFinite(ev.data.tribute) && ev.data.tribute > 0);
+  SIM.resolveEvent(0);
+  ok('big#: money finite after raid tribute', isFinite(st.money) && st.money >= 0);
+})();
+
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
 if (fail) { console.log('  failing:'); fails.forEach(function (f) { console.log('   - ' + f); }); }
 process.exit(fail ? 1 : 0);
