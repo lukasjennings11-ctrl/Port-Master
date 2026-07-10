@@ -74,9 +74,9 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
     out.bal1 = H.legacy().bal; out.sell1 = M().sellMul; out.route1 = M().routeMul;
     return out;
   });
-  ok('9c doctrine: gated <3 charters, capstone gated on pick, pick costs 25✦ → +35% sales +10% routes',
+  ok('9c doctrine: gated <3 charters, capstone gated on pick, pick costs 25✦ → +20% sales +10% routes',
     d9.gatedPick === false && d9.capGate === false && d9.pickOk === true && d9.bal1 === 275 &&
-    Math.abs(d9.sell1 - d9.sell0 - 0.35) < 1e-6 && d9.route1 >= 1.10 - 1e-6);
+    Math.abs(d9.sell1 - d9.sell0 - 0.20) < 1e-6 && d9.route1 >= 1.10 - 1e-6);   // Phase 11a: merchant sales +0.35→+0.20
   const r9 = await page.evaluate(() => {
     var H = window.__harbor, M = () => window.HARBOR_SIM.meta();
     var slots0 = M().voyageSlots, okR = H.pickDoctrine('explorer');
