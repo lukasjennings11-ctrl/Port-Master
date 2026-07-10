@@ -335,6 +335,79 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('audio: full day→night→storm→mute cycle ran with zero new console/page errors', errs.length === errsBefore11c);
   await page.evaluate(() => window.__harbor.pause(false));   // resume live sim ticking for the final stability check
 
+  // Phase 12a: Captain's Bonus — opt-in rewarded boost behind the pluggable window.ADS provider.
+  // Ethics under test: never auto-opens, decline changes nothing, daily cap hides the button quietly
+  // (no nag state), and a broken/failing provider degrades the game to "button hidden", never a throw.
+
+  // provider swap: ?adprovider=<id> parses; an explicit "stub" selects it, and an unknown/unregistered
+  // id (as a portal build not yet wired up would produce) falls back to the free stub safely rather
+  // than leaving window.ADS undefined.
+  const provPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
+  await provPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&adprovider=stub`, { waitUntil: 'load' });
+  const provStub = await provPage.evaluate(() => window.ADS && window.ADS.provider);
+  await provPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&adprovider=poki`, { waitUntil: 'load' });
+  const provFallback = await provPage.evaluate(() => window.ADS && window.ADS.provider);
+  ok('ads: ?adprovider=stub query parses, and an unregistered id (poki) falls back to the free stub safely',
+    provStub === 'stub' && provFallback === 'stub');
+  await provPage.close();
+
+  const errsBefore12a = errs.length;
+  await page.evaluate(() => {
+    window.__ADS_TEST_FAST__ = true;             // skip the stub's charm delay — deterministic + fast
+    window.Retention.set('harbor', 'bonusDay', null);
+    window.HARBOR_SIM.setBoost(1, 0);             // clear any leftover ambient/crate surge from earlier
+    window.__harbor.forceHUD();
+  });
+  await sleep(60);
+  const b0 = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
+  ok('bonus: ⚓ button appears when eligible (provider ready, no boost active, port founded)',
+    b0.shown === true && b0.hook.available === true && b0.hook.active === false);
+
+  await page.evaluate(() => window.__harbor.claimBonus());
+  await sleep(150);   // fast-mode stub resolves on the next tick
+  const b1 = await page.evaluate(() => ({ hook: window.__harbor.bonus(), chipVisible: document.getElementById('bonuschip').style.display !== 'none', chipText: document.getElementById('bonuschip').textContent, modalShown: !!document.querySelector('#bonusmodal.show') }));
+  ok('bonus: claim → SIM boost active at 2× with a live "⚓2× m:ss" countdown chip in the HUD, daily count advances',
+    b1.hook.active === true && b1.hook.mult === 2 && b1.hook.remaining > 590 && b1.hook.remaining <= 600 &&
+    b1.chipVisible === true && /⚓\s*2×\s*\d+:\d{2}/.test(b1.chipText) && b1.modalShown === false && b1.hook.usedToday === 1);
+
+  // decline: the card never auto-opens (only a real tap reaches it), and "No thanks" leaves everything
+  // exactly as it was — no charge, no boost, no daily-count bump, just a closed card.
+  await page.evaluate(() => { window.HARBOR_SIM.setBoost(1, 0); window.__harbor.forceHUD(); });
+  await sleep(60);
+  const preDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, autoOpen: !!document.querySelector('#bonusmodal.show') }));
+  await page.evaluate(() => { document.getElementById('bonusbtn').click(); });
+  await sleep(60);
+  const cardOpen = await page.evaluate(() => { var m = document.querySelector('#bonusmodal.show'); return !!(m && m.querySelector('[data-bonus="decline"]') && m.querySelector('[data-bonus="claim"]')); });
+  ok('bonus: card never auto-opens, and shows both "No thanks" and "Claim ⚓" only after a real tap',
+    preDecline.autoOpen === false && cardOpen === true);
+  await page.evaluate(() => { var b = document.querySelector('#bonusmodal [data-bonus="decline"]'); if (b) b.click(); });
+  await sleep(60);
+  const postDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, active: window.__harbor.bonus().active, modalShown: !!document.querySelector('#bonusmodal.show') }));
+  ok('bonus: decline changes nothing — no charge, no boost, no daily-count bump, card just closes',
+    postDecline.used === preDecline.used && postDecline.legacy === preDecline.legacy && postDecline.active === false && postDecline.modalShown === false);
+
+  // daily cap: drive the Retention counter directly (rather than 6 real claims) — button hides quietly,
+  // with no dead click and no nag state left behind
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', { date: window.Retention.todayStr(), count: 6 }); window.__harbor.forceHUD(); });
+  await sleep(60);
+  const capped = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
+  ok('bonus: daily cap (6/day) hides the button quietly once reached — no nagging', capped.shown === false && capped.hook.available === false);
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); window.__harbor.forceHUD(); });
+
+  // AdProvider resilience: a provider whose init() throws must never break the game — boot/HUD keep
+  // running fine, the bonus button just stays hidden rather than the game crashing or console erroring.
+  await page.evaluate(() => {
+    window.HARBOR_SIM.setBoost(1, 0);
+    window.ADS = { provider: 'broken', init: function () { throw new Error('simulated init failure'); }, rewardedAvailable: function () { throw new Error('simulated failure'); }, showRewarded: function () { throw new Error('simulated failure'); } };
+    window.__harbor.reinitAds();
+    window.__harbor.forceHUD();
+  });
+  await sleep(150);
+  const resilient = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', avail: window.__harbor.bonus().available }));
+  ok('ads: a provider whose init() throws → game keeps running fine, bonus button stays hidden (not shown, not broken)',
+    resilient.shown === false && resilient.avail === false);
+  ok('ads: resilience probe produced zero new console/page errors', errs.length === errsBefore12a);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
