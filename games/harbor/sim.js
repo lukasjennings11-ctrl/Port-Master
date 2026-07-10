@@ -666,6 +666,7 @@
     synergyMul: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return synergyMul(p || { buildings: [] }); },
     eraName: eraName, eraReq: eraReq,
     applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide, setBoost: setBoost, boostT: function () { return BOOST.t; },
+    boostMul: function () { return boostMul(); },   // Phase 12a: current effective boost multiplier (1 when inactive) — lets callers combine/stack sensibly
     __setRng: setRng,                                               // test-only: seed all gameplay RNG for deterministic tests
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,

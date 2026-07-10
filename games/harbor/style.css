@@ -281,6 +281,11 @@ html, body {
 #actionbar #cratebtn::after { content: attr(data-n); position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px; background: #ff6b6b; color: #fff; font: 800 9px/16px 'Fredoka', sans-serif; }
 #actionbar #cratebtn.bump { animation: crateBump .4s ease; }
 @keyframes crateBump { 0%,100% { transform: scale(1); } 40% { transform: scale(1.3); } }
+
+/* Captain's Bonus (Phase 12a): opt-in rewarded-boost button + HUD countdown chip */
+#actionbar #bonusbtn { border-color: rgba(124,240,208,.55); background: rgba(8,40,36,.82); color: #bdf5e8; animation: bonusPulse 1.8s ease-in-out infinite; }
+@keyframes bonusPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(124,240,208,0); } 50% { box-shadow: 0 0 0 3px rgba(124,240,208,.35); } }
+.estat.bonuschip { color: #7fe0d6; border-color: rgba(124,240,208,.5); background: rgba(8,30,26,.7); font-weight: 800; font-size: 12px; }
 #cratemodal { position: absolute; inset: 0; z-index: 14; display: none; align-items: center; justify-content: center; background: rgba(4,8,16,.7); }
 #cratemodal.show { display: flex; }
 #cratemodal .cm-card { width: min(280px,82%); text-align: center; background: linear-gradient(180deg, #18233a, #0e1726); border: 2px solid rgba(255,210,74,.45); border-radius: 20px; padding: 26px 22px; box-shadow: 0 18px 60px rgba(0,0,0,.6); }
@@ -513,4 +518,4 @@ html, body {
 #offlineModal .om-btn { font-family: 'Fredoka', sans-serif; font-weight: 800; font-size: 14px; color: #20140a; background: var(--brass); border: 0; border-radius: 999px; padding: 9px 26px; cursor: pointer; }
 #offlineModal .om-btn:active { transform: scale(.95); }
 
-@media (prefers-reduced-motion: reduce) { #loader .spinner { animation: none; } #actionbar #advbtn { animation: none; } #erabar.ready .eb-fill { animation: none; } .estat.full { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #loader .spinner { animation: none; } #actionbar #advbtn { animation: none; } #erabar.ready .eb-fill { animation: none; } .estat.full { animation: none; } #actionbar #bonusbtn { animation: none; } }
