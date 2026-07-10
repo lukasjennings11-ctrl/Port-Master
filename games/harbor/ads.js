@@ -50,10 +50,13 @@
  * commercialBreak}) purely so tests can assert the integration points actually fire; real
  * adapters have no obligation to expose counts.
  *
- * Provider selection: reads ?adprovider=<id> from the URL for testing/portal wiring. Only 'stub'
- * ships in this build; an adapter can register itself onto window.ADS_PROVIDERS[id] before this
- * script runs (e.g. a portal build loads poki.js first) — anything unrecognised falls back to the
- * free stub, so the game is never left without a working (if ad-less) provider.
+ * Provider selection: an explicit ?adprovider=<id> in the URL always wins (testing/portal
+ * wiring, and ?adprovider=stub stays a working escape hatch on any build). With no URL override,
+ * a portal build's adapter script (loaded before this file) may declare itself the default via
+ * window.ADS_DEFAULT_PROVIDER = '<id>' after registering on window.ADS_PROVIDERS[id] — its
+ * presence in the build IS the provider decision (e.g. build-portal.sh --crazygames injects
+ * crazygames.js, which does exactly this). Anything unrecognised falls back to the free stub,
+ * so the game is never left without a working (if ad-less) provider.
  *
  * Dependency-free, ES5, matches the rest of the codebase (games/harbor/*.js).
  */
@@ -105,13 +108,14 @@
   };
 
   function pickProvider() {
-    var id = 'stub';
+    var id = null;
     try {
       var m = /[?&]adprovider=([a-z0-9_-]+)/i.exec(global.location ? global.location.search : '');
       if (m) id = m[1].toLowerCase();
     } catch (e) {}
-    if (id !== 'stub' && global.ADS_PROVIDERS && global.ADS_PROVIDERS[id]) return global.ADS_PROVIDERS[id];
-    return STUB;   // unknown/unregistered provider id → safe free fallback, game always has a working ADS
+    if (id === null && typeof global.ADS_DEFAULT_PROVIDER === 'string') id = global.ADS_DEFAULT_PROVIDER;
+    if (id && id !== 'stub' && global.ADS_PROVIDERS && global.ADS_PROVIDERS[id]) return global.ADS_PROVIDERS[id];
+    return STUB;   // no/unknown/unregistered provider id → safe free fallback, game always has a working ADS
   }
 
   global.ADS = pickProvider();

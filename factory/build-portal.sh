@@ -57,8 +57,24 @@
 #      works, __harbor.portalMode() === true, the dead non-portal Settings rows never
 #      render, and zero console/page errors.
 #
-# Usage: bash factory/build-portal.sh
+# Usage: bash factory/build-portal.sh [--crazygames]
+#
+#   --crazygames  additionally injects the CrazyGames SDK v3 tag + games/harbor/crazygames.js
+#                 (the window.ADS adapter) into the COPIED index.html, immediately before the
+#                 ads.js tag. crazygames.js registers itself on ADS_PROVIDERS and declares
+#                 itself the default provider (ads.js honours it when no ?adprovider= override
+#                 is present) — game.js is untouched, exactly as the ads.js contract intends.
+#                 Without the flag the build is byte-identical to before: stub provider, no
+#                 CrazyGames network calls (DISTRIBUTION.md "path 1" no-SDK submission).
 set -euo pipefail
+
+CRAZYGAMES=0
+for arg in "$@"; do
+  case "$arg" in
+    --crazygames) CRAZYGAMES=1 ;;
+    *) echo "unknown option: $arg (supported: --crazygames)" >&2; exit 2 ;;
+  esac
+done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -77,6 +93,9 @@ mkdir -p "$OUT/shared"
 
 note "[2/7] copy games/harbor/* (excluding tests/, sw.js, assetfetch.sh, manifest.json)"
 EXCLUDE=(tests sw.js assetfetch.sh manifest.json)
+# crazygames.js only ships when the --crazygames flavor asks for it — the plain build stays
+# byte-identical to the pre-adapter output (no unreferenced adapter file for portal QA to wonder about)
+[ "$CRAZYGAMES" -eq 0 ] && EXCLUDE+=(crazygames.js)
 for entry in "$SRC"/*; do
   name="$(basename "$entry")"
   skip=0
@@ -158,6 +177,31 @@ if [ "$STEP_OK" -eq 1 ] && ! grep -q 'var PORTAL_MODE = true;' "$GJS"; then
 fi
 if [ "$STEP_OK" -eq 1 ] && grep -q 'PORTAL_MODE = /\[?&\]portal=/' "$GJS"; then
   fail "PORTAL_MODE reassignment still present — the force-patch didn't remove it"
+fi
+
+if [ "$CRAZYGAMES" -eq 1 ]; then
+  note "[5b] --crazygames: inject SDK v3 + crazygames.js adapter tags before ads.js"
+  [ -f "$OUT/crazygames.js" ] || fail "--crazygames requested but games/harbor/crazygames.js missing from the copied build"
+  if ! python3 - "$OUT/index.html" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    html = f.read()
+needle = '<script src="ads.js'
+if needle not in html:
+    sys.exit(1)
+inject = ('<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>\n'
+          '  <script src="crazygames.js?v=60"></script>\n  ')
+html = html.replace(needle, inject + needle, 1)
+with open(path, 'w') as f:
+    f.write(html)
+PY
+  then
+    fail "could not find the ads.js <script> tag in the copied index.html to inject before"
+  fi
+  if [ "$STEP_OK" -eq 1 ] && ! grep -q 'crazygames-sdk-v3.js' "$OUT/index.html"; then
+    fail "CrazyGames SDK tag injection did not take effect"
+  fi
 fi
 
 if [ "$STEP_OK" -ne 1 ]; then

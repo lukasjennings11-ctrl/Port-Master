@@ -46,21 +46,22 @@ script any time `games/harbor/` changes and re-upload.
     in-game-currency wager honestly where asked.
 - **Review timeline:** fast relative to Poki — games can go live in days once uploaded
   and passing automated checks; a human review follows for "Full Launch" promotion.
-- **SDK note — two honest paths:**
-  1. **No-SDK first submission (what this build does today):** CrazyGames explicitly
-     allows submitting *without* the SDK integrated, subject to a stricter file-size cap
-     (≤50 MB total, ≤20 MB to be eligible for their mobile homepage — our build is
-     ~1.8 MB, nowhere close). This gets PortMaster live and gathering data fastest.
-  2. **Full SDK integration (needed before "Full Launch"/rev-share):** once selected for
-     Full Launch, CrazyGames *requires* their SDK — analytics, ads, loading/gameplay
-     events. Phase 12a/12b already built the `window.ADS` abstraction and the
-     `Portal.*` lifecycle hooks (`loadingFinished`/`gameplayStart`/`gameplayStop`/
-     `commercialBreak`) that a `crazygames.js` adapter would plug into with zero game
-     logic changes — that adapter itself isn't written yet (it's the natural next
-     phase once CrazyGames says yes to path 1).
-  - **Recommendation:** submit path 1 now (fast, honest, zero extra engineering), then
-    build the CrazyGames SDK adapter once you have a developer account and can read
-    their exact current SDK version/init code from the dashboard.
+- **SDK note — two honest paths, both now built:**
+  1. **No-SDK build:** `bash factory/build-portal.sh` (plain) still produces the SDK-free
+     bundle — CrazyGames allows it, subject to a stricter file-size cap (≤50 MB total,
+     ≤20 MB for mobile-homepage eligibility — our build is ~1.8 MB, nowhere close).
+  2. **Full SDK integration (RECOMMENDED for submission; required for "Full
+     Launch"/rev-share):** `bash factory/build-portal.sh --crazygames` injects the
+     CrazyGames SDK v3 tag + `games/harbor/crazygames.js`, the `window.ADS` adapter —
+     rewarded Captain's Bonus (6/day cap intact, grant only on completed watch, audio
+     muted during ads), midgame breaks at era advances, and the loading/gameplay events
+     their QA checks for. Zero game-logic changes, exactly as the ads.js contract
+     intended, and it degrades safely: SDK unreachable → the game boots ad-less.
+     Contract test: `node games/harbor/tests/crazygames.test.js` (wired into
+     `tests/run.sh`). Note `shared/portal.js` stands down in this build (single-owner
+     rule — a second `SDK.init()` makes the v3 SDK reject; see Portal.init's comment).
+  - **Recommendation:** submit the `--crazygames` build — it's the same bundle plus the
+    SDK, it monetizes from day one, and it's already Full-Launch-compliant.
 
 ## 2. Poki submission
 
