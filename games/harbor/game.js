@@ -991,6 +991,58 @@
   function unlockWorld(id) { if (HARBOR_BIOMES[id] && unlocked.indexOf(id) < 0) { unlocked.push(id); saveUnlocked(); if (buildSelector._set) buildSelector._set(); } }
   function showHint(msg) { if (!hintEl) return; hintEl.textContent = msg; hintEl.classList.remove('gone'); clearTimeout(showHint._t); showHint._t = setTimeout(function () { hintEl.classList.add('gone'); }, 1900); }
 
+  // ---- Phase 11b: feature-unlock announcements — a one-time (ever, persisted) celebratory nudge
+  // the first moment a system becomes relevant, so ~15 systems don't just silently appear. Reuses
+  // the hint toast for a quick line, plus a small dismissible card (never a full-screen blocker,
+  // never stacks — a second announce queues behind the first). ----
+  function seenMap() { return (window.Retention && Retention.get(GAME, 'seen2', {})) || {}; }
+  function hasSeenFeature(id) { return !!seenMap()[id]; }
+  function markSeenFeature(id) { var m = seenMap(); if (m[id]) return false; m[id] = 1; if (window.Retention) Retention.set(GAME, 'seen2', m); return true; }
+  var announceQueue = [], announceBusy = false, announceCard = null, announceT = null;
+  function ensureAnnounceCard() {
+    if (announceCard) return;
+    announceCard = document.createElement('div'); announceCard.id = 'announcecard';
+    announceCard.innerHTML = '<div class="an-ic"></div><div class="an-copy"><div class="an-title"></div><div class="an-txt"></div></div>';
+    wrap.appendChild(announceCard);
+    announceCard.addEventListener('click', function () { dismissAnnounce(); });
+  }
+  // don't pop the card over a modal that owns input (event/rival choice, welcome, crate reveal) —
+  // it stays queued and is retried on the next updateHUD tick instead.
+  function announceBlocked() {
+    return (eventModal && eventModal.classList.contains('show')) || (rivalModal && rivalModal.classList.contains('show')) ||
+      (document.getElementById('welcomemodal')) || (crateModal && crateModal.classList.contains('show'));
+  }
+  function dismissAnnounce() {
+    if (!announceCard) return;
+    announceCard.classList.remove('show'); clearTimeout(announceT); announceBusy = false;
+    setTimeout(pumpAnnounceQueue, 260);
+  }
+  function pumpAnnounceQueue() {
+    // a blocking modal (event/rival/welcome/crate) opened *while* the card was already showing —
+    // get out of the way immediately rather than overlap it. The message already landed once
+    // (seen2 is set on fire, not on dismiss), so nothing is lost — it just stops being shown.
+    if (announceBusy && announceCard && announceCard.classList.contains('show') && announceBlocked()) {
+      announceCard.classList.remove('show'); clearTimeout(announceT); announceBusy = false; return;
+    }
+    if (announceBusy || !announceQueue.length || announceBlocked()) return;
+    var item = announceQueue.shift();
+    ensureAnnounceCard(); announceBusy = true;
+    announceCard.querySelector('.an-ic').textContent = item.icon;
+    announceCard.querySelector('.an-title').textContent = item.title;
+    announceCard.querySelector('.an-txt').textContent = item.body || '';
+    announceCard.classList.add('show'); sfx('score'); haptic(14);
+    clearTimeout(announceT); announceT = setTimeout(dismissAnnounce, 6000);
+  }
+  // fires (once per id, ever) the moment a system first becomes relevant. hintOnly skips the card
+  // (used for fever, which is self-explanatory and timed — a toast is enough).
+  function announceFeature(id, icon, title, body, hintOnly) {
+    if (!markSeenFeature(id)) return;
+    if (hintOnly) { showHint(icon + ' ' + title + (body ? ' — ' + body : '')); return; }
+    showHint(icon + ' ' + title);
+    announceQueue.push({ icon: icon, title: title, body: body });
+    pumpAnnounceQueue();
+  }
+
   // ---- world-select UI (unlocked = playable, locked = shows unlock condition) ----
   function buildSelector() {
     var bar = document.createElement('div'); bar.id = 'biomebar';
@@ -1080,7 +1132,17 @@
     { t: 'Weather a storm', ok: function (s) { return s.stats && s.stats.storms >= 1; }, r: 500 },
     { t: 'Raise the trade network to Lv 2', ok: function (s) { return s.network && s.network.level >= 2; }, r: 1000 },
     { t: 'Insure your empire — network Lv 3', ok: function (s) { return s.network && s.network.level >= 3; }, r: 2500 },
-    { t: 'Found all five harbours', ok: function (s) { return (s.ports || []).length >= 5; }, r: 8000 }
+    { t: 'Found all five harbours', ok: function (s) { return (s.ports || []).length >= 5; }, r: 8000 },
+    // Phase 11b: appended (not inserted mid-ladder) — goalIdx is persisted by array index (Retention
+    // 'goal' {i}), so any existing save already sitting at an index below this point resolves to the
+    // exact same goal it always did. These three exist to *surface* systems a player may have missed
+    // (crates, expeditions, the rival) rather than gate progress, so they're deliberately easy/late —
+    // a returning player who already did all three just breezes through them for a small bonus before
+    // rejoining the endless genGoal() tail (which now starts 3 slots later; harmless, since it's
+    // procedurally generated off whatever idx it's asked for).
+    { t: 'Open a salvage crate', ok: function () { return crateOpenedFlag(); }, r: 250 },
+    { t: 'Send your first expedition', ok: function () { return achOwned('voy1'); }, r: 350 },
+    { t: 'Beat Baron Krall in a race', ok: function () { return (rivalGet().wins || 0) >= 1; }, r: 500 }
   ];
   var goalIdx = 0;
   function mgrTotal(s) { var n = 0, m = s.managers || {}; for (var k in m) n += m[k].lvl || 0; return n; }
@@ -1131,6 +1193,7 @@
       stormAlert.querySelector('.sa-txt').textContent = (hz.kind || 'Storm') + ' approaching ' + wname(hz.port);
       stormAlert.querySelector('.sa-cd').textContent = hz.in + 's';
       stormAlert.classList.add('show');
+      announceFeature('storm', '⚠️', 'Storm incoming!', 'Sea Walls and Lighthouses protect your port.');
     } else if (s.crash) {
       stormAlert.classList.add('crash');
       stormAlert.querySelector('.sa-txt').textContent = 'Market crash — ' + s.crash.res + ' prices slump';
@@ -1355,7 +1418,9 @@
   function comboMult() { return 1 + Math.min(combo * 0.12, 4); }
   function startFever(secs) {
     ensureFeverUI(); secs = secs || 14; feverEnd = Date.now() + secs * 1000; combo = 0; comboT = 0;
-    showHint('🎆 FEVER! Tap the coins!'); sfx('win'); haptic(20);
+    if (!hasSeenFeature('fever')) announceFeature('fever', '🎆', 'FEVER!', 'Tap the coins before they sink!', true);
+    else showHint('🎆 FEVER! Tap the coins!');
+    sfx('win'); haptic(20);
     spawnLoop(); clearTimeout(feverLoopT); feverTick();
   }
   function spawnLoop() {
@@ -1419,7 +1484,7 @@
   function seasonTheme() { var i = seasonId() % SEASON_THEMES.length; return SEASON_THEMES[(i + SEASON_THEMES.length) % SEASON_THEMES.length]; }
   function seasonGet() { var s = window.Retention && Retention.get(GAME, 'season', null), id = seasonId(); if (!s || s.id !== id) { s = { id: id, points: 0, claimed: [] }; if (window.Retention) Retention.set(GAME, 'season', s); } return s; }
   function seasonSet(s) { if (window.Retention) Retention.set(GAME, 'season', s); }
-  function seasonAdd(n) { if (!n) return; var s = seasonGet(); s.points = (s.points || 0) + n; seasonSet(s); }
+  function seasonAdd(n) { if (!n) return; var s = seasonGet(); var was0 = !s.points; s.points = (s.points || 0) + n; seasonSet(s); if (was0 && s.points > 0) announceFeature('season', '🎟️', 'Harbour Pass', 'Everything you do earns season rewards. Claim them in Legacy.'); }
   function seasonDaysLeft() { return Math.max(1, Math.ceil((SEASON_EPOCH + (seasonId() + 1) * SEASON_LEN - Date.now()) / (24 * 3600 * 1000))); }
   function passClaimable(i) { var s = seasonGet(); return (s.points || 0) >= PASS_TIERS[i].at && s.claimed.indexOf(i) < 0; }
   function claimPass(i) {
@@ -1823,8 +1888,9 @@
     { id: 'bp_route', name: 'Old Sea Maps', desc: '+15% route capacity forever', meta: 'routeMul', amt: 0.15 }
   ];
   function crateCount() { return window.Retention ? (Retention.get(GAME, 'crates', 0) | 0) : 0; }
+  function crateOpenedFlag() { return !!(window.Retention && Retention.get(GAME, 'crateOpened', false)); }
   function setCrates(n) { if (window.Retention) Retention.set(GAME, 'crates', Math.max(0, n | 0)); }
-  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); }
+  function grantCrate(n) { n = n || 1; setCrates(crateCount() + n); if (crateBtn) crateBtn.classList.add('bump'); setTimeout(function () { crateBtn && crateBtn.classList.remove('bump'); }, 400); announceFeature('crate', '🎁', 'Salvage Crate!', 'Tap 🎁 in the bottom bar to open it.'); }
   function ownedBlueprints() { var a = []; BLUEPRINTS.forEach(function (b) { if (window.Progress && Progress.unlocked(GAME, b.id)) a.push(b); }); return a; }
   function unownedBlueprints() { return BLUEPRINTS.filter(function (b) { return !(window.Progress && Progress.unlocked(GAME, b.id)); }); }
   // weighted roll → applies the reward, returns { tier, color, title, sub }
@@ -1874,6 +1940,7 @@
     var b = crateModal.querySelector('#cm-btn');
     if (b.textContent === 'Open') {
       if (crateCount() <= 0 || crateBusy) return; crateBusy = true; setCrates(crateCount() - 1);
+      if (window.Retention && !Retention.get(GAME, 'crateOpened', false)) Retention.set(GAME, 'crateOpened', true);
       var rew = rollCrate();
       var box = crateModal.querySelector('#cm-box'); box.classList.add('opening'); sfx('move');
       setTimeout(function () {
@@ -1939,7 +2006,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v54';
+  var BUILD_TAG = 'v55';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -1962,8 +2029,13 @@
          '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
          '📈 Fill the <b>era bar</b> (cash + required buildings) to <b>Advance</b> to bigger eras.<br>' +
          '🚢 <b>Trade network</b> links your ports into routes for passive income.<br>' +
+         '⛵ <b>Expeditions</b> send ships on timed voyages — they pay out even while you’re away.<br>' +
+         '🏺 <b>Relics</b> drop from crates &amp; voyages — equip a <b>Loadout</b> in Legacy for permanent perks.<br>' +
          '🌊 Storms damage buildings — repair them in Manage.<br>' +
+         '🏴‍☠️ <b>Baron Krall</b> challenges you to races — beat him for prizes &amp; bragging rights.<br>' +
+         '🎟️ The <b>Harbour Pass</b> earns free season rewards from everything you do.<br>' +
          '✦ When growth slows, <b>Legacy</b> lets you prestige for permanent multipliers.<br>' +
+         '🧭 At 3+ charters, pick a <b>Doctrine</b> in Legacy to specialise your run.<br>' +
          '🖐️ Drag to pan · pinch to zoom · twist to rotate.</div>';
     h += '<div class="mp-sec">About</div>';
     h += '<div class="set-about">PortMaster · build ' + BUILD_TAG +
@@ -2014,6 +2086,10 @@
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
     if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
+    // a founded port is the moment Expeditions become relevant — the button already exists (in actionBar)
+    announceFeature('exp', '⛵', 'Expeditions', 'Send ships on voyages; they return even while you’re away.');
+    if (chartersCount() >= DOCTRINE_UNLOCK) announceFeature('doctrine', '🧭', 'Doctrines', 'Pick a path in the Legacy panel.');
+    pumpAnnounceQueue();   // retry any announce that was deferred while a modal owned input
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
     if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
@@ -2045,7 +2121,7 @@
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
     // reveal the Legacy button once prestige is relevant; pulse when a prestige is available
-    if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); }
+    if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); if (lp.can) announceFeature('prestige', '✦', 'Legacy', 'Sign a new charter to restart stronger, forever.'); }
     if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
     if (expBtn) { var rd = (s.voyages && s.voyages.ready) || 0; expBtn.classList.toggle('hasready', rd > 0); expBtn.setAttribute('data-n', rd); }
     if (legacyOpen) renderLegacy();
@@ -2282,7 +2358,7 @@
     var ov = document.createElement('div'); ov.id = 'welcomemodal';
     ov.innerHTML = '<div class="wm-card"><div class="wm-logo">PortMaster</div>' +
       '<div class="wm-body">Found a harbour on the glowing coast, then grow a humble fishing village into a global trade empire.</div>' +
-      '<div class="wm-feat">⚓ Build &amp; upgrade · 🚢 trade between islands · 🌊 weather storms · ✦ prestige to grow <i>forever</i></div>' +
+      '<div class="wm-feat">⚓ Build &amp; trade · ⛵ Expeditions &amp; relics · 🏴‍☠️ race a rival · 🎟️ seasons &amp; ✦ prestige <i>forever</i></div>' +
       '<button class="wm-btn">Begin ⚓</button></div>';
     wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); }); sfx('score');
     ov.querySelector('.wm-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('tap'); if (window.Juice) Juice.Audio.unlock(); showHint('Tap the glowing harbour, then “Found village”'); setTimeout(function () { ov.remove(); }, 320); });
@@ -2305,7 +2381,9 @@
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
-    goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; }, tickAuto: function () { autoT = 10; tickAutomation(2); },
+    goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; },
+    goalOkAt: function (i) { return !!(i < GOALS.length ? GOALS[i] : genGoal(i)).ok(SIM.state()); },   // test hook: evaluate any ladder goal's ok() without needing goalIdx to be there yet
+    tickAuto: function () { autoT = 10; tickAutomation(2); },
     lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
@@ -2339,7 +2417,14 @@
     fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0 }; },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
     season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
-    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); }
+    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); },
+    // Phase 11b: onboarding — feature-unlock announce (test/debug hooks)
+    announce: function (id, icon, title, body, hintOnly) { announceFeature(id, icon, title, body, hintOnly); },
+    announceState: function () { return { queueLen: announceQueue.length, busy: announceBusy, showing: !!(announceCard && announceCard.classList.contains('show')), title: announceCard ? announceCard.querySelector('.an-title').textContent : null }; },
+    seenFeature: function (id) { return hasSeenFeature(id); },
+    dismissAnnounce: function () { dismissAnnounce(); },
+    resetAnnounce: function () { announceQueue.length = 0; clearTimeout(announceT); announceBusy = false; if (announceCard) announceCard.classList.remove('show'); },   // test-only: hard-clear any real (already-seen) announce still in flight, for a clean test slate
+    crateOpened: function () { return crateOpenedFlag(); }
   };
 
   if (canvas && canvas.getContext) boot();

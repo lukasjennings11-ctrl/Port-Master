@@ -43,6 +43,9 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   const booted = await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).then(() => true).catch(() => false);
   ok('boot: WebGL alive', booted);
   await sleep(400);
+  // Phase 11b: refreshed welcome copy should name the systems a newcomer wouldn't otherwise discover
+  const wmFeat = await page.evaluate(() => { var el = document.querySelector('#welcomemodal .wm-feat'); return el ? el.textContent : ''; });
+  ok('welcome: refreshed copy mentions Expeditions', /expedition/i.test(wmFeat));
   await page.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); var H = window.__harbor, S = window.HARBOR_SIM; H.autoFound(); S.setEra(4); S.raw().money = 5e6; S.raw().lifetimeMoney = 5e6; var p = S.port('green'); ['fishing_hut', 'fishing_hut', 'cottage', 'jetty', 'warehouse', 'market'].forEach(t => { if (S.canBuild(t)) S.build(t); }); p.res.fish = 999; p.res.timber = 999; p.res.goods = 999; });
   ok('found: port founded', await page.evaluate(() => !!window.HARBOR_SIM.raw().founded));
 
@@ -129,6 +132,25 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('rival: race won recorded', await page.evaluate(() => window.__harbor.rival().wins >= 1));
   ok('fleet: rival ship gone after the race resolves', await page.evaluate(() => window.__harbor.fleet().rival === 0));
 
+  // Phase 11b: onboarding goals — appended to the end of the curated ladder (save-safe: existing
+  // goalIdx saves below this point still resolve to the exact same goal they always did). Verify
+  // each new goal's ok() flips true once its underlying condition is actually driven.
+  const gTotal = await page.evaluate(() => window.__harbor.goal().total);
+  const iCrate = gTotal - 3, iExp = gTotal - 2, iRival = gTotal - 1;
+  const goalNames = await page.evaluate((idx) => idx.map((i) => window.__harbor.goalAt(i)), [iCrate, iExp, iRival]);
+  ok('goals: onboarding trio appended (crate / expedition / rival)',
+    /crate/i.test(goalNames[0]) && /expedition/i.test(goalNames[1]) && /krall/i.test(goalNames[2]));
+  const crateGoalBefore = await page.evaluate((i) => window.__harbor.goalOkAt(i), iCrate);
+  await page.evaluate(() => { window.__harbor.grantCrate(1); window.__harbor.openCrate(); });
+  await sleep(80);
+  await page.evaluate(() => { var b = document.querySelector('#cratemodal #cm-btn'); if (b) b.click(); });
+  await sleep(650);   // crate reveal animation
+  const crateGoalAfter = await page.evaluate((i) => window.__harbor.goalOkAt(i), iCrate);
+  await page.evaluate(() => { var m = document.querySelector('#cratemodal'); if (m) m.classList.remove('show'); });
+  ok('goal: "Open a salvage crate" ok() flips false→true once one is opened', crateGoalBefore === false && crateGoalAfter === true);
+  ok('goal: "Send your first expedition" ok() true once a voyage was collected', await page.evaluate((i) => window.__harbor.goalOkAt(i), iExp));
+  ok('goal: "Beat Baron Krall in a race" ok() true once a race was won', await page.evaluate((i) => window.__harbor.goalOkAt(i), iRival));
+
   // fever
   await page.evaluate(() => window.__harbor.startFever(3)); await sleep(400);
   await page.evaluate(() => window.__harbor.collectCoins()); await sleep(150);
@@ -209,6 +231,32 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('10c: resize (FBO recreate both ways) renders zero errors, post still on', errs.length === errsBefore10c &&
     await page.evaluate(() => window.__harbor.post().on === true));
   await page.evaluate(() => window.__harbor.setTod(0.5));
+
+  // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
+  // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
+  // any real (already-seen — exp/prestige/storm/…) announce still queued from earlier in the run,
+  // so these synthetic ids get a clean slate to test against.
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+  const an1 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: fires with the card visible + correct title/body', an1.showing === true && an1.title === 'Test Feature');
+  ok('announce: seen flag recorded on first fire', await page.evaluate(() => window.__harbor.seenFeature('testfeat11b')));
+  await page.evaluate(() => window.__harbor.dismissAnnounce()); await sleep(300);
+  const an2 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: does not refire the same id again (once ever)', an2.showing === false && an2.queueLen === 0);
+
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+  const q1 = await page.evaluate(() => { window.__harbor.announce('qtest11bA', '🅰️', 'Queue A', 'first'); window.__harbor.announce('qtest11bB', '🅱️', 'Queue B', 'second'); return window.__harbor.announceState(); });
+  ok('announce: a queued second announce does not overlap the first', q1.showing === true && q1.title === 'Queue A' && q1.queueLen === 1);
+  await page.evaluate(() => window.__harbor.dismissAnnounce()); await sleep(350);
+  const q2 = await page.evaluate(() => window.__harbor.announceState());
+  ok('announce: queued second shows only after the first is dismissed', q2.showing === true && q2.title === 'Queue B' && q2.queueLen === 0);
+  await page.evaluate(() => window.__harbor.resetAnnounce()); await sleep(50);
+
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  const an3 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
+  ok('announce: "seen" persists across reload — never shows again', an3.showing === false);
 
   // live ticking after everything — no late errors
   await sleep(2000);
