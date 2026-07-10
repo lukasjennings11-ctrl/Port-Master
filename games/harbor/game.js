@@ -11,6 +11,14 @@
   var gl = null, E = null;
   try { gl = canvas.getContext('webgl2', { antialias: true, alpha: false }); } catch (e) {}
 
+  // Phase 12b: portal mode — true when launched with ?portal= (a portal host page/iframe param)
+  // or when a real (non-stub) ad provider is active, i.e. this build is running on a portal.
+  // Gates the handful of things portals disallow or don't want: service-worker registration
+  // (see index.html), the beforeinstallprompt/"Add to home screen" PWA install flow, and the
+  // external privacy-policy link. Everything else about the game is byte-for-byte identical.
+  var PORTAL_MODE = false;
+  try { PORTAL_MODE = /[?&]portal=/.test(window.location.search) || !!(window.ADS && window.ADS.provider && window.ADS.provider !== 'stub'); } catch (e) {}
+
   var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false;
   // camera: current + targets + fling velocity
   var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4, txT: 0, tzT: 4, vTx: 0, vTz: 0 };
@@ -140,6 +148,7 @@
     buildBiome(biomeId);
     C.txT = x; C.tzT = z; C.distT = 130; C.elT = 0.5;        // frame the new harbour
     if (typeof updateHUD === 'function') updateHUD();
+    adsGameplayStart();   // Phase 12b: founding a port is the moment real gameplay begins
   }
 
   // ---- glTF city assets (loaded once, async; procedural scene renders meanwhile) ----
@@ -872,7 +881,13 @@
     ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
     applyWeatherGain(stormActive); applyMusicGain();
   }
-  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } });
+  document.addEventListener('visibilitychange', function () {
+    // Phase 12b: portal gameplay-lifecycle bracket — stop on backgrounded, resume on foreground
+    // (only if a port is actually founded; nothing to report on the pre-founding wild-island view).
+    if (document.hidden) adsGameplayStop();
+    else if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
+    if (amb) { if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } }
+  });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -900,7 +915,20 @@
   }
 
   // ---- Era Ascension cinematic ----
+  // Phase 12b: the one natural pause where a portal SDK gets to show a commercial break. It fires
+  // BEFORE the cinematic itself starts (era/economy state was already advanced by the caller) so a
+  // real ad interrupts nothing in progress — the player sees the break, then the reward cinematic
+  // plays uninterrupted. The stub calls onDone() on the next tick, so this is invisible off-portal.
   function startAscension(toEra, eraName, unlocksText, bonus) {
+    try {
+      if (window.ADS && typeof window.ADS.commercialBreak === 'function') {
+        window.ADS.commercialBreak(function () { beginAscension(toEra, eraName, unlocksText, bonus); });
+        return;
+      }
+    } catch (e) {}
+    beginAscension(toEra, eraName, unlocksText, bonus);
+  }
+  function beginAscension(toEra, eraName, unlocksText, bonus) {
     cine = { t: 0, dur: 4.2, flashed: false, banner: false, toEra: toEra, name: eraName, unlocks: unlocksText, bonus: bonus, az0: C.azT };
     if (window.Juice && !muted) Juice.Audio.tone(170, 0.7, 'sawtooth', { vol: 0.3, glide: 340 });
     haptic([10, 40, 20]);
@@ -2236,7 +2264,62 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v57';
+  var BUILD_TAG = 'v58';
+
+  // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
+  // unhandled promise rejections, persisted write-through to localStorage so a real bug report
+  // can quote it. Every path here is try/catch-guarded and must never itself throw. The listeners
+  // are installed only after boot() has fully succeeded (see the end of boot()) so we never catch
+  // the test harness's own intentional in-page throws during earlier init/setup. ----
+  var ERRLOG_KEY = 'gf:' + GAME + ':errlog', ERRLOG_MAX = 20;
+  var errLog = [];
+  function loadErrLog() {
+    try {
+      var raw = localStorage.getItem(ERRLOG_KEY), arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) errLog = arr;
+    } catch (e) {}
+  }
+  function saveErrLog() { try { localStorage.setItem(ERRLOG_KEY, JSON.stringify(errLog)); } catch (e) {} }
+  function logError(msg, src, line) {
+    try {
+      errLog.push({ t: Date.now(), msg: String(msg == null ? '' : msg).slice(0, 500), src: String(src == null ? '' : src).slice(0, 300), line: line | 0 });
+      if (errLog.length > ERRLOG_MAX) errLog.splice(0, errLog.length - ERRLOG_MAX);
+      saveErrLog();
+      if (settingsOpen) renderSettings();
+    } catch (e) {}
+  }
+  function copyAndClearErrLog() {
+    try {
+      var txt = JSON.stringify(errLog);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).catch(function () {});
+    } catch (e) {}
+    errLog = [];
+    try { localStorage.removeItem(ERRLOG_KEY); } catch (e) {}
+    renderSettings();
+  }
+  function installErrorCapture() {
+    try {
+      loadErrLog();
+      window.addEventListener('error', function (e) {
+        try { logError(e && e.message, e && e.filename, e && e.lineno); } catch (x) {}
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        try {
+          var r = e && e.reason, msg = (r && r.message) ? r.message : String(r);
+          logError(msg, '', 0);
+        } catch (x) {}
+      });
+    } catch (e) {}
+  }
+
+  // ---- Phase 12b: portal lifecycle events — thin, always-guarded wrappers over the optional
+  // window.ADS.{loadingFinished,gameplayStart,gameplayStop} hooks so callers never need their own
+  // try/catch. No-ops (beyond bookkeeping) in the stub provider; a real portal adapter maps these
+  // onto its SDK's loading/gameplay brackets. ----
+  function adsLoadingFinished() { try { if (window.ADS && typeof window.ADS.loadingFinished === 'function') window.ADS.loadingFinished(); } catch (e) {} }
+  function adsGameplayStart() { try { if (window.ADS && typeof window.ADS.gameplayStart === 'function') window.ADS.gameplayStart(); } catch (e) {} }
+  function adsGameplayStop() { try { if (window.ADS && typeof window.ADS.gameplayStop === 'function') window.ADS.gameplayStop(); } catch (e) {} }
+
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -2273,8 +2356,20 @@
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
          (charters > 0 ? ' · ' + charters + ' charter' + (charters > 1 ? 's' : '') : '') +
          (leg > 0 ? ' · ✦' + fmt(leg) + ' Legacy' : '') + '</div>';
-    h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
-         '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
+    // Phase 12b: portal builds get no external links and no PWA install prompt (both disallowed
+    // by portal hosts) — just a plain version line instead of the privacy/install row.
+    if (PORTAL_MODE) {
+      h += '<div class="set-about set-portal-ver">PortMaster ' + BUILD_TAG + '</div>';
+    } else {
+      h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
+           '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
+    }
+    // Phase 12b: error capture — only a nudge when something's actually been logged, one tap
+    // copies the JSON to the clipboard and clears the buffer (no separate viewer needed).
+    if (errLog.length > 0) {
+      h += '<div class="mp-grid"><button class="mp-item set-link" data-set="errlog"><span class="mi-n">⚠ ' +
+           errLog.length + ' issue' + (errLog.length > 1 ? 's' : '') + ' logged</span><span class="mi-c">tap to copy</span></button></div>';
+    }
     h += '<div class="mp-sec">Danger zone</div>';
     h += '<button class="mp-item set-reset' + (resetArm ? ' arm' : '') + '" data-set="reset"><span class="mi-n">' +
          (resetArm ? 'Tap again to wipe everything' : 'Reset all progress') + '</span><span class="mi-c">' + (resetArm ? '⚠' : '↺') + '</span></button>';
@@ -2288,6 +2383,7 @@
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
+        else if (a === 'errlog') { copyAndClearErrLog(); sfx('tap'); haptic(8); }
         else if (a === 'reset') {
           if (!resetArm) { resetArm = true; haptic(20); renderSettings(); setTimeout(function () { resetArm = false; if (settingsOpen) renderSettings(); }, 4000); }
           else { resetProgress(); }
@@ -2304,9 +2400,12 @@
     try { if (window.Juice) Juice.Audio.play('lose'); } catch (e) {}
     location.reload();
   }
-  // PWA install: use the captured beforeinstallprompt event when available.
+  // PWA install: use the captured beforeinstallprompt event when available. Suppressed entirely
+  // in portal mode — portals disallow PWA install prompts inside their embed (Phase 12b).
   var deferredPrompt = null;
-  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; });
+  if (!PORTAL_MODE) {
+    window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; });
+  }
   function promptInstall() {
     if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(function () { deferredPrompt = null; }); }
     else { showHint('Use your browser menu → “Add to Home Screen” to install PortMaster'); }
@@ -2556,7 +2655,7 @@
     if (SIM) { computeMeta(); applyTide(); }                          // Legacy multipliers + today's market tide before offline accrual
     dailyList();                                                     // materialise today's missions so event hooks can bump them
     var offGain = 0, offSec = 0;
-    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; } }
+    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; adsGameplayStart(); } }   // Phase 12b: resuming a save with a founded port is gameplay too
     if (SIM && SIM.raw()) { hudShownMoney = prevMoney = SIM.raw().money; }
     if (!(SIM && SIM.raw() && SIM.raw().founded)) era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
@@ -2585,7 +2684,11 @@
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
-    if (window.Portal) Portal.init().then(function () { Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart(); });
+    if (window.Portal) Portal.init().then(function () {
+      Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart();
+      adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
+      installErrorCapture();     // …and only now start listening for real runtime errors
+    });
   }
   function showOffline(gain, sec) {
     var h = Math.floor(sec / 3600), mn = Math.floor((sec % 3600) / 60), ago = (h ? h + 'h ' : '') + mn + 'm';
@@ -2690,7 +2793,12 @@
     // Phase 12a: Captain's Bonus + pluggable AdProvider (test/debug hooks)
     bonus: function () { return { available: bonusEligible(), active: bonusChipActive && SIM.boostT() > 0, mult: SIM.boostMul(), remaining: SIM.boostT(), usedToday: bonusUsedToday() }; },
     claimBonus: function () { openBonusCard(); var b = bonusModal && bonusModal.querySelector('[data-bonus="claim"]'); if (b) { b.click(); return true; } return false; },
-    reinitAds: function () { adsReady = false; initAds(); }   // test-only: re-run provider init after swapping window.ADS in-page, to exercise the resilience path
+    reinitAds: function () { adsReady = false; initAds(); },  // test-only: re-run provider init after swapping window.ADS in-page, to exercise the resilience path
+    // Phase 12b: production hardening (test/debug hooks)
+    errors: function () { return errLog.slice(); },           // ring buffer copy — last 20 {t,msg,src,line}
+    clearErrors: function () { errLog = []; try { localStorage.removeItem(ERRLOG_KEY); } catch (e) {} if (settingsOpen) renderSettings(); },
+    portalMode: function () { return PORTAL_MODE; },
+    advance: function () { doAdvance(); return !!cine; }       // test-only: drive the real era-advance path (incl. the commercialBreak hook) without needing to grind the money/building gate live
   };
 
   if (canvas && canvas.getContext) boot();

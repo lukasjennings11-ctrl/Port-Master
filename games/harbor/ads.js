@@ -33,6 +33,23 @@
  *                             moment. onDone() always fires exactly once, asynchronously, so game
  *                             flow is never blocked waiting on it.
  *
+ * Portal lifecycle events (Phase 12b) — the exact hooks Poki/CrazyGames QA checks for. All three
+ * are optional, synchronous, fire-and-forget (no callback, must never throw) and no-ops in the
+ * stub beyond bookkeeping. A portal adapter maps each straight onto its SDK's loading/gameplay
+ * bracket calls (e.g. CrazyGames' sdkGameLoadingStop/gameplayStart/gameplayStop):
+ *   loadingFinished()      — called once, when the game has finished booting and the loader is
+ *                             about to be hidden. Tells the portal it can stop showing its own
+ *                             loading UI over ours.
+ *   gameplayStart()        — called whenever the player is actively playing: on founding a port /
+ *                             resuming a save with a founded port, and whenever the tab regains
+ *                             visibility with a founded port. Portals use this to know when it's
+ *                             safe to show ads/prompts and for their own analytics.
+ *   gameplayStop()         — called whenever the tab loses visibility (backgrounded/hidden), the
+ *                             mirror image of gameplayStart(). Portals pause their own timers here.
+ * The stub counts every call (window.ADS._counts = {loadingFinished, gameplayStart, gameplayStop,
+ * commercialBreak}) purely so tests can assert the integration points actually fire; real
+ * adapters have no obligation to expose counts.
+ *
  * Provider selection: reads ?adprovider=<id> from the URL for testing/portal wiring. Only 'stub'
  * ships in this build; an adapter can register itself onto window.ADS_PROVIDERS[id] before this
  * script runs (e.g. a portal build loads poki.js first) — anything unrecognised falls back to the
@@ -65,6 +82,9 @@
 
   var STUB = {
     provider: 'stub',
+    // Phase 12b: invocation counters for the three portal lifecycle hooks + commercialBreak, so
+    // tests (and curious devs) can confirm game.js actually calls each at the right moment.
+    _counts: { loadingFinished: 0, gameplayStart: 0, gameplayStop: 0, commercialBreak: 0 },
     init: function (cb) { setTimeout(function () { if (cb) cb(); }, 0); },
     rewardedAvailable: function () { return todayCount() < DAILY_CAP; },
     showRewarded: function (onReward, onFail) {
@@ -77,7 +97,11 @@
         if (onReward) onReward();
       }, delay);
     },
-    commercialBreak: function (onDone) { setTimeout(function () { if (onDone) onDone(); }, 0); }
+    commercialBreak: function (onDone) { STUB._counts.commercialBreak++; setTimeout(function () { if (onDone) onDone(); }, 0); },
+    // ---- Phase 12b portal lifecycle events (see file header) — stub just counts them. ----
+    loadingFinished: function () { STUB._counts.loadingFinished++; },
+    gameplayStart: function () { STUB._counts.gameplayStart++; },
+    gameplayStop: function () { STUB._counts.gameplayStop++; }
   };
 
   function pickProvider() {
