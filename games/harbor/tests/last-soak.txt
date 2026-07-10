@@ -1,0 +1,35 @@
+PortMaster soak run — 2026-07-10T14:56:44.397Z
+target: 4 min, actual: 244s (4.1 min), samples: 9
+
+=== sample table ===
+ t(s)    heapMB     fps   domNodes   era       money
+    0      48.2     7.6        122     0        5000
+   35       3.5     9.9        262     0        4501
+   71       4.0     7.2        249     0        4463
+  104       4.2     6.8        252     0        4017
+  138       3.9     7.0        255     0        3935
+  172       3.7     7.6        258     0        3670
+  206       4.4     9.0        266     0        3413
+  241       4.0     9.2        276     0        3180
+  244       4.3     9.9        276     0        3182
+
+=== action mix ===
+  biome: 2
+  bonus: 1
+  crate: 6
+  expedition: 24
+  fever: 9
+  legacy: 9
+  manage: 25
+  resize: 2
+  tod: 6
+  zoom: 7
+
+=== assertions ===
+PASS — zero page/console errors :: 0 error(s)
+PASS — heap plateau (2nd-half growth <15%) :: 10.3% growth over 2nd half (3.9MB → 4.3MB), threshold <15%
+PASS — fps relative floor (final ≥60% of 3rd sample) :: final 9.9 fps vs 3rd-sample 7.2 fps (floor 4.3 fps, 60%)
+PASS — no unbounded DOM growth (final <2× the 5-min mark) :: final 276 nodes vs 5-min-mark(t=244s) 276 nodes (cap 552, <2×)
+PASS — save survives reload (founded, no loss, offline-accrual-bounded gain) :: pre £3181.800046272653 founded=true → post £3191.2185157442864 founded=true (drift 0.30%)
+
+ALL PASS — soak ran 244s (4.1 min), 9 samples, 0 errors, 0 action exceptions
