@@ -516,6 +516,39 @@ html, body {
 #ascendbanner .ab-unlock { font-family: 'Fredoka', sans-serif; font-size: 12px; font-weight: 600; color: var(--text); }
 #ascendbanner .ab-bonus { font-family: 'Fredoka', sans-serif; font-size: 14px; font-weight: 800; color: #ffe27a; margin-top: 4px; }
 
+/* Phase 15a: shared "you can't click this" treatment across every buy-able row in Manage/Legacy —
+   a dashed outline + muted text so unaffordable/maxed options read as inert at a glance, not just
+   slightly dimmer (which playtesters didn't reliably notice under the old opacity-only :disabled
+   style). !important because these rows already carry their own tinted background/border variants
+   (mgr/order/repair/up/lg-node) that this class is meant to always win over. */
+.mp-item.ghosted, .lg-node.ghosted {
+  background: rgba(255,255,255,.03) !important; border: 1.5px dashed rgba(255,255,255,.22) !important;
+  opacity: .58; box-shadow: none !important; animation: none !important;
+}
+.mp-item.ghosted .mi-n, .mp-item.ghosted .mi-d, .lg-node.ghosted .ln-n, .lg-node.ghosted .ln-d { color: var(--muted) !important; }
+.mp-item.ghosted .mi-c, .lg-node.ghosted .ln-c { color: rgba(143,176,189,.9) !important; font-weight: 700; }
+.mp-teaser { font-family: 'Fredoka',system-ui,sans-serif; font-size: 10px; font-weight: 600; color: var(--teal); opacity: .85; text-align: center; padding: 3px 4px 1px; }
+
+/* Phase 15a: trade-map guide card — the map used to give zero feedback when there was nothing to
+   connect yet ("I can't set up a trade network, I can only click on one city"). Shown while fewer
+   than 2 harbours are founded; auto-hides once a 2nd port exists. */
+.tm-guide {
+  position: absolute; left: 50%; top: calc(64px + env(safe-area-inset-top)); transform: translateX(-50%);
+  width: min(300px, calc(100% - 32px)); z-index: 3; display: none; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center; background: linear-gradient(180deg, rgba(22,54,70,.97), rgba(9,26,36,.97));
+  border: 1px solid rgba(124,224,214,.45); border-radius: 16px; padding: 16px 18px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.55);
+}
+.tm-guide.show { display: flex; }
+.tm-guide .tmg-ic { font-size: 28px; line-height: 1; }
+.tm-guide .tmg-title { font-family: 'Lilita', cursive; font-weight: 400; font-size: 17px; color: var(--text); }
+.tm-guide .tmg-body { font-family: 'Fredoka', sans-serif; font-size: 11.5px; line-height: 1.42; color: var(--muted); }
+.tm-guide .tmg-btn { margin-top: 5px; padding: 9px 20px; border: 0; border-radius: 999px; font-family: 'Fredoka', sans-serif; font-weight: 800; font-size: 12.5px; color: #08222c; background: linear-gradient(180deg, #9df0e6, var(--teal)); cursor: pointer; box-shadow: 0 6px 18px rgba(79,214,196,.35); }
+.tm-guide .tmg-btn:active { transform: scale(.95); }
+/* biome-bar nudge — the "Show me" fallback when no unlocked-but-unfounded world exists yet */
+@keyframes barNudge { 0%,100% { box-shadow: 0 0 0 0 rgba(242,179,94,0); } 50% { box-shadow: 0 0 0 6px rgba(242,179,94,.4); } }
+#biomebar.nudge { animation: barNudge .6s ease-in-out 3; }
+
 /* offline welcome-back modal */
 #offlineModal { position: absolute; inset: 0; z-index: 13; display: flex; align-items: center; justify-content: center; background: rgba(4,10,16,0); transition: background .3s ease; }
 #offlineModal.show { background: rgba(4,10,16,.6); }

@@ -1023,20 +1023,51 @@
   // your ports. Tap two founded ports to open a route; tap a route to upgrade/remove it.
   var tradeMap = null, tradeCanvas = null, tradeCtx = null, tradeOpen = false, tradeAct = null, tradeBar = null;
   var tradeSel = { node: null, route: null };
+  var tradeGuideEl = null;   // Phase 15a: "found a 2nd harbour" guide card, shown while <2 ports exist
   var NODES = { green: [0.24, 0.66], tropical: [0.40, 0.40], mountain: [0.58, 0.23], nordic: [0.70, 0.70], desert: [0.84, 0.46] };
   var RESCOL = { fish: '#57c7e0', timber: '#cf9a52', goods: '#b884f0' };
   function portFounded(id) { return !!(SIM && SIM.port && SIM.port(id)); }
+  function tradeFoundedCount() { var n = 0; for (var id in NODES) if (portFounded(id)) n++; return n; }
+  // Phase 15a: the trade map used to give zero feedback when there was nothing to connect yet
+  // ("I can't set up a trade network, I can only click on one city" — first playtest). This card
+  // makes the reason explicit and offers a one-tap way to go found a second harbour.
+  function updateTradeGuide() { if (tradeGuideEl) tradeGuideEl.classList.toggle('show', tradeFoundedCount() < 2); }
+  function tradeShowMe() {
+    closeTrade();
+    var target = null;
+    for (var i = 0; i < HARBOR_BIOME_ORDER.length; i++) {
+      var id = HARBOR_BIOME_ORDER[i];
+      if (isUnlocked(id) && !portFounded(id)) { target = id; break; }
+    }
+    if (target) {
+      // reuse the existing world-switch path (same as tapping the biome bar) — the founding UI
+      // (site chips + "Found village") appears automatically once the world isn't founded yet.
+      buildBiome(target); if (buildSelector._set) buildSelector._set(); defaultView();
+      showHint('⚓ Tap the glowing harbour, then “Found village”');
+    } else {
+      // every unlocked world is already founded (or nothing new is unlocked yet) — nudge toward
+      // the era climb that unlocks the next coast, rather than promising a jump that isn't there.
+      var bar = document.getElementById('biomebar');
+      if (bar) { bar.classList.add('nudge'); setTimeout(function () { bar.classList.remove('nudge'); }, 1900); }
+      showHint('Grow your port to unlock a new coast to found');
+    }
+  }
   function ensureTradeMap() {
     if (tradeMap) return;
     tradeMap = document.createElement('div'); tradeMap.id = 'trademap';
     tradeMap.innerHTML = '<div class="tm-top"><span class="tm-title">Trade Network</span><span class="tm-lvl" id="tm-lvl"></span><button class="tm-close" id="tm-close">✕</button></div>' +
       '<div class="tm-xp"><i id="tm-xpfill"></i></div>' +
+      '<div class="tm-guide" id="tm-guide"><div class="tmg-ic">🧭</div><div class="tmg-title">Open a second harbour</div>' +
+      '<div class="tmg-body">Trade routes link TWO harbours — found a second port to start trading.</div>' +
+      '<button class="tmg-btn" id="tmg-show">Show me</button></div>' +
       '<canvas id="tradecanvas"></canvas>' +
       '<div class="tm-act" id="tm-act"></div>';
     wrap.appendChild(tradeMap);
     tradeCanvas = tradeMap.querySelector('#tradecanvas'); tradeCtx = tradeCanvas.getContext('2d');
     tradeAct = tradeMap.querySelector('#tm-act'); tradeBar = tradeMap.querySelector('#tm-xpfill');
+    tradeGuideEl = tradeMap.querySelector('#tm-guide');
     tradeMap.querySelector('#tm-close').addEventListener('click', closeTrade);
+    tradeMap.querySelector('#tmg-show').addEventListener('click', tradeShowMe);
     tradeCanvas.addEventListener('pointerdown', function (e) { var r = tradeCanvas.getBoundingClientRect(); tradeTap(e.clientX - r.left, e.clientY - r.top); });
     sizeTrade();
   }
@@ -1049,7 +1080,7 @@
   function openTrade() {
     if (!SIM || !SIM.raw()) return;
     ensureTradeMap(); tradeOpen = true; tradeSel = { node: null, route: null };
-    tradeMap.classList.add('show'); sizeTrade(); renderTradeAct(); sfx('tap'); haptic(10);
+    tradeMap.classList.add('show'); sizeTrade(); updateTradeGuide(); renderTradeAct(); sfx('tap'); haptic(10);
   }
   function closeTrade() { tradeOpen = false; if (tradeMap) tradeMap.classList.remove('show'); }
   function nodeXY(id) { var p = NODES[id] || [0.5, 0.5], w = tradeCanvas.width, h = tradeCanvas.height; return [p[0] * w, p[1] * h]; }
@@ -1078,6 +1109,7 @@
   function wname(id) { return (window.HARBOR_BIOMES[id] && HARBOR_BIOMES[id].name) || id; }
   function renderTradeAct() {
     if (!tradeAct) return;
+    updateTradeGuide();
     var net = SIM.network();
     var lvlEl = document.getElementById('tm-lvl'); if (lvlEl) lvlEl.textContent = 'Lv ' + net.level + ' · ' + net.routes.length + '/' + net.maxRoutes + ' routes' + (net.insurance ? ' · insured' : '');
     if (tradeBar) tradeBar.style.width = Math.round(100 * net.xp / Math.max(1, net.need)) + '%';
@@ -1107,9 +1139,11 @@
       }
     }
     // default hint + network perks
-    var founded = 0; for (var id in NODES) if (portFounded(id)) founded++;
+    var founded = tradeFoundedCount();
     var perk = 'Network Lv ' + net.level + ' — +' + net.capPct + '% capacity, +' + net.tariffPct + '% tariffs' + (net.insurance ? ', storm insurance' : ', insurance at Lv 3');
-    var hint = founded < 2 ? 'Found a second harbour to open trade routes.' : (tradeSel.node ? 'Now tap another port to ship to.' : 'Tap a port, then another, to build a route.');
+    // a selected node always gets its "tap another" hint (the guide card above already covers the
+    // <2-founded case, so this stays true to what the player just did rather than re-explaining that)
+    var hint = tradeSel.node ? 'Now tap another harbour to link a route' : (founded < 2 ? 'Found a second harbour to open trade routes.' : 'Tap a harbour, then another, to build a route.');
     tradeAct.innerHTML = '<div class="ta-msg">' + hint + '</div><div class="ta-perk">' + perk + '</div>';
   }
   function RESCOL_(res) { return RESCOL[res] || '#9fb0bd'; }
@@ -1120,6 +1154,7 @@
   }
   function drawTradeMap() {
     if (!tradeCtx) return;
+    updateTradeGuide();   // cheap per-frame safety net (also updated on tap/open) — never goes stale
     var w = tradeCanvas.width, h = tradeCanvas.height, ctx = tradeCtx, t = clock, net = SIM.network();
     var grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#0a2230'); grd.addColorStop(1, '#06151f');
     ctx.fillStyle = grd; ctx.fillRect(0, 0, w, h);
@@ -1141,23 +1176,35 @@
       }
     }
     ctx.globalAlpha = 1;
-    // proposed link preview (src selected, awaiting dest)
-    if (tradeSel.node) { var c0 = nodeXY(tradeSel.node); ctx.fillStyle = 'rgba(255,220,120,.9)'; ctx.beginPath(); ctx.arc(c0[0], c0[1], 34 * DPR, 0, 6.283); ctx.globalAlpha = 0.18 + 0.06 * Math.sin(t * 4); ctx.fill(); ctx.globalAlpha = 1; }
-    // nodes
+    // Phase 15a: selection feedback — a pulsing sonar ring around the tapped node (in addition to
+    // the soft halo below) so "you picked this one, now pick another" reads instantly.
+    if (tradeSel.node) {
+      var c0 = nodeXY(tradeSel.node), pulse = 0.5 + 0.5 * Math.sin(t * 3.4);
+      ctx.beginPath(); ctx.arc(c0[0], c0[1], (28 + pulse * 10) * DPR, 0, 6.283);
+      ctx.strokeStyle = 'rgba(255,213,106,' + (0.9 - pulse * 0.55).toFixed(2) + ')'; ctx.lineWidth = (2.5 + pulse * 1.5) * DPR; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,220,120,.9)'; ctx.beginPath(); ctx.arc(c0[0], c0[1], 34 * DPR, 0, 6.283); ctx.globalAlpha = 0.16 + 0.05 * Math.sin(t * 4); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    // nodes — founded (route-capable) ports get a bright, glowing treatment; unfounded ones render
+    // clearly ghosted (dim fill, thin faded stroke, muted label) so what's tappable is obvious.
     for (var id in NODES) {
       var c = nodeXY(id), fnd = portFounded(id), unl = isUnlocked(id);
+      ctx.save();
+      if (fnd) { ctx.shadowColor = 'rgba(124,224,214,.65)'; ctx.shadowBlur = 16 * DPR; }
+      ctx.globalAlpha = fnd ? 1 : (unl ? 0.55 : 0.32);
       ctx.beginPath(); ctx.arc(c[0], c[1], 22 * DPR, 0, 6.283);
-      ctx.fillStyle = fnd ? '#163a4a' : 'rgba(20,40,52,.55)';
+      ctx.fillStyle = fnd ? '#1d4d61' : 'rgba(20,40,52,.42)';
       ctx.fill();
-      ctx.lineWidth = (tradeSel.node === id ? 4 : 2.5) * DPR;
-      ctx.strokeStyle = fnd ? (tradeSel.node === id ? '#ffd56a' : '#4fd6c4') : 'rgba(150,175,190,.4)';
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = (tradeSel.node === id ? 4 : (fnd ? 2.5 : 1.5)) * DPR;
+      ctx.strokeStyle = fnd ? (tradeSel.node === id ? '#ffd56a' : '#7fe0d6') : 'rgba(150,175,190,.3)';
       ctx.stroke();
       // label
-      ctx.fillStyle = fnd ? '#eaf4f7' : 'rgba(190,205,214,.7)';
+      ctx.fillStyle = fnd ? '#eaf4f7' : 'rgba(190,205,214,.55)';
       ctx.font = '700 ' + (12 * DPR) + 'px Fredoka, system-ui, sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(wname(id), c[0], c[1] - 30 * DPR);
-      if (!unl) { ctx.fillStyle = 'rgba(190,205,214,.8)'; ctx.font = (15 * DPR) + 'px system-ui'; ctx.fillText('🔒', c[0], c[1] + 5 * DPR); }
-      else if (!fnd) { ctx.fillStyle = 'rgba(190,205,214,.7)'; ctx.font = (10 * DPR) + 'px Fredoka, sans-serif'; ctx.fillText('unfounded', c[0], c[1] + 4 * DPR); }
+      if (!unl) { ctx.fillStyle = 'rgba(190,205,214,.6)'; ctx.font = (15 * DPR) + 'px system-ui'; ctx.fillText('🔒', c[0], c[1] + 5 * DPR); }
+      else if (!fnd) { ctx.fillStyle = 'rgba(190,205,214,.55)'; ctx.font = (10 * DPR) + 'px Fredoka, sans-serif'; ctx.fillText('unfounded', c[0], c[1] + 4 * DPR); }
       else { ctx.fillStyle = '#cfe9f0'; ctx.font = '600 ' + (9.5 * DPR) + 'px Fredoka, sans-serif'; var hint = (SIM.WORLD_SPEC[id] || {}).hint || ''; ctx.fillText(hint.split(' ')[0], c[0], c[1] + 4 * DPR); }
     }
     ctx.textAlign = 'left';
@@ -1923,10 +1970,10 @@
     }
     html += '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {
-      var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
-      html += '<button class="lg-node" data-leg="' + nd.id + '"' + ((can && !maxed) ? '' : ' disabled') + '>' +
+      var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd), dis = maxed || !can;
+      html += '<button class="lg-node' + (dis ? ' ghosted' : '') + '" data-leg="' + nd.id + '"' + (dis ? ' disabled' : '') + '>' +
         '<span class="ln-n">' + nd.name + ' <i>L' + lv + '</i></span><span class="ln-d">' + nd.desc + '</span>' +
-        '<span class="ln-c">' + (maxed ? 'MAX' : '✦ ' + fmt(legacyNodeCost(nd))) + '</span></button>';
+        '<span class="ln-c">' + (maxed ? 'MAX' : (can ? '✦ ' + fmt(legacyNodeCost(nd)) : 'Need ✦' + fmt(legacyNodeCost(nd)))) + '</span></button>';
     });
     // ---- Almanac: stats, blueprint collection, achievements ----
     var st = SIM.state(), stat = st.stats || { storms: 0, shipped: 0, ports: 0 };
@@ -2268,7 +2315,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v60';
+  var BUILD_TAG = 'v61';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2582,7 +2629,7 @@
       html += '<div class="mp-sec">Orders</div><div class="mp-grid">';
       s.contracts.forEach(function (c) {
         var unit = c.res.charAt(0).toUpperCase() + c.res.slice(1);
-        html += '<button class="mp-item order' + (c.can ? ' ready' : '') + '" data-order="' + c.id + '">' +
+        html += '<button class="mp-item order' + (c.can ? ' ready' : ' ghosted') + '" data-order="' + c.id + '"' + (c.can ? '' : ' disabled') + '>' +
           '<span class="mi-n">' + c.who + '</span>' +
           '<span class="mi-d">' + c.amt + ' ' + unit + ' &middot; ' + c.have + '/' + c.amt + '</span>' +
           '<span class="mi-c">' + (c.can ? 'Deliver £' + fmt(c.reward) : '£' + fmt(c.reward)) + '</span></button>';
@@ -2594,7 +2641,7 @@
       html += '<div class="mp-sec">Storm damage</div><div class="mp-grid">';
       s.buildings.forEach(function (b) {
         if (b.hp >= 100) return; var can = b.rep > 0 && s.money >= b.rep;
-        html += '<button class="mp-item repair" data-repair="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' <i class="mi-hp">' + b.hp + '%</i></span><span class="mi-c">Repair £' + fmt(b.rep) + '</span></button>';
+        html += '<button class="mp-item repair' + (can ? '' : ' ghosted') + '" data-repair="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' <i class="mi-hp">' + b.hp + '%</i></span><span class="mi-c">' + (can ? 'Repair £' + fmt(b.rep) : 'Need £' + fmt(b.rep)) + '</span></button>';
       });
       html += '</div>';
     }
@@ -2603,14 +2650,21 @@
       var t = BT[id]; if (s.era < t.era) return;                    // hide future-era types
       if (SIM.blocked && SIM.blocked(id)) return;                   // hide buildings this world can't run (e.g. desert sawmill)
       var cost = SIM.buildCost(id), can = SIM.canBuild(id);
-      html += '<button class="mp-item" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">£' + fmt(cost) + '</span></button>';
+      html += '<button class="mp-item' + (can ? '' : ' ghosted') + '" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">' + (can ? '£' + fmt(cost) : 'Need £' + fmt(cost)) + '</span></button>';
     });
     html += '</div>';
+    // Phase 15a: buildings are correctly hidden until their era arrives (keeps the grid readable),
+    // but that used to look like a dead end — a one-line teaser keeps the climb visible.
+    var teaserNames = [];
+    Object.keys(BT).forEach(function (id) { var t = BT[id]; if (t.era === s.era + 1 && !(SIM.blocked && SIM.blocked(id))) teaserNames.push(t.name); });
+    if (teaserNames.length) html += '<div class="mp-teaser">⛵ Next era unlocks: ' + teaserNames.join(' · ') + '</div>';
     if (s.buildings.length) {
       html += '<div class="mp-sec">Your port (' + s.buildings.length + ')</div><div class="mp-grid">';
       s.buildings.forEach(function (b) {
-        var can = SIM.canUpgrade(b.i), hp = (b.hp != null && b.hp < 100) ? ' <i class="mi-hp">' + b.hp + '%</i>' : '';
-        html += '<button class="mp-item up' + (b.hp != null && b.hp < 100 ? ' hurt' : '') + '" data-up="' + b.i + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + b.name + ' L' + b.level + hp + '</span><span class="mi-c">↑£' + fmt(b.up) + '</span></button>';
+        var t = SIM.BT[b.type], maxed = t.cat === 'defense' && b.level >= t.max, can = SIM.canUpgrade(b.i);
+        var hp = (b.hp != null && b.hp < 100) ? ' <i class="mi-hp">' + b.hp + '%</i>' : '';
+        html += '<button class="mp-item up' + (b.hp != null && b.hp < 100 ? ' hurt' : '') + ((can && !maxed) ? '' : ' ghosted') + '" data-up="' + b.i + '"' + (can ? '' : ' disabled') + '>' +
+          '<span class="mi-n">' + b.name + ' L' + b.level + hp + '</span><span class="mi-c">' + (maxed ? 'MAX' : (can ? '↑£' + fmt(b.up) : 'Need £' + fmt(b.up))) + '</span></button>';
       });
       html += '</div>';
     }
@@ -2634,11 +2688,11 @@
     if (s.managers) {
       html += '<div class="mp-sec">Managers</div><div class="mp-grid">';
       Object.keys(s.managers).forEach(function (k) {
-        var m = s.managers[k], maxed = m.lvl >= m.max;
-        html += '<button class="mp-item mgr" data-mgr="' + k + '"' + ((m.can && !maxed) ? '' : ' disabled') + '>' +
+        var m = s.managers[k], maxed = m.lvl >= m.max, dis = maxed || !m.can;
+        html += '<button class="mp-item mgr' + (dis ? ' ghosted' : '') + '" data-mgr="' + k + '"' + (dis ? ' disabled' : '') + '>' +
           '<span class="mi-n">' + m.name + ' <i class="mi-lv">L' + m.lvl + '</i></span>' +
           '<span class="mi-d">' + m.desc + '</span>' +
-          '<span class="mi-c">' + (maxed ? 'MAX' : '£' + fmt(m.cost)) + '</span></button>';
+          '<span class="mi-c">' + (maxed ? 'MAX' : (m.can ? '£' + fmt(m.cost) : 'Need £' + fmt(m.cost))) + '</span></button>';
       });
       html += '</div>';
     }
@@ -2820,7 +2874,7 @@
     lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
-    tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level }; },
+    tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, msg: tradeAct ? tradeAct.textContent : '' }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
     forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
     openLegacy: function () { openLegacy(); }, prestige: function () { doPrestige(); },
