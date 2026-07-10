@@ -335,6 +335,150 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   ok('audio: full day→night→storm→mute cycle ran with zero new console/page errors', errs.length === errsBefore11c);
   await page.evaluate(() => window.__harbor.pause(false));   // resume live sim ticking for the final stability check
 
+  // Phase 12a: Captain's Bonus — opt-in rewarded boost behind the pluggable window.ADS provider.
+  // Ethics under test: never auto-opens, decline changes nothing, daily cap hides the button quietly
+  // (no nag state), and a broken/failing provider degrades the game to "button hidden", never a throw.
+
+  // provider swap: ?adprovider=<id> parses; an explicit "stub" selects it, and an unknown/unregistered
+  // id (as a portal build not yet wired up would produce) falls back to the free stub safely rather
+  // than leaving window.ADS undefined.
+  const provPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
+  await provPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&adprovider=stub`, { waitUntil: 'load' });
+  const provStub = await provPage.evaluate(() => window.ADS && window.ADS.provider);
+  await provPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&adprovider=poki`, { waitUntil: 'load' });
+  const provFallback = await provPage.evaluate(() => window.ADS && window.ADS.provider);
+  ok('ads: ?adprovider=stub query parses, and an unregistered id (poki) falls back to the free stub safely',
+    provStub === 'stub' && provFallback === 'stub');
+  await provPage.close();
+
+  const errsBefore12a = errs.length;
+  await page.evaluate(() => {
+    window.__ADS_TEST_FAST__ = true;             // skip the stub's charm delay — deterministic + fast
+    window.Retention.set('harbor', 'bonusDay', null);
+    window.HARBOR_SIM.setBoost(1, 0);             // clear any leftover ambient/crate surge from earlier
+    window.__harbor.forceHUD();
+  });
+  await sleep(60);
+  const b0 = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
+  ok('bonus: ⚓ button appears when eligible (provider ready, no boost active, port founded)',
+    b0.shown === true && b0.hook.available === true && b0.hook.active === false);
+
+  await page.evaluate(() => window.__harbor.claimBonus());
+  await sleep(150);   // fast-mode stub resolves on the next tick
+  const b1 = await page.evaluate(() => ({ hook: window.__harbor.bonus(), chipVisible: document.getElementById('bonuschip').style.display !== 'none', chipText: document.getElementById('bonuschip').textContent, modalShown: !!document.querySelector('#bonusmodal.show') }));
+  ok('bonus: claim → SIM boost active at 2× with a live "⚓2× m:ss" countdown chip in the HUD, daily count advances',
+    b1.hook.active === true && b1.hook.mult === 2 && b1.hook.remaining > 590 && b1.hook.remaining <= 600 &&
+    b1.chipVisible === true && /⚓\s*2×\s*\d+:\d{2}/.test(b1.chipText) && b1.modalShown === false && b1.hook.usedToday === 1);
+
+  // decline: the card never auto-opens (only a real tap reaches it), and "No thanks" leaves everything
+  // exactly as it was — no charge, no boost, no daily-count bump, just a closed card.
+  await page.evaluate(() => { window.HARBOR_SIM.setBoost(1, 0); window.__harbor.forceHUD(); });
+  await sleep(60);
+  const preDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, autoOpen: !!document.querySelector('#bonusmodal.show') }));
+  await page.evaluate(() => { document.getElementById('bonusbtn').click(); });
+  await sleep(60);
+  const cardOpen = await page.evaluate(() => { var m = document.querySelector('#bonusmodal.show'); return !!(m && m.querySelector('[data-bonus="decline"]') && m.querySelector('[data-bonus="claim"]')); });
+  ok('bonus: card never auto-opens, and shows both "No thanks" and "Claim ⚓" only after a real tap',
+    preDecline.autoOpen === false && cardOpen === true);
+  await page.evaluate(() => { var b = document.querySelector('#bonusmodal [data-bonus="decline"]'); if (b) b.click(); });
+  await sleep(60);
+  const postDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, active: window.__harbor.bonus().active, modalShown: !!document.querySelector('#bonusmodal.show') }));
+  ok('bonus: decline changes nothing — no charge, no boost, no daily-count bump, card just closes',
+    postDecline.used === preDecline.used && postDecline.legacy === preDecline.legacy && postDecline.active === false && postDecline.modalShown === false);
+
+  // daily cap: drive the Retention counter directly (rather than 6 real claims) — button hides quietly,
+  // with no dead click and no nag state left behind
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', { date: window.Retention.todayStr(), count: 6 }); window.__harbor.forceHUD(); });
+  await sleep(60);
+  const capped = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
+  ok('bonus: daily cap (6/day) hides the button quietly once reached — no nagging', capped.shown === false && capped.hook.available === false);
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); window.__harbor.forceHUD(); });
+
+  // Phase 12b: production hardening — error capture, portal lifecycle events, and portal mode.
+  // Run before the AdProvider-resilience block below, which deliberately replaces window.ADS with
+  // a bare object lacking _counts/lifecycle methods (so window.ADS._counts is only meaningful here).
+
+  // error capture: a dispatched 'error' event (not an actual uncaught throw, so it never trips this
+  // harness's own errs[] tracking) lands in the ring buffer with the documented {t,msg,src,line}
+  // shape, and clearErrors() empties it back out.
+  await page.evaluate(() => { window.dispatchEvent(new ErrorEvent('error', { message: 'synthetic test error', filename: 'test.js', lineno: 42 })); });
+  await sleep(50);
+  const errCap = await page.evaluate(() => window.__harbor.errors());
+  const lastErr = errCap[errCap.length - 1] || {};
+  ok('errors: injected error captured in the ring buffer with t/msg/src/line',
+    errCap.length >= 1 && lastErr.msg === 'synthetic test error' && lastErr.src === 'test.js' && lastErr.line === 42 && typeof lastErr.t === 'number');
+  await page.evaluate(() => window.__harbor.clearErrors());
+  ok('errors: clearErrors() empties the ring buffer', await page.evaluate(() => window.__harbor.errors().length === 0));
+
+  // ad lifecycle: loadingFinished() fired exactly once by the time this run's boot hid the loader,
+  // and gameplayStart() has fired at least once (founding the port, right at the top of this run).
+  const lc = await page.evaluate(() => window.ADS._counts);
+  ok('ads lifecycle: loadingFinished() fired once on boot, gameplayStart() fired on founding',
+    lc.loadingFinished === 1 && lc.gameplayStart >= 1);
+
+  // commercialBreak: the one natural-pause hook, at the era-ascension cinematic. Drive a real
+  // advance (money + building gate, same path a player takes) via the __harbor.advance() test hook
+  // rather than setEra() (which bypasses doAdvance()/startAscension() entirely).
+  const cbBefore = await page.evaluate(() => window.ADS._counts.commercialBreak);
+  await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    window.__harbor.setEra(4); S.raw().money = 5e6;
+    if (S.canBuild('dock')) S.build('dock'); if (S.canBuild('dock')) S.build('dock');
+  });
+  await page.evaluate(() => window.__harbor.advance());
+  await sleep(150);
+  const cbAfter = await page.evaluate(() => window.ADS._counts.commercialBreak);
+  ok('ads: commercialBreak() fires on era advance, before the ascension cinematic', cbAfter === cbBefore + 1);
+
+  // portal mode (?portal=1): service worker not registered, "Add to home screen" + privacy link
+  // hidden, plain version line shown instead. Fresh context/page — independent of `page` above.
+  const portalPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
+  const portalErrs = [];
+  portalPage.on('pageerror', e => portalErrs.push('PAGEERR ' + e.message));
+  portalPage.on('console', m => { if (m.type() === 'error' && !/404|favicon/.test(m.text())) portalErrs.push('CONSOLE ' + m.text()); });
+  await portalPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&portal=1`, { waitUntil: 'load' });
+  await portalPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(500);
+  const portalState = await portalPage.evaluate(async () => {
+    document.getElementById('setbtn').click();
+    var regs = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistrations() : [];
+    return {
+      portalMode: window.__harbor.portalMode(),
+      swRegs: regs.length,
+      installRow: !!document.querySelector('[data-set="install"]'),
+      privacyLink: !!document.querySelector('a[href*="privacy.html"]'),
+      aboutText: (document.querySelector('.set-portal-ver') || {}).textContent || ''
+    };
+  });
+  ok('portal mode: ?portal=1 → PORTAL_MODE true, SW not registered, install/privacy rows hidden, plain version shown',
+    portalState.portalMode === true && portalState.swRegs === 0 && portalState.installRow === false &&
+    portalState.privacyLink === false && /PortMaster v\d+/.test(portalState.aboutText));
+  ok('portal mode: zero console/page errors', portalErrs.length === 0);
+  await portalPage.close();
+
+  // non-portal mode: unchanged behaviour — SW registers, install row + privacy link present.
+  const nonPortalState = await page.evaluate(async () => {
+    document.getElementById('setbtn').click();
+    var regs = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistrations() : [];
+    return { swRegs: regs.length, installRow: !!document.querySelector('[data-set="install"]'), privacyLink: !!document.querySelector('a[href*="privacy.html"]') };
+  });
+  ok('non-portal mode: unchanged — SW registers, install row + privacy link present',
+    nonPortalState.swRegs >= 1 && nonPortalState.installRow === true && nonPortalState.privacyLink === true);
+
+  // AdProvider resilience: a provider whose init() throws must never break the game — boot/HUD keep
+  // running fine, the bonus button just stays hidden rather than the game crashing or console erroring.
+  await page.evaluate(() => {
+    window.HARBOR_SIM.setBoost(1, 0);
+    window.ADS = { provider: 'broken', init: function () { throw new Error('simulated init failure'); }, rewardedAvailable: function () { throw new Error('simulated failure'); }, showRewarded: function () { throw new Error('simulated failure'); } };
+    window.__harbor.reinitAds();
+    window.__harbor.forceHUD();
+  });
+  await sleep(150);
+  const resilient = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', avail: window.__harbor.bonus().available }));
+  ok('ads: a provider whose init() throws → game keeps running fine, bonus button stays hidden (not shown, not broken)',
+    resilient.shown === false && resilient.avail === false);
+  ok('ads: resilience probe produced zero new console/page errors', errs.length === errsBefore12a);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

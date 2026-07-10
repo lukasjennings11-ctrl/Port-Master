@@ -11,6 +11,14 @@
   var gl = null, E = null;
   try { gl = canvas.getContext('webgl2', { antialias: true, alpha: false }); } catch (e) {}
 
+  // Phase 12b: portal mode — true when launched with ?portal= (a portal host page/iframe param)
+  // or when a real (non-stub) ad provider is active, i.e. this build is running on a portal.
+  // Gates the handful of things portals disallow or don't want: service-worker registration
+  // (see index.html), the beforeinstallprompt/"Add to home screen" PWA install flow, and the
+  // external privacy-policy link. Everything else about the game is byte-for-byte identical.
+  var PORTAL_MODE = false;
+  try { PORTAL_MODE = /[?&]portal=/.test(window.location.search) || !!(window.ADS && window.ADS.provider && window.ADS.provider !== 'stub'); } catch (e) {}
+
   var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false;
   // camera: current + targets + fling velocity
   var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4, txT: 0, tzT: 4, vTx: 0, vTz: 0 };
@@ -140,6 +148,7 @@
     buildBiome(biomeId);
     C.txT = x; C.tzT = z; C.distT = 130; C.elT = 0.5;        // frame the new harbour
     if (typeof updateHUD === 'function') updateHUD();
+    adsGameplayStart();   // Phase 12b: founding a port is the moment real gameplay begins
   }
 
   // ---- glTF city assets (loaded once, async; procedural scene renders meanwhile) ----
@@ -872,7 +881,13 @@
     ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
     applyWeatherGain(stormActive); applyMusicGain();
   }
-  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } });
+  document.addEventListener('visibilitychange', function () {
+    // Phase 12b: portal gameplay-lifecycle bracket — stop on backgrounded, resume on foreground
+    // (only if a port is actually founded; nothing to report on the pre-founding wild-island view).
+    if (document.hidden) adsGameplayStop();
+    else if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
+    if (amb) { if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } }
+  });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -900,7 +915,20 @@
   }
 
   // ---- Era Ascension cinematic ----
+  // Phase 12b: the one natural pause where a portal SDK gets to show a commercial break. It fires
+  // BEFORE the cinematic itself starts (era/economy state was already advanced by the caller) so a
+  // real ad interrupts nothing in progress — the player sees the break, then the reward cinematic
+  // plays uninterrupted. The stub calls onDone() on the next tick, so this is invisible off-portal.
   function startAscension(toEra, eraName, unlocksText, bonus) {
+    try {
+      if (window.ADS && typeof window.ADS.commercialBreak === 'function') {
+        window.ADS.commercialBreak(function () { beginAscension(toEra, eraName, unlocksText, bonus); });
+        return;
+      }
+    } catch (e) {}
+    beginAscension(toEra, eraName, unlocksText, bonus);
+  }
+  function beginAscension(toEra, eraName, unlocksText, bonus) {
     cine = { t: 0, dur: 4.2, flashed: false, banner: false, toEra: toEra, name: eraName, unlocks: unlocksText, bonus: bonus, az0: C.azT };
     if (window.Juice && !muted) Juice.Audio.tone(170, 0.7, 'sawtooth', { vol: 0.3, glide: 340 });
     haptic([10, 40, 20]);
@@ -2118,6 +2146,73 @@
   }
   function closeCrate() { if (crateModal) crateModal.classList.remove('show'); }
 
+  // ---- Captain's Bonus (Phase 12a): opt-in rewarded boost via the pluggable window.ADS provider.
+  // Ethics are hard requirements — opt-in only (never auto-opens), never gates progress, declining
+  // changes nothing, no nagging (button just quietly hides once the daily cap is hit). The stub
+  // provider (ads.js) grants it free with a short charm delay; a future portal adapter swaps in a
+  // real rewarded ad behind the exact same showRewarded() call — zero changes here. ----
+  var BONUS_MULT = 2, BONUS_SECS = 600, BONUS_MAX_SECS = 900;   // 2× for 10 min; stacked durations cap at 15 min
+  var bonusModal = null, bonusBusy = false, bonusChipActive = false, adsReady = false, bonusBtn = null, bonusChip = null;
+  function initAds() {
+    try {
+      if (window.ADS && typeof window.ADS.init === 'function') window.ADS.init(function () { adsReady = true; updateHUD(); });
+    } catch (e) { adsReady = false; }
+  }
+  function adsAvailable() {
+    try { return !!(adsReady && window.ADS && typeof window.ADS.rewardedAvailable === 'function' && window.ADS.rewardedAvailable()); }
+    catch (e) { return false; }
+  }
+  function bonusEligible() { return simReady() && adsAvailable() && SIM.boostT() <= 0; }
+  function bonusUsedToday() { var d = window.Retention && Retention.get(GAME, 'bonusDay', null), t = window.Retention && Retention.todayStr(); return (d && d.date === t) ? (d.count | 0) : 0; }
+  function clockFmt(s) { s = Math.max(0, Math.ceil(s)); var m = Math.floor(s / 60), ss = s % 60; return m + ':' + (ss < 10 ? '0' : '') + ss; }
+  function ensureBonusModal() {
+    if (bonusModal) return;
+    bonusModal = document.createElement('div'); bonusModal.id = 'bonusmodal'; bonusModal.className = 'evm';
+    bonusModal.innerHTML = '<div class="ev-card"><div class="ev-ic">⚓</div><div class="ev-name">Captain’s Bonus</div><div class="ev-desc" id="bn-desc"></div><div class="ev-btns" id="bn-btns"></div></div>';
+    wrap.appendChild(bonusModal);
+  }
+  function resetBonusCard() {
+    bonusBusy = false;
+    bonusModal.querySelector('#bn-desc').textContent = 'Captain’s Bonus — 2× production for 10 minutes.';
+    var bw = bonusModal.querySelector('#bn-btns'); bw.innerHTML = '';
+    var no = document.createElement('button'); no.className = 'ev-btn'; no.textContent = 'No thanks'; no.setAttribute('data-bonus', 'decline');
+    no.addEventListener('click', declineBonus);
+    var yes = document.createElement('button'); yes.className = 'ev-btn primary'; yes.textContent = 'Claim ⚓'; yes.setAttribute('data-bonus', 'claim');
+    yes.addEventListener('click', claimBonusFlow);
+    bw.appendChild(no); bw.appendChild(yes);
+  }
+  function openBonusCard() {
+    if (!bonusEligible()) return;   // never auto-opens; only reachable via the button, only when eligible
+    ensureBonusModal(); resetBonusCard();
+    bonusModal.classList.add('show'); sfx('tap'); haptic(8);
+  }
+  function closeBonusCard() { if (bonusModal) bonusModal.classList.remove('show'); }
+  function declineBonus() { closeBonusCard(); }   // opt-out: no penalty, nothing changes, nothing persisted
+  function claimBonusFlow() {
+    if (bonusBusy || !bonusModal) return;
+    bonusBusy = true;
+    var bw = bonusModal.querySelector('#bn-btns'), yes = bw.querySelector('[data-bonus="claim"]'), no = bw.querySelector('[data-bonus="decline"]');
+    if (yes) { yes.disabled = true; yes.textContent = 'Loading…'; }
+    if (no) no.disabled = true;
+    try { window.ADS.showRewarded(onBonusReward, onBonusFail); }
+    catch (e) { onBonusFail(); }
+  }
+  function onBonusReward() {
+    bonusBusy = false;
+    // stacking policy: if a boost is already running (e.g. a crate-surge ambient event fired while
+    // the reward was in flight), take the higher multiplier and extend the duration, capped at 15 min,
+    // rather than clobbering whichever one happened to land first.
+    var mult = Math.max(SIM.boostMul(), BONUS_MULT), secs = Math.min(BONUS_MAX_SECS, SIM.boostT() + BONUS_SECS);
+    SIM.setBoost(mult, secs);
+    bonusChipActive = true;
+    closeBonusCard();
+    var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '⚓ 2× production!', { color: '#7fe0d6', size: 18, life: 1.6, vy: -50 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#7fe0d6', '#ffe08a', '#ffffff'], speed: 210, life: 1.1, size: 5 }); }
+    sfx('win'); haptic(24); confettiBurst();
+    showHint('⚓ Captain’s Bonus — 2× production for 10 minutes!');
+    updateHUD();
+  }
+  function onBonusFail() { bonusBusy = false; closeBonusCard(); }   // decline / no-fill / cap race — state left exactly as before
+
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
@@ -2133,12 +2228,15 @@
     crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
     expBtn = document.createElement('button'); expBtn.id = 'expbtn'; expBtn.textContent = '⛵ Expeditions'; expBtn.addEventListener('click', toggleExp);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    // top row: resource chips + mute + settings only (keeps it short so the era/goal bars stay clear)
+    bonusBtn = document.createElement('button'); bonusBtn.id = 'bonusbtn'; bonusBtn.textContent = '⚓ Bonus'; bonusBtn.style.display = 'none'; bonusBtn.addEventListener('click', openBonusCard);
+    // top row: resource chips + a live countdown chip (while active) + mute + settings, keeps it short
+    bonusChip = document.createElement('span'); bonusChip.className = 'estat bonuschip'; bonusChip.id = 'bonuschip'; bonusChip.style.display = 'none';
+    econHud.appendChild(bonusChip);
     econHud.appendChild(muteBtn); econHud.appendChild(setBtn);
     wrap.appendChild(econHud);
     // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
     actionBar = document.createElement('div'); actionBar.id = 'actionbar';
-    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
+    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(bonusBtn); actionBar.appendChild(mBtn);
     wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -2166,7 +2264,62 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v56';
+  var BUILD_TAG = 'v58';
+
+  // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
+  // unhandled promise rejections, persisted write-through to localStorage so a real bug report
+  // can quote it. Every path here is try/catch-guarded and must never itself throw. The listeners
+  // are installed only after boot() has fully succeeded (see the end of boot()) so we never catch
+  // the test harness's own intentional in-page throws during earlier init/setup. ----
+  var ERRLOG_KEY = 'gf:' + GAME + ':errlog', ERRLOG_MAX = 20;
+  var errLog = [];
+  function loadErrLog() {
+    try {
+      var raw = localStorage.getItem(ERRLOG_KEY), arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) errLog = arr;
+    } catch (e) {}
+  }
+  function saveErrLog() { try { localStorage.setItem(ERRLOG_KEY, JSON.stringify(errLog)); } catch (e) {} }
+  function logError(msg, src, line) {
+    try {
+      errLog.push({ t: Date.now(), msg: String(msg == null ? '' : msg).slice(0, 500), src: String(src == null ? '' : src).slice(0, 300), line: line | 0 });
+      if (errLog.length > ERRLOG_MAX) errLog.splice(0, errLog.length - ERRLOG_MAX);
+      saveErrLog();
+      if (settingsOpen) renderSettings();
+    } catch (e) {}
+  }
+  function copyAndClearErrLog() {
+    try {
+      var txt = JSON.stringify(errLog);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).catch(function () {});
+    } catch (e) {}
+    errLog = [];
+    try { localStorage.removeItem(ERRLOG_KEY); } catch (e) {}
+    renderSettings();
+  }
+  function installErrorCapture() {
+    try {
+      loadErrLog();
+      window.addEventListener('error', function (e) {
+        try { logError(e && e.message, e && e.filename, e && e.lineno); } catch (x) {}
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        try {
+          var r = e && e.reason, msg = (r && r.message) ? r.message : String(r);
+          logError(msg, '', 0);
+        } catch (x) {}
+      });
+    } catch (e) {}
+  }
+
+  // ---- Phase 12b: portal lifecycle events — thin, always-guarded wrappers over the optional
+  // window.ADS.{loadingFinished,gameplayStart,gameplayStop} hooks so callers never need their own
+  // try/catch. No-ops (beyond bookkeeping) in the stub provider; a real portal adapter maps these
+  // onto its SDK's loading/gameplay brackets. ----
+  function adsLoadingFinished() { try { if (window.ADS && typeof window.ADS.loadingFinished === 'function') window.ADS.loadingFinished(); } catch (e) {} }
+  function adsGameplayStart() { try { if (window.ADS && typeof window.ADS.gameplayStart === 'function') window.ADS.gameplayStart(); } catch (e) {} }
+  function adsGameplayStop() { try { if (window.ADS && typeof window.ADS.gameplayStop === 'function') window.ADS.gameplayStop(); } catch (e) {} }
+
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -2203,8 +2356,20 @@
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
          (charters > 0 ? ' · ' + charters + ' charter' + (charters > 1 ? 's' : '') : '') +
          (leg > 0 ? ' · ✦' + fmt(leg) + ' Legacy' : '') + '</div>';
-    h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
-         '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
+    // Phase 12b: portal builds get no external links and no PWA install prompt (both disallowed
+    // by portal hosts) — just a plain version line instead of the privacy/install row.
+    if (PORTAL_MODE) {
+      h += '<div class="set-about set-portal-ver">PortMaster ' + BUILD_TAG + '</div>';
+    } else {
+      h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
+           '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
+    }
+    // Phase 12b: error capture — only a nudge when something's actually been logged, one tap
+    // copies the JSON to the clipboard and clears the buffer (no separate viewer needed).
+    if (errLog.length > 0) {
+      h += '<div class="mp-grid"><button class="mp-item set-link" data-set="errlog"><span class="mi-n">⚠ ' +
+           errLog.length + ' issue' + (errLog.length > 1 ? 's' : '') + ' logged</span><span class="mi-c">tap to copy</span></button></div>';
+    }
     h += '<div class="mp-sec">Danger zone</div>';
     h += '<button class="mp-item set-reset' + (resetArm ? ' arm' : '') + '" data-set="reset"><span class="mi-n">' +
          (resetArm ? 'Tap again to wipe everything' : 'Reset all progress') + '</span><span class="mi-c">' + (resetArm ? '⚠' : '↺') + '</span></button>';
@@ -2218,6 +2383,7 @@
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
+        else if (a === 'errlog') { copyAndClearErrLog(); sfx('tap'); haptic(8); }
         else if (a === 'reset') {
           if (!resetArm) { resetArm = true; haptic(20); renderSettings(); setTimeout(function () { resetArm = false; if (settingsOpen) renderSettings(); }, 4000); }
           else { resetProgress(); }
@@ -2234,9 +2400,12 @@
     try { if (window.Juice) Juice.Audio.play('lose'); } catch (e) {}
     location.reload();
   }
-  // PWA install: use the captured beforeinstallprompt event when available.
+  // PWA install: use the captured beforeinstallprompt event when available. Suppressed entirely
+  // in portal mode — portals disallow PWA install prompts inside their embed (Phase 12b).
   var deferredPrompt = null;
-  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; });
+  if (!PORTAL_MODE) {
+    window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; });
+  }
   function promptInstall() {
     if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(function () { deferredPrompt = null; }); }
     else { showHint('Use your browser menu → “Add to Home Screen” to install PortMaster'); }
@@ -2286,6 +2455,18 @@
     if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); if (lp.can) announceFeature('prestige', '✦', 'Legacy', 'Sign a new charter to restart stronger, forever.'); }
     if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
     if (expBtn) { var rd = (s.voyages && s.voyages.ready) || 0; expBtn.classList.toggle('hasready', rd > 0); expBtn.setAttribute('data-n', rd); }
+    // Captain's Bonus (Phase 12a): opt-in rewarded boost — button only when eligible (available,
+    // no boost already running, port founded), never nags once the daily cap hides it.
+    if (bonusBtn) {
+      var bElig = bonusEligible();
+      bonusBtn.style.display = bElig ? '' : 'none';
+      if (bElig) announceFeature('bonus', '⚓', 'Captain’s Bonus', 'Double production, on the house.');
+    }
+    if (bonusChip) {
+      var bt = SIM.boostT();
+      if (bonusChipActive && bt > 0) { bonusChip.textContent = '⚓' + Math.round(SIM.boostMul()) + '× ' + clockFmt(bt); bonusChip.style.display = ''; }
+      else { bonusChip.style.display = 'none'; bonusChipActive = false; }
+    }
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
     if (expOpen) renderExp();
@@ -2459,6 +2640,7 @@
 
   function boot() {
     if (window.Portal) Portal.loadingStart();
+    initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
     if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play PortMaster.</div>'; return; }
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
@@ -2473,7 +2655,7 @@
     if (SIM) { computeMeta(); applyTide(); }                          // Legacy multipliers + today's market tide before offline accrual
     dailyList();                                                     // materialise today's missions so event hooks can bump them
     var offGain = 0, offSec = 0;
-    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; } }
+    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; adsGameplayStart(); } }   // Phase 12b: resuming a save with a founded port is gameplay too
     if (SIM && SIM.raw()) { hudShownMoney = prevMoney = SIM.raw().money; }
     if (!(SIM && SIM.raw() && SIM.raw().founded)) era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
@@ -2502,7 +2684,11 @@
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
-    if (window.Portal) Portal.init().then(function () { Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart(); });
+    if (window.Portal) Portal.init().then(function () {
+      Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart();
+      adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
+      installErrorCapture();     // …and only now start listening for real runtime errors
+    });
   }
   function showOffline(gain, sec) {
     var h = Math.floor(sec / 3600), mn = Math.floor((sec % 3600) / 60), ago = (h ? h + 'h ' : '') + mn + 'm';
@@ -2603,7 +2789,16 @@
     seenFeature: function (id) { return hasSeenFeature(id); },
     dismissAnnounce: function () { dismissAnnounce(); },
     resetAnnounce: function () { announceQueue.length = 0; clearTimeout(announceT); announceBusy = false; if (announceCard) announceCard.classList.remove('show'); },   // test-only: hard-clear any real (already-seen) announce still in flight, for a clean test slate
-    crateOpened: function () { return crateOpenedFlag(); }
+    crateOpened: function () { return crateOpenedFlag(); },
+    // Phase 12a: Captain's Bonus + pluggable AdProvider (test/debug hooks)
+    bonus: function () { return { available: bonusEligible(), active: bonusChipActive && SIM.boostT() > 0, mult: SIM.boostMul(), remaining: SIM.boostT(), usedToday: bonusUsedToday() }; },
+    claimBonus: function () { openBonusCard(); var b = bonusModal && bonusModal.querySelector('[data-bonus="claim"]'); if (b) { b.click(); return true; } return false; },
+    reinitAds: function () { adsReady = false; initAds(); },  // test-only: re-run provider init after swapping window.ADS in-page, to exercise the resilience path
+    // Phase 12b: production hardening (test/debug hooks)
+    errors: function () { return errLog.slice(); },           // ring buffer copy — last 20 {t,msg,src,line}
+    clearErrors: function () { errLog = []; try { localStorage.removeItem(ERRLOG_KEY); } catch (e) {} if (settingsOpen) renderSettings(); },
+    portalMode: function () { return PORTAL_MODE; },
+    advance: function () { doAdvance(); return !!cine; }       // test-only: drive the real era-advance path (incl. the commercialBreak hook) without needing to grind the money/building gate live
   };
 
   if (canvas && canvas.getContext) boot();
