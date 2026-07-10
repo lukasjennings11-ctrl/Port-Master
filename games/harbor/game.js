@@ -653,6 +653,7 @@
   // ---- feel: audio + particle/popup helpers ----
   var muted = !!(window.Retention && Retention.get(GAME, 'muted', false));
   var hapticsOff = !!(window.Retention && Retention.get(GAME, 'hapticsOff', false));
+  var musicOff = !!(window.Retention && Retention.get(GAME, 'musicOff', false));
   var hudShownMoney = 0, prevMoney = 0, incomeTimer = 0, cine = null, ascendBanner = null;
   function sfx(name, a) { if (window.Juice && !muted) Juice.Audio.play(name, a); }
   function haptic(ms) { if (window.Juice && !hapticsOff) Juice.vibrate(ms); }
@@ -663,11 +664,28 @@
     if (settingsOpen) renderSettings();
   }
   function applyHaptics(off) { hapticsOff = !!off; if (window.Retention) Retention.set(GAME, 'hapticsOff', hapticsOff); if (settingsOpen) renderSettings(); }
+  function applyMusicOff(v) {
+    musicOff = !!v; if (window.Retention) Retention.set(GAME, 'musicOff', musicOff);
+    applyMusicGain();
+    if (settingsOpen) renderSettings();
+  }
 
-  // Ambient harbour soundscape — a gentle synthesized wave bed with a slow swell
-  // plus occasional gull cries, on its own WebAudio graph. Subtle, respects the
-  // Sound toggle, pauses when the tab is hidden. No audio assets required.
-  var amb = null, ambGullT = null;
+  // Ambient harbour soundscape (Phase 11c) — three layers hung off one master graph:
+  //  · wave    — brown-noise bed + tidal LFO (existing), quieter/darker at night
+  //  · night   — sparse cricket/owl chirps, day↔night gulls/crickets cross-fade over ~2s
+  //  · weather — bandpass-filtered howl + low rumble one-shots, silent until a storm warns
+  //  · music   — gentle pentatonic sequencer bed, low volume, off at night, ducked in storms
+  // All gains ramp smoothly; the Sound toggle / tab-hidden / master mute stays authoritative
+  // (amb.master gates everything). No audio assets — every layer is synthesized.
+  var amb = null, ambGullT = null, ambCritT = null, ambMusicT = null;
+  var ambMusicPhrase = null, ambMusicIdx = 0, ambTodT = 0, ambWasNight = null, stormActive = false;
+  // last commanded target per ramped layer — the decision our code made, independent of how
+  // fast the browser's audio thread actually gets there (exposed for deterministic testing;
+  // WebAudio ramp convergence timing can't be reliably polled headless under swiftshader load).
+  var ambTarget = { master: 0, wave: 0.5, night: 0, weather: 0, music: 0 };
+  var MUSIC_SCALE = [220.00, 261.63, 293.66, 329.63, 392.00, 440.00];   // A3 C4 D4 E4 G4 A4 — pentatonic
+  var MUSIC_PAD = 110.00;                                               // low pad note, A2
+  var MUSIC_BASE = 0.085;                                               // bed volume — low, background only
   function startAmbient() {
     if (muted) return;
     if (!amb) {
@@ -675,6 +693,8 @@
         var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
         var ctx = new AC();
         var master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+
+        // wave bed: brown-ish noise -> lowpass -> gain, with a slow tidal swell LFO
         var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), d = buf.getChannelData(0), last = 0;
         for (var i = 0; i < d.length; i++) { var w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3.2; }   // brown-ish noise
         var src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
@@ -684,18 +704,39 @@
         var lfo = ctx.createOscillator(); lfo.frequency.value = 0.09; var lfoG = ctx.createGain(); lfoG.gain.value = 0.22;
         lfo.connect(lfoG); lfoG.connect(wave.gain); lfo.start();                                   // slow tidal swell
         src.start();
-        amb = { ctx: ctx, master: master };
-        scheduleGull();
+
+        // night critter layer: silent by day, gulls hand off to crickets/owls after dusk
+        var night = ctx.createGain(); night.gain.value = 0; night.connect(master);
+
+        // weather layer: white-noise -> bandpass (slow LFO on centre freq = "howl") -> gain, silent
+        // until a storm warns; strike moments add a separate low rumble one-shot into the same gain.
+        var wbuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), wd = wbuf.getChannelData(0);
+        for (var j = 0; j < wd.length; j++) wd[j] = Math.random() * 2 - 1;
+        var wsrc = ctx.createBufferSource(); wsrc.buffer = wbuf; wsrc.loop = true;
+        var wbp = ctx.createBiquadFilter(); wbp.type = 'bandpass'; wbp.frequency.value = 900; wbp.Q.value = 0.7;
+        var weather = ctx.createGain(); weather.gain.value = 0;
+        wsrc.connect(wbp); wbp.connect(weather); weather.connect(master);
+        var wlfo = ctx.createOscillator(); wlfo.frequency.value = 0.13; var wlfoG = ctx.createGain(); wlfoG.gain.value = 380;
+        wlfo.connect(wlfoG); wlfoG.connect(wbp.frequency); wlfo.start();
+        wsrc.start();
+
+        // generative music bed: its own low gain, sequenced notes connect in per-note
+        var music = ctx.createGain(); music.gain.value = 0; music.connect(master);
+
+        amb = { ctx: ctx, master: master, wave: wave, waveLP: lp, night: night, weather: weather, music: music };
+        scheduleGull(); scheduleCritter(); scheduleMusic();
       } catch (e) { amb = null; return; }
     }
     if (amb.ctx.state === 'suspended') { try { amb.ctx.resume(); } catch (e) {} }
     var t = amb.ctx.currentTime;
+    ambTarget.master = 0.16;
     amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
     amb.master.gain.linearRampToValueAtTime(0.16, t + 1.5);
   }
   function stopAmbient() {
     if (!amb) return;
     var t = amb.ctx.currentTime;
+    ambTarget.master = 0;
     amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
     amb.master.gain.linearRampToValueAtTime(0, t + 0.6);
   }
@@ -714,11 +755,124 @@
   function scheduleGull() {
     clearTimeout(ambGullT);
     ambGullT = setTimeout(function () {
-      if (amb && !muted && !document.hidden && scene && scene.port) gullCry();
+      if (amb && !muted && !document.hidden && scene && scene.port && env().night <= 0.5) gullCry();   // daylight only
       scheduleGull();
     }, 7000 + Math.random() * 13000);
   }
-  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) startAmbient(); });
+  // sparse cricket chirps (most nights) with an occasional soft owl hoot, very quiet — night only
+  function critterChirp() {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime;
+    if (Math.random() < 0.22) {
+      for (var k = 0; k < 2; k++) {
+        var o = ctx.createOscillator(), g = ctx.createGain(), st = t0 + k * 0.36;
+        o.type = 'sine'; o.frequency.setValueAtTime(320 - k * 40, st);
+        g.gain.setValueAtTime(0.0001, st); g.gain.linearRampToValueAtTime(0.045, st + 0.06); g.gain.exponentialRampToValueAtTime(0.0006, st + 0.5);
+        o.connect(g); g.connect(amb.night); o.start(st); o.stop(st + 0.55);
+      }
+    } else {
+      for (var k2 = 0; k2 < 3; k2++) {
+        var o2 = ctx.createOscillator(), g2 = ctx.createGain(), st2 = t0 + k2 * 0.09;
+        o2.type = 'square'; o2.frequency.setValueAtTime(2600 + Math.random() * 400, st2);
+        g2.gain.setValueAtTime(0.0001, st2); g2.gain.linearRampToValueAtTime(0.02, st2 + 0.01); g2.gain.exponentialRampToValueAtTime(0.0004, st2 + 0.07);
+        o2.connect(g2); g2.connect(amb.night); o2.start(st2); o2.stop(st2 + 0.09);
+      }
+    }
+  }
+  function scheduleCritter() {
+    clearTimeout(ambCritT);
+    ambCritT = setTimeout(function () {
+      if (amb && !muted && !document.hidden && env().night > 0.5) critterChirp();
+      scheduleCritter();
+    }, 6000 + Math.random() * 9000);
+  }
+  // generative pentatonic music bed — soft plucks (+ occasional low pad), lots of rest,
+  // ~56–66bpm, scheduled with a small lookahead against ctx.currentTime for clean timing.
+  function buildMusicPhrase() {
+    var len = 12 + Math.floor(Math.random() * 8), out = [];
+    for (var i = 0; i < len; i++) {
+      var r = Math.random();
+      if (r < 0.46) out.push(null);                                                   // rest — calm, not chiptune-busy
+      else if (r < 0.56) out.push({ pad: true });                                      // occasional low pad note
+      else out.push({ note: MUSIC_SCALE[Math.floor(Math.random() * MUSIC_SCALE.length)] });
+    }
+    return out;
+  }
+  function playMusicNote(step) {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime + 0.05;                                    // small lookahead
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = step.pad ? 'sine' : 'triangle';
+    o.frequency.setValueAtTime(step.pad ? MUSIC_PAD : step.note, t0);
+    var peak = step.pad ? 0.55 : 1.0, dur = step.pad ? 2.6 : 1.2;                       // ~1.2s release on plucks
+    g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(peak, t0 + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    o.connect(g); g.connect(amb.music); o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  function scheduleMusic() {
+    clearTimeout(ambMusicT);
+    var bpm = 56 + Math.random() * 10;                                                 // 56–66 BPM, gently humanized
+    ambMusicT = setTimeout(function () {
+      if (amb && !muted && !document.hidden && !musicOff && env().night <= 0.5) {
+        if (!ambMusicPhrase) ambMusicPhrase = buildMusicPhrase();                      // seeded once per session
+        var step = ambMusicPhrase[ambMusicIdx % ambMusicPhrase.length]; ambMusicIdx++;
+        if (step) playMusicNote(step);
+      }
+      scheduleMusic();
+    }, 60000 / bpm);
+  }
+  // weather layer: ramps between silence and a moderate howl on hazard warn/idle; a strike
+  // moment adds a short 40–60Hz rumble swell. Also ducks the music bed to ~30% during storms.
+  function applyWeatherGain(active) {
+    if (!amb) return;
+    var t = amb.ctx.currentTime, target = active ? 0.14 : 0;
+    ambTarget.weather = target;
+    amb.weather.gain.cancelScheduledValues(t); amb.weather.gain.setValueAtTime(amb.weather.gain.value, t);
+    amb.weather.gain.linearRampToValueAtTime(target, t + (active ? 1.2 : 1.8));
+  }
+  function applyMusicGain() {
+    if (!amb) return;
+    var t = amb.ctx.currentTime, night = env().night > 0.5;
+    var target = (musicOff || night) ? 0 : (stormActive ? MUSIC_BASE * 0.3 : MUSIC_BASE);
+    ambTarget.music = target;
+    amb.music.gain.cancelScheduledValues(t); amb.music.gain.setValueAtTime(amb.music.gain.value, t);
+    amb.music.gain.linearRampToValueAtTime(target, t + (stormActive ? 0.8 : 2));
+  }
+  function stormRumble() {
+    if (!amb) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime;
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(56, t0); o.frequency.exponentialRampToValueAtTime(40, t0 + 0.9);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.22, t0 + 0.12); g.gain.exponentialRampToValueAtTime(0.0008, t0 + 1.1);
+    o.connect(g); g.connect(amb.master); o.start(t0); o.stop(t0 + 1.15);
+  }
+  // per-frame ToD watcher: crosses the day/night threshold at most once per state, ramping the
+  // wave bed, night critters and music bed over ~2s — throttled, cheap even at 60fps.
+  function updateAmbientToD(dt) {
+    if (!amb) return;
+    ambTodT += dt; if (ambTodT < 0.5) return; ambTodT = 0;
+    var night = env().night > 0.5;
+    if (night === ambWasNight) return;
+    ambWasNight = night;
+    var t = amb.ctx.currentTime;
+    ambTarget.wave = night ? 0.32 : 0.5; ambTarget.night = night ? 1 : 0;
+    amb.wave.gain.cancelScheduledValues(t); amb.wave.gain.setValueAtTime(amb.wave.gain.value, t);
+    amb.wave.gain.linearRampToValueAtTime(ambTarget.wave, t + 2);
+    amb.waveLP.frequency.cancelScheduledValues(t); amb.waveLP.frequency.setValueAtTime(amb.waveLP.frequency.value, t);
+    amb.waveLP.frequency.linearRampToValueAtTime(night ? 320 : 540, t + 2);
+    amb.night.gain.cancelScheduledValues(t); amb.night.gain.setValueAtTime(amb.night.gain.value, t);
+    amb.night.gain.linearRampToValueAtTime(ambTarget.night, t + 2);
+    applyMusicGain();
+  }
+  // force an immediate resync of every ramped layer to the current ToD/hazard/mute state,
+  // bypassing the per-frame throttle and the "already applied" dedupe — useful after a long
+  // background pause (visibility resume) and as a deterministic test/debug hook.
+  function refreshAmbientNow() {
+    if (!amb) return;
+    ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
+    applyWeatherGain(stormActive); applyMusicGain();
+  }
+  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -780,6 +934,7 @@
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    if (amb) updateAmbientToD(dt);                              // Phase 11c: day/night audio cross-fade
     // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
     // frame is > ~26ms (below ~38fps) auto-disable the miniature look for this device
     // (persisted, so weak devices don't re-probe every boot; Settings can re-arm it).
@@ -1188,6 +1343,10 @@
   function handleHazard(s) {
     var hz = s.hazard || { phase: 'idle', strikeId: 0 };
     ensureStormAlert();
+    // Phase 11c: weather audio layer follows the warn/idle lifecycle — howl up on warn, back
+    // down once it clears; also ducks the music bed to ~30% for the duration.
+    var warnNow = hz.phase === 'warn' && !!hz.port;
+    if (warnNow !== stormActive) { stormActive = warnNow; applyWeatherGain(warnNow); applyMusicGain(); }
     if (hz.phase === 'warn' && hz.port) {
       stormAlert.classList.remove('crash');
       stormAlert.querySelector('.sa-txt').textContent = (hz.kind || 'Storm') + ' approaching ' + wname(hz.port);
@@ -1203,6 +1362,7 @@
     // a fresh strike fired in the sim — react with juice
     if (hz.strikeId && hz.strikeId !== lastStrikeId) {
       lastStrikeId = hz.strikeId; var last = hz.last;
+      stormRumble();
       shakeFX(11, 0.7); flashT = 0.85; sfx('lose'); haptic([10, 50, 20]); bumpDaily('storm');
       if (Math.random() < 0.35) { grantCrate(1); showHint('Salvage washed ashore — a crate! 🎁'); }   // storms occasionally drop salvage
       if (last && last.crash) { showHint('Market crash — ' + last.res + ' prices slump'); }
@@ -2006,7 +2166,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v55';
+  var BUILD_TAG = 'v56';
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
@@ -2021,6 +2181,7 @@
     var h = '<div class="mp-head">Settings<button id="set-close">✕</button></div>';
     h += '<div class="mp-sec">Audio & feedback</div><div class="mp-grid">';
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
+    h += '<button class="mp-item auto' + (!musicOff ? ' on' : '') + '" data-set="music"><span class="mi-n">Music</span><span class="mi-c">' + (musicOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
@@ -2053,6 +2214,7 @@
       el.addEventListener('click', function () {
         var a = el.getAttribute('data-set');
         if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
+        else if (a === 'music') { applyMusicOff(!musicOff); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
@@ -2397,6 +2559,23 @@
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); },
     startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; },
+    refreshAmbient: function () { refreshAmbientNow(); },   // force an immediate resync of every ramped layer to current ToD/hazard/mute state
+    // Phase 11c: layered audio state — the eyeball-equivalent for sound (can't screenshot audio)
+    audio: function () {
+      if (!amb) return null;
+      return {
+        state: amb.ctx.state, master: +amb.master.gain.value.toFixed(3), wave: +amb.wave.gain.value.toFixed(3),
+        weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3), night: +amb.night.gain.value.toFixed(3),
+        muted: muted, musicOff: musicOff, stormActive: stormActive, envNight: +env().night.toFixed(3),
+        target: { master: ambTarget.master, wave: ambTarget.wave, night: ambTarget.night, weather: ambTarget.weather, music: ambTarget.music }   // last commanded value per layer — deterministic, independent of audio-thread ramp timing
+      };
+    },
+    setWeather: function (phase) {   // test-only: force the storm audio state without waiting on the sim's real timer
+      if (phase === 'warn') { stormActive = true; applyWeatherGain(true); applyMusicGain(); }
+      else if (phase === 'strike') { stormRumble(); }
+      else { stormActive = false; applyWeatherGain(false); applyMusicGain(); }
+      return amb ? { weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3) } : null;
+    },
     fireEvent: function (id) { var ev = SIM.fireEvent(id); if (ev) { updateHUD(); } return ev; },
     chooseEvent: function (i) { return onEventChoice(i); },
     event: function () { return SIM.event(); },

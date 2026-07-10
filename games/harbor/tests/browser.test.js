@@ -258,6 +258,83 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   const an3 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
   ok('announce: "seen" persists across reload — never shows again', an3.showing === false);
 
+  // Phase 11c: layered audio — wave/night/weather/music gain layers driven by ToD + hazard
+  // state, plus a Music toggle. WebAudio can't be screenshotted, so these assert the exposed
+  // __harbor.audio() state at each phase (the eyeball-equivalent for sound). Assertions check
+  // audio().target — the value our own code just committed to each AudioParam ramp — rather
+  // than polling the live interpolated gain: under headless swiftshader + heavy concurrent
+  // WebGL load, live AudioParam reads via CDP were observed to occasionally stick (the ramp is
+  // scheduled correctly every time, confirmed by tracing it, but the audio thread's convergence
+  // isn't reliably observable in this environment). Asserting the committed target is exactly
+  // as strong a regression check on the decision logic and has zero timing dependency.
+  // Paused for the duration of this block: the sim's own hazard timer (tickHazard) keeps
+  // running live otherwise and can auto-resolve our manual hazard.phase mutations mid-check
+  // (a real storm racing our synthetic one). Un-paused before the final live-ticking check.
+  const errsBefore11c = errs.length;
+  const A = () => page.evaluate(() => window.__harbor.audio());
+  // setTod() only moves the `tod` clock; the day/night crossing check itself is throttled to a
+  // per-frame cadence (updateAmbientToD's own 0.5s window). refreshAmbient() forces that check
+  // immediately (bypassing the throttle) so every step below is deterministic with no wait.
+  const setTod = (t) => page.evaluate((tt) => { window.__harbor.setTod(tt); window.__harbor.refreshAmbient(); }, t);
+  await page.evaluate(() => window.__harbor.pause(true));
+  await page.evaluate(() => window.__harbor.startAmbient());   // build the graph deterministically (no real pointer gesture in this harness)
+  await sleep(100);
+  const a0 = await A();
+  ok('audio: graph builds with wave/night/weather/music gain layers reporting', a0 && a0.state === 'running' &&
+    typeof a0.wave === 'number' && typeof a0.weather === 'number' && typeof a0.music === 'number' && typeof a0.night === 'number');
+
+  await setTod(0.5);   // noon
+  const aDay = await A();
+  ok('audio: music bed plays by day (target > 0), crickets silent', aDay.target.music > 0.06 && aDay.target.night === 0);
+
+  await setTod(0.0);   // midnight
+  const aNight = await A();
+  ok('audio: music targets ~0 at night while the night-critter layer targets full', aNight.target.music === 0 && aNight.target.night === 1);
+
+  // Music toggle: OFF kills the music layer even by day, and the choice persists across reload
+  await setTod(0.5);
+  await page.evaluate(() => { document.getElementById('setbtn').click(); document.querySelector('[data-set="music"]').click(); document.getElementById('setbtn').click(); });
+  const aMusicOff = await A();
+  ok('audio: Music toggle OFF targets the music layer to 0', aMusicOff.musicOff === true && aMusicOff.target.music === 0);
+  ok('audio: Music OFF persisted to Retention', await page.evaluate(() => window.Retention.get('harbor', 'musicOff', false) === true));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  ok('audio: Music OFF survives reload', await page.evaluate(() => window.Retention.get('harbor', 'musicOff', false) === true));
+  // restore Music ON + rebuild the ambient graph fresh after reload (which also resets `paused`,
+  // so re-pause here too), for the rest of this block
+  await page.evaluate(() => { window.__harbor.pause(true); document.getElementById('setbtn').click(); document.querySelector('[data-set="music"]').click(); document.getElementById('setbtn').click(); window.__harbor.startAmbient(); });
+  await sleep(100);
+  await setTod(0.5);
+  const aPreStorm = await A();
+  ok('audio: Music re-enabled + day baseline restored after reload', aPreStorm.musicOff === false && aPreStorm.target.music > 0.06);
+
+  // storm warn: drive a real hazard through SIM.raw() + forceHUD() (the real handleHazard path,
+  // same as live play) — the weather layer should rise and the music bed should duck to ~30%
+  await page.evaluate(() => { var S = window.HARBOR_SIM.raw(); S.hazard.phase = 'warn'; S.hazard.port = 'green'; S.hazard.kind = 'Squall'; S.hazard.in = 6; window.__harbor.forceHUD(); });
+  await sleep(150);
+  const aWarn = await A();
+  ok('audio: storm warn targets the weather layer up + ducks the music bed to ~30%', aWarn.target.weather > 0.08 && Math.abs(aWarn.target.music - aPreStorm.target.music * 0.3) < 0.005);
+
+  // strike moment: force it via the real SIM.strikePort test hook, then clear the warn phase
+  // (mirrors what tickHazard does after a real strike) and let handleHazard react
+  await page.evaluate(() => { window.HARBOR_SIM.strikePort('green'); var S = window.HARBOR_SIM.raw(); S.hazard.phase = 'idle'; window.__harbor.forceHUD(); });
+  await sleep(150);
+  const aAfterStrike = await A();
+  ok('audio: weather layer targets back to 0 and the music bed recovers to baseline after the storm clears',
+    aAfterStrike.target.weather === 0 && Math.abs(aAfterStrike.target.music - aPreStorm.target.music) < 1e-6);
+
+  // mute: the master gain gates every layer at once (the authoritative kill switch)
+  await page.evaluate(() => document.getElementById('mutebtn').click()); await sleep(700);
+  const aMuted = await A();
+  ok('audio: mute ramps the master gain to 0 (kills all layers)', aMuted.target.master === 0 && aMuted.master < 0.05 && aMuted.muted === true);
+  await page.evaluate(() => document.getElementById('mutebtn').click()); await sleep(1600);
+  const aUnmuted = await A();
+  ok('audio: unmute restores the master gain', aUnmuted.target.master > 0.1 && aUnmuted.master > 0.1);
+
+  ok('audio: full day→night→storm→mute cycle ran with zero new console/page errors', errs.length === errsBefore11c);
+  await page.evaluate(() => window.__harbor.pause(false));   // resume live sim ticking for the final stability check
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
