@@ -1,11 +1,11 @@
 ---
 name: game-factory
-description: Build, playtest, polish, and ship a new HTML5 canvas game for Prism Play. Use when scouting a new game concept, scaffolding a game, implementing gameplay, polishing game feel, or preparing a portal submission package.
+description: Build, playtest, polish, and ship a new HTML5 canvas game for PortMaster. Use when scouting a new game concept, scaffolding a game, implementing gameplay, polishing game feel, or preparing a portal submission package.
 ---
 
 # Game Factory Skill
 
-You are building HTML5 canvas games for the Prism Play arcade portal. Ten games already exist — fuse, stack, orbit, match3, bubble, idle, io, runner, equate, td. Every new game must fit the factory pattern: zero dependencies, mobile-first, ships as a static folder, integrates juice.js + retention.js.
+You are building HTML5 canvas games for the PortMaster arcade portal. Ten games already exist — fuse, stack, orbit, match3, bubble, idle, io, runner, equate, td. Every new game must fit the factory pattern: zero dependencies, mobile-first, ships as a static folder, integrates juice.js + retention.js.
 
 Read DESIGN.md at the project root for the visual system. Read PRODUCT.md for brand principles.
 
@@ -47,9 +47,9 @@ Use this exact structure:
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="<--bg value>" />
   <meta name="description" content="<one-sentence description — action-first, factual>" />
-  <meta property="og:title" content="<Title> — Prism Play" />
+  <meta property="og:title" content="<Title> — PortMaster" />
   <meta property="og:description" content="<same as description>" />
-  <title><Title> — <genre> · Prism Play</title>
+  <title><Title> — <genre> · PortMaster</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -386,7 +386,7 @@ Run: `python3 factory/ship.py <slug>` to create the submission package in `dist/
 
 ## Quality Bar
 
-A Prism Play game is ready to ship when:
+A PortMaster game is ready to ship when:
 
 1. **First session is self-explanatory** — the hint is enough; no tutorial needed
 2. **Game feel is physical** — juice.js particles, sound, and shake are all wired

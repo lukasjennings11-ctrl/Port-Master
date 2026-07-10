@@ -12,6 +12,11 @@
   'use strict';
   var R = g.Retention || null;
 
+  // Seedable RNG: all gameplay randomness routes through _rng so tests can make
+  // events / voyages / crates deterministic via HARBOR_SIM.__setRng(fn). Defaults to Math.random.
+  var _rng = Math.random;
+  function setRng(fn) { _rng = (typeof fn === 'function') ? fn : Math.random; }
+
   // ---- era ladder (empire rank) ----
   var ERAS = ['Fishing Village', 'Trading Post', 'Industrial Port', 'Metropolis', 'Megaport', 'Global Hub'];
 
@@ -47,6 +52,47 @@
   var WORLD_ORDER = ['green', 'mountain', 'desert', 'tropical', 'nordic'];
   function spec(id) { return WORLD_SPEC[id] || WORLD_SPEC.green; }
 
+  // ---- building synergies (Phase 9a) ----
+  // Count-based (NOT spatial): a per-port multiplier read from the port's building COMPOSITION.
+  // Modest, stackable bonuses that turn "spend money" into an optimisation puzzle. chan: 'prod'|'sales'.
+  var SYNERGY_DEFS = [
+    { id: 'tradehub',  name: 'Trade Hub',   effect: '+12% sales',      chan: 'sales', amt: 0.12, test: function (c) { return (c.warehouse || 0) >= 1 && (c.market || 0) >= 1; } },
+    { id: 'boomtown',  name: 'Boomtown',    effect: '+15% production', chan: 'prod',  amt: 0.15, test: function (c) { return (c.cottage || 0) >= 3; } },
+    { id: 'millforge', name: 'Mill & Forge', effect: '+15% goods',     chan: 'prod',  amt: 0.15, test: function (c) { return (c.sawmill || 0) >= 1 && (c.factory || 0) >= 1; } },
+    { id: 'freeport',  name: 'Free Port',   effect: '+10% sales',      chan: 'sales', amt: 0.10, test: function (c) { return (c.market || 0) >= 1 && (c.dock || 0) >= 1; } }
+  ];
+  var SYN_MAX = 1.6;                                   // clamp: synergies stack but never runaway
+  function portCounts(port) { var c = {}, B = port.buildings || []; for (var i = 0; i < B.length; i++) { var t = B[i].type; c[t] = (c[t] || 0) + 1; } return c; }
+  // pure: given a port, return {prod, sales} composition multipliers (no CUR / DOM dependency)
+  function synergyMul(port) {
+    var c = portCounts(port), prod = 1, sales = 1;
+    for (var i = 0; i < SYNERGY_DEFS.length; i++) { var d = SYNERGY_DEFS[i]; if (d.test(c)) { if (d.chan === 'sales') sales += d.amt; else prod += d.amt; } }
+    return { prod: Math.min(prod, SYN_MAX), sales: Math.min(sales, SYN_MAX) };
+  }
+  function synergyList(port) {
+    var c = portCounts(port);
+    return SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: !!d.test(c) }; });
+  }
+
+  // ---- port specialisation / focus (Phase 9a) ----
+  // A per-port pickable tradeoff. Default 'none'. Applied inside tickPort alongside synergies.
+  var FOCUS_IDS = ['none', 'fishing', 'industry', 'trade'];
+  var FOCUS_DEFS = [
+    { id: 'none',     name: 'Balanced', effect: 'Even output — no bias' },
+    { id: 'fishing',  name: 'Fishing',  effect: '+25% fish, −15% goods' },
+    { id: 'industry', name: 'Industry', effect: '+25% goods, −15% fish' },
+    { id: 'trade',    name: 'Trade',    effect: '+15% sales & routes, −10% raw' }
+  ];
+  // per-resource production multiplier for a focus (raw = fish/timber; goods is manufactured)
+  function focusProdMul(focus, res) {
+    if (focus === 'fishing') return res === 'fish' ? 1.25 : (res === 'goods' ? 0.85 : 1);
+    if (focus === 'industry') return res === 'goods' ? 1.25 : (res === 'fish' ? 0.85 : 1);
+    if (focus === 'trade') return (res === 'fish' || res === 'timber') ? 0.90 : 1;   // −10% raw extraction
+    return 1;
+  }
+  function focusSalesMul(focus) { return focus === 'trade' ? 1.15 : 1; }
+  function focusRouteMul(focus) { return focus === 'trade' ? 1.15 : 1; }
+
   // managers: permanent EMPIRE-WIDE multipliers bought with money (a real spend sink)
   var MANAGERS = {
     fishing: { name: 'Master Angler', desc: '+18% all production', cost: 200, costMul: 1.85, per: 0.18, max: 10 },
@@ -77,8 +123,8 @@
 
   // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
   // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
-  var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1 };
-  function applyMeta(m) { if (!m) return; for (var k in META) if (typeof m[k] === 'number') META[k] = m[k]; }
+  var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
+  function applyMeta(m) { if (!m) return; for (var k in META) if (typeof m[k] === 'number') META[k] = m[k]; if (CUR) ensureContracts(); }   // Phase 9c: Monopoly capstone widens the contract board live
 
   // TIDE: today's daily market modifier (computed in game.js from the seeded daily RNG, fed in here).
   // A rotating positive bonus that rewards logging in — production and/or per-resource sale boosts.
@@ -97,7 +143,7 @@
   // ---- construction ----
   function freshPort(id) {
     return {
-      id: id, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0,
+      id: id, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, focus: 'none',
       demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0
     };
   }
@@ -108,6 +154,8 @@
       active: 'green', ports: {},
       network: { xp: 0, level: 1, routes: [] },
       hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null,
+      evt: { t: 0, next: evRand(60, 130), active: null, lastId: '', seq: 0 },
+      voyages: [], voyageSeq: 0,
       stats: { storms: 0, shipped: 0 }
     };
   }
@@ -139,12 +187,15 @@
       if (!pt.res) pt.res = { fish: 0, timber: 0, goods: 0 };
       if (!pt.demand) pt.demand = { fish: 1, timber: 1, goods: 1 };
       if (!pt.buildings) pt.buildings = [];
+      if (FOCUS_IDS.indexOf(pt.focus) < 0) pt.focus = 'none';   // backfill port specialisation on old saves
       if (!pt.contracts) pt.contracts = [];
       if (typeof pt.contractSeq !== 'number') pt.contractSeq = 0;
       for (var bi = 0; bi < pt.buildings.length; bi++) if (pt.buildings[bi].hp == null) pt.buildings[bi].hp = 100;
       CUR = pt; ensureContracts();
     }
     if (!S.hazard) S.hazard = { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null };
+    if (!S.evt) S.evt = { t: 0, next: evRand(60, 130), active: null, lastId: '', seq: 0 };
+    if (!S.voyages) S.voyages = [];
     if (typeof S.crash === 'undefined') S.crash = null;
     if (!S.stats) S.stats = { storms: 0 };
     if (typeof S.stats.shipped !== 'number') S.stats.shipped = 0;
@@ -197,7 +248,7 @@
     var who = ORDER_LABELS[(seq * 5) % ORDER_LABELS.length];
     return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward };
   }
-  function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var guard = 0; while (CUR.contracts.length < 3 && guard++ < 20) CUR.contracts.push(genContract()); }
+  function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var want = 3 + (META.contractSlots || 0), guard = 0; while (CUR.contracts.length < want && guard++ < 20) CUR.contracts.push(genContract()); }
   function findContract(id) { for (var i = 0; i < (CUR.contracts || []).length; i++) if (CUR.contracts[i].id === id) return i; return -1; }
   function canFulfill(id) { var i = findContract(id); return i >= 0 && CUR.res[CUR.contracts[i].res] >= CUR.contracts[i].amt; }
   function fulfillContract(id) {
@@ -241,7 +292,8 @@
     var rs = S.network.routes, income = 0, shipped = 0;
     for (var i = 0; i < rs.length; i++) {
       var r = rs[i], pa = S.ports[r.a], pb = S.ports[r.b]; if (!pa || !pb) continue;
-      var want = routeCap(r.level) * dt;
+      var fb = Math.max(focusRouteMul(pa.focus || 'none'), focusRouteMul(pb.focus || 'none'));   // trade-focus ports ship more
+      var want = routeCap(r.level) * fb * dt;
       var space = Math.max(0, capsOf(pb)[r.res] - (pb.res[r.res] || 0));
       var amt = Math.min(want, pa.res[r.res] || 0, space);
       if (amt <= 0) continue;
@@ -265,7 +317,7 @@
   // ---- hazards: storms damage a port's buildings + sink route cargo; market crashes floor a price.
   // Meaningful but never wipes money/era — you pay to repair and invest in defenses to weather them.
   var HAZARD = { green: 'Squall', mountain: 'Rockslide', desert: 'Sandstorm', tropical: 'Hurricane', nordic: 'Ice Storm' };
-  function hzRand(a, b) { return a + Math.random() * (b - a); }
+  function hzRand(a, b) { return a + _rng() * (b - a); }
   function bhp(b) { return b.hp == null ? 100 : b.hp; }
   function portDef(p) { var w = 0, l = 0, B = p.buildings; for (var i = 0; i < B.length; i++) { if (B[i].type === 'seawall') w += B[i].level; else if (B[i].type === 'lighthouse') l += B[i].level; } return { wall: w, light: l }; }
   function strike(portId) {
@@ -273,10 +325,10 @@
     var def = portDef(p);
     var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0));   // sea wall + insurance + Legacy
     var pool = []; for (var i = 0; i < p.buildings.length; i++) if (BT[p.buildings[i].type].cat !== 'defense') pool.push(i);
-    var n = Math.min(pool.length, 1 + Math.floor(Math.random() * 2)), damaged = 0;     // hit 1–2 buildings
+    var n = Math.min(pool.length, 1 + Math.floor(_rng() * 2)), damaged = 0;     // hit 1–2 buildings
     for (var k = 0; k < n && pool.length; k++) {
-      var pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0], b = p.buildings[pick];
-      b.hp = clamp(bhp(b) - (25 + Math.random() * 30) * dmgF, 0, 100); damaged++;
+      var pick = pool.splice(Math.floor(_rng() * pool.length), 1)[0], b = p.buildings[pick];
+      b.hp = clamp(bhp(b) - (25 + _rng() * 30) * dmgF, 0, 100); damaged++;
     }
     var lossMul = Math.max(0.2, 1 - 0.25 * def.light), sunk = 0;                        // lighthouse protects cargo
     var rs = S.network.routes;
@@ -295,21 +347,154 @@
       if (hz.t >= hz.next) {
         var founded = Object.keys(S.ports);
         if (!founded.length) { hz.t = 0; hz.next = hzRand(70, 150); return; }
-        hz.port = founded[Math.floor(Math.random() * founded.length)];
-        hz.crash = Math.random() < 0.22;
+        hz.port = founded[Math.floor(_rng() * founded.length)];
+        hz.crash = _rng() < 0.22;
         hz.kind = hz.crash ? 'Market Crash' : (HAZARD[hz.port] || 'Storm');
         hz.phase = 'warn'; hz.warn = 6;
       }
     } else if (hz.phase === 'warn') {
       hz.warn -= dt;
       if (hz.warn <= 0) {
-        if (hz.crash) { var rr = ['fish', 'timber', 'goods'][Math.floor(Math.random() * 3)]; S.crash = { res: rr, t: 35 }; hz.strikeId = (hz.strikeId || 0) + 1; if (S.stats) S.stats.storms = (S.stats.storms || 0) + 1; hz.last = { id: hz.strikeId, crash: true, res: rr, kind: 'Market Crash', port: hz.port }; }
+        if (hz.crash) { var rr = ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)]; S.crash = { res: rr, t: 35 }; hz.strikeId = (hz.strikeId || 0) + 1; if (S.stats) S.stats.storms = (S.stats.storms || 0) + 1; hz.last = { id: hz.strikeId, crash: true, res: rr, kind: 'Market Crash', port: hz.port }; }
         else strike(hz.port);
         hz.phase = 'idle'; hz.t = 0; hz.next = hzRand(110, 230);
       }
     }
   }
   function crashMul(res) { return (S.crash && S.crash.res === res) ? 0.45 : 1; }
+
+  // ---- dynamic events: a second scheduler (alongside hazards) that fires varied surprises and
+  // player-choice decisions. Never wipes money/era; ignoring a choice resolves to a safe default. ----
+  var EV_DEFS = [
+    { id: 'goldrush', kind: 'ambient', name: 'Gold Rush', minEra: 1, w: 3 },
+    { id: 'festival', kind: 'ambient', name: 'Harbour Festival', minEra: 1, w: 2 },
+    { id: 'castaway', kind: 'collect', name: 'Castaway Raft', minEra: 0, w: 2 },
+    { id: 'raid', kind: 'choice', name: 'Pirate Raid', minEra: 2, w: 2 },
+    { id: 'gamble', kind: 'choice', name: "Merchant's Gamble", minEra: 1, w: 2 },
+    { id: 'commission', kind: 'choice', name: 'Royal Commission', minEra: 1, w: 2 },
+    { id: 'smuggler', kind: 'choice', name: 'Smuggler’s Offer', minEra: 1, w: 2 }
+  ];
+  function evRand(a, b) { return a + _rng() * (b - a); }
+  function evDef(id) { for (var i = 0; i < EV_DEFS.length; i++) if (EV_DEFS[i].id === id) return EV_DEFS[i]; return null; }
+  function evPick() {
+    var elig = EV_DEFS.filter(function (e) { return S.era >= e.minEra; });
+    var pool = elig.filter(function (e) { return e.id !== (S.evt.lastId || ''); });
+    if (!pool.length) pool = elig; if (!pool.length) return null;
+    var tot = 0; pool.forEach(function (e) { tot += e.w; });
+    var r = _rng() * tot;
+    for (var i = 0; i < pool.length; i++) { r -= pool[i].w; if (r <= 0) return pool[i]; }
+    return pool[pool.length - 1];
+  }
+  function evData(def) {
+    var era = S.era, money = S.money, d = portDef(CUR || { buildings: [] });
+    if (def.id === 'goldrush') return { mult: 1.8, secs: 30 };
+    if (def.id === 'festival') return { mult: 1.5, secs: 30, fever: true };
+    if (def.id === 'castaway') return {};
+    if (def.id === 'raid') return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(0.45 + 0.12 * d.wall + 0.06 * d.light, 0.45, 0.92) };
+    if (def.id === 'gamble') return { wager: Math.round(Math.max(40, Math.min(money * 0.15, 90 * Math.pow(2, era)))), odds: 0.6 };
+    if (def.id === 'commission') { var res = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var amt = Math.round(40 * (1 + era * 0.6)); return { res: res, amt: amt, reward: Math.round(amt * basePrice(res) * 2.4) }; }
+    if (def.id === 'smuggler') { var sr = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var sa = Math.round(60 * (1 + era * 0.7)); return { res: sr, amt: sa, cost: Math.round(sa * basePrice(sr) * 0.55) }; }
+    return {};
+  }
+  function applyAmbient(ev) { if (ev.id === 'goldrush' || ev.id === 'festival') setBoost(ev.data.mult, ev.data.secs); }
+  function fireEvent(id) {
+    if (!S) return null; setActive(S.active);
+    var def = evDef(id); if (!def) return null;
+    S.evt.seq = (S.evt.seq || 0) + 1;
+    S.evt.active = { id: def.id, kind: def.kind, name: def.name, seq: S.evt.seq, ttl: def.kind === 'ambient' ? 7 : 40, data: evData(def) };
+    S.evt.lastId = def.id;
+    if (def.kind === 'ambient') applyAmbient(S.evt.active);
+    save(); return S.evt.active;
+  }
+  function autoResolveEvent(ev) {                                       // safe, non-punishing timeout defaults
+    if (ev.id === 'raid') S.money = Math.max(0, S.money - Math.round(ev.data.tribute * 0.5));
+  }
+  function tickEvents(dt) {
+    if (dt >= 5 || !S.ports || !S.founded) return;                     // live-play only (offline is a safe window)
+    var e = S.evt; e.t += dt;
+    if (e.active) {
+      e.active.ttl -= dt;
+      if (e.active.ttl <= 0) { if (e.active.kind === 'choice') autoResolveEvent(e.active); e.active = null; e.t = 0; e.next = evRand(70, 150); }
+      return;
+    }
+    if (S.era < 1 && _rng() > 0.4) { /* go easy in starter era */ }
+    if (e.t >= e.next) { var def = evPick(); e.t = 0; e.next = evRand(95, 200); if (def) fireEvent(def.id); }
+  }
+  // player resolves the active choice/collect event; returns an outcome descriptor for the UI layer
+  function resolveEvent(choice) {
+    if (!S || !S.evt || !S.evt.active) return null;
+    setActive(S.active);
+    var ev = S.evt.active, out = { id: ev.id, ok: true, cash: 0, crate: 0 };
+    if (ev.id === 'castaway') { out.cash = Math.round(Math.max(40, S.money * 0.06)); S.money += out.cash; out.crate = _rng() < 0.5 ? 1 : 0; out.text = 'Salvaged the drifting raft!'; }
+    else if (ev.id === 'raid') {
+      if (choice === 0) { out.cash = -ev.data.tribute; S.money = Math.max(0, S.money - ev.data.tribute); out.text = 'Tribute paid — they sail on.'; }
+      else if (_rng() < ev.data.winOdds) { out.cash = ev.data.tribute * 2; S.money += out.cash; out.crate = 1; out.win = true; out.text = 'Routed them and seized loot!'; }
+      else { strike(S.active); out.win = false; out.text = 'They breached the harbour!'; }
+    }
+    else if (ev.id === 'gamble') {
+      if (choice === 0) { if (_rng() < ev.data.odds) { out.cash = ev.data.wager; S.money += out.cash; out.win = true; out.text = 'The venture paid off!'; } else { out.cash = -ev.data.wager; S.money = Math.max(0, S.money - ev.data.wager); out.win = false; out.text = 'The ship never returned…'; } }
+      else out.text = 'Declined the wager.';
+    }
+    else if (ev.id === 'commission') {
+      if (choice === 0) { var p = CUR; if (p && (p.res[ev.data.res] || 0) >= ev.data.amt) { p.res[ev.data.res] -= ev.data.amt; out.cash = ev.data.reward; S.money += out.cash; out.text = 'Commission fulfilled!'; } else { out.ok = false; out.text = 'Not enough ' + ev.data.res + '.'; return out; } }
+      else out.text = 'Declined the commission.';
+    }
+    else if (ev.id === 'smuggler') {
+      if (choice === 0) { if (S.money >= ev.data.cost) { S.money -= ev.data.cost; var sp = CUR; if (sp) sp.res[ev.data.res] = (sp.res[ev.data.res] || 0) + ev.data.amt; out.cash = -ev.data.cost; out.text = 'Contraband stowed below decks.'; } else { out.ok = false; out.text = 'Not enough cash.'; return out; } }
+      else out.text = 'Waved the smuggler off.';
+    }
+    if (out.cash > 0) S.lifetimeMoney = (S.lifetimeMoney || 0) + out.cash;
+    S.evt.lastId = ev.id; S.evt.active = null; S.evt.t = 0; S.evt.next = evRand(95, 200);
+    save(); return out;
+  }
+
+  // ---- expeditions: timed voyages that resolve on wall-clock time, so they finish while you're
+  // away (no tick needed — ready when now() >= endsAt). Send a ship, wait, collect a reward roll. ----
+  var DESTINATIONS = [
+    { id: 'cove', name: 'Smuggler’s Cove', tier: 1, secs: 120 },
+    { id: 'reef', name: 'Coral Reef', tier: 2, secs: 360 },
+    { id: 'isle', name: 'Lost Isle', tier: 3, secs: 900 },
+    { id: 'trench', name: 'The Deep Trench', tier: 4, secs: 2400 }
+  ];
+  function destDef(id) { for (var i = 0; i < DESTINATIONS.length; i++) if (DESTINATIONS[i].id === id) return DESTINATIONS[i]; return null; }
+  function voyageSlots() { return 1 + Math.min(2, Math.floor((S.era || 0) / 2)) + (META.voyageSlots || 0); }
+  function voyageCost(d) { return Math.round(120 * d.tier * (1 + (S.era || 0) * 0.5)); }
+  function canStartVoyage(id) { var d = destDef(id); return !!(d && S && S.money >= voyageCost(d) && (S.voyages || []).length < voyageSlots()); }
+  function startVoyage(id) {
+    var d = destDef(id); if (!canStartVoyage(id)) return false;
+    S.money -= voyageCost(d); S.voyages = S.voyages || [];
+    S.voyages.push({ id: d.id, startedAt: now(), endsAt: now() + d.secs * 1000 / (META.voyageSpeed || 1), seq: (S.voyageSeq = (S.voyageSeq || 0) + 1) });
+    save(); return true;
+  }
+  function voyageReady(v) { return now() >= v.endsAt; }
+  function rollVoyage(d) {
+    var era = S.era || 0, cost = voyageCost(d), out = { cash: 0, res: null, crate: 0, relic: 0 };
+    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)));   // Flagship capstone: richer hauls
+    if (_rng() < 0.5) { var r = ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)]; out.res = {}; out.res[r] = Math.round(20 * d.tier * (1 + era * 0.4)); }
+    if (_rng() < 0.12 * d.tier) out.crate = 1;
+    if (_rng() < 0.05 * d.tier) out.relic = 1;                  // relics wired up in Phase 7c
+    return out;
+  }
+  function collectVoyage(seq) {
+    if (!S || !S.voyages) return null;
+    var idx = -1; for (var i = 0; i < S.voyages.length; i++) if (S.voyages[i].seq === seq) idx = i;
+    if (idx < 0) return null; var v = S.voyages[idx], d = destDef(v.id); if (!d || !voyageReady(v)) return null;
+    var out = rollVoyage(d); out.id = v.id; out.name = d.name; out.tier = d.tier;
+    S.money += out.cash; S.lifetimeMoney = (S.lifetimeMoney || 0) + out.cash;
+    if (out.res) { var p = S.ports[S.active]; if (p) for (var k in out.res) p.res[k] = (p.res[k] || 0) + out.res[k]; }
+    S.voyages.splice(idx, 1); save(); return out;
+  }
+  function voyageState() {
+    var active = (S.voyages || []).map(function (v) {
+      var d = destDef(v.id), rem = Math.max(0, Math.ceil((v.endsAt - now()) / 1000));
+      return { seq: v.seq, id: v.id, name: d ? d.name : v.id, tier: d ? d.tier : 1, total: d ? d.secs : 1, remaining: rem, ready: rem <= 0 };
+    });
+    return {
+      slots: voyageSlots(), used: active.length, ready: active.filter(function (a) { return a.ready; }).length,
+      active: active,
+      dests: DESTINATIONS.map(function (d) { return { id: d.id, name: d.name, tier: d.tier, secs: d.secs, cost: voyageCost(d), can: canStartVoyage(d.id) }; })
+    };
+  }
 
   // ---- repair / rebuild (the comeback money sink; salvage-discounted vs a fresh build) ----
   function repairCost(b) { var t = BT[b.type], miss = (100 - bhp(b)) / 100; return Math.max(1, Math.round(t.cost * 0.5 * miss * Math.pow(1.3, (b.level || 1) - 1))); }
@@ -326,7 +511,10 @@
     // soft-locking at zero output, and softens the blow when a storm wrecks your cottages.
     var labor = j > 0 ? clamp(p / j, 0.12, 1) : 1;
     labor = Math.min(1.25, labor * mgrMul('labour'));
-    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul(), salesMul = mgrMul('sales') * (META.sellMul || 1);   // managers × Legacy × tide × crate surge
+    // Phase 9a: composition synergies + port specialisation fold in alongside the existing multipliers
+    var syn = synergyMul(port), focus = port.focus || 'none';
+    var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul() * syn.prod;   // managers × Legacy × tide × crate surge × synergy
+    var salesMul = mgrMul('sales') * (META.sellMul || 1) * syn.sales * focusSalesMul(focus);
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
     var taper = {};
     for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
@@ -335,8 +523,8 @@
     for (var i = 0; i < port.buildings.length; i++) {
       var b = port.buildings[i], t = BT[b.type]; if (t.cat === 'defense') continue;
       var m = lvlMul(t, b.level) * (bhp(b) / 100);                   // storm-damaged buildings produce less (wrecked = 0)
-      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * sp[r] * taper[r] * dt;
-      if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
+      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * focusProdMul(focus, r) * sp[r] * taper[r] * dt;
+      if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * focusProdMul(focus, t.convert.to) * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
       if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sold = Math.min(have, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
       if (t.money) money += t.money * m * labor * salesMul * dt;
     }
@@ -363,6 +551,7 @@
     setActive(S.active);                                            // restore scope to the active port
     delta += tickRoutes(dt);                                        // trade routes ship cargo + pay tariffs
     tickHazard(dt);                                                 // storms / market crashes (live play only)
+    tickEvents(dt);                                                 // dynamic events (gold rush, raids, commissions…)
     if (delta > 0) S.lifetimeMoney = (S.lifetimeMoney || 0) + delta;
     S.money = Math.max(0, (S.money + delta) || 0);
   }
@@ -372,6 +561,13 @@
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
   function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < bmax(b.type) && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
+  // pick a port's specialisation focus (none|fishing|industry|trade); default port is the active one
+  function setFocus(portId, focus) {
+    if (!S || !S.ports) return false;
+    var pid = (portId == null) ? S.active : portId, p = S.ports[pid];
+    if (!p || FOCUS_IDS.indexOf(focus) < 0) return false;
+    p.focus = focus; save(); return true;
+  }
 
   function canAdvance() {
     if (!S) return false;                                            // no era cap — endless
@@ -440,6 +636,8 @@
       network: networkView(),
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
+      event: (S.evt && S.evt.active) ? { id: S.evt.active.id, name: S.evt.active.name, kind: S.evt.active.kind, seq: S.evt.active.seq, ttl: Math.max(0, Math.ceil(S.evt.active.ttl)), data: S.evt.active.data } : null,
+      voyages: voyageState(),
       stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), ports: Object.keys(S.ports).length },
       ports: portList()
     };
@@ -450,9 +648,11 @@
       v.damaged = port.buildings.filter(function (b) { return bhp(b) < 100; }).length;
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
       v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
+      v.synergies = synergyList(port); v.focus = port.focus || 'none';   // Phase 9a: composition bonuses + specialisation
     } else {
       v.res = { fish: 0, timber: 0, goods: 0 }; v.caps = { fish: BASE_CAP.fish, timber: BASE_CAP.timber, goods: BASE_CAP.goods };
       v.pop = 0; v.jobs = 0; v.buildings = []; v.counts = {}; v.demand = { fish: 1, timber: 1, goods: 1 }; v.contracts = [];
+      v.synergies = SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: false }; }); v.focus = 'none';
     }
     CUR = prev;
     return v;
@@ -460,14 +660,21 @@
 
   g.HARBOR_SIM = {
     BT: BT, ERAS: ERAS, ERA_REQ: ERA_REQ, MANAGERS: MANAGERS, WORLD_SPEC: WORLD_SPEC, WORLD_ORDER: WORLD_ORDER,
+    SYNERGY_DEFS: SYNERGY_DEFS, FOCUS_DEFS: FOCUS_DEFS, FOCUS_IDS: FOCUS_IDS,
+    setFocus: setFocus,
+    synergies: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return p ? synergyList(p) : synergyList({ buildings: [] }); },
+    synergyMul: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return synergyMul(p || { buildings: [] }); },
     eraName: eraName, eraReq: eraReq,
     applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide, setBoost: setBoost, boostT: function () { return BOOST.t; },
+    __setRng: setRng,                                               // test-only: seed all gameplay RNG for deterministic tests
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },
     strikePort: function (id) { if (S) { strike(id || S.active); save(); } },   // debug/test: force a storm strike now
+    fireEvent: fireEvent, resolveEvent: resolveEvent, event: function () { return S && S.evt ? S.evt.active : null; },
+    startVoyage: startVoyage, collectVoyage: collectVoyage, canStartVoyage: canStartVoyage, voyages: voyageState,
     newGame: function () { S = fresh(); setActive('green'); save(); return snapshot(); },
     load: function () { load(); return snapshot(); },
     state: function (id) { return S ? snapshot(id) : null; },

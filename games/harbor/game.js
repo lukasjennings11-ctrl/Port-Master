@@ -17,6 +17,37 @@
   var PANX = 1140, PANZ0 = -90, PANZ1 = 280;   // pan clamp over the long coast
   var biomeId = 'green', biome = null, unlocked = ['green'];
 
+  // ---- Phase 10c: quality-gated post pass (tilt-shift miniature DoF + bloom-lite) ----
+  // ONE optional render-to-texture composite: scene → offscreen RT → fullscreen quad that
+  // blurs away from a horizontal focus band (diorama look) and adds a warm bloom-lite halo
+  // from the same taps. Default ON; a first-boot frame-time probe auto-disables it on weak
+  // devices (persisted via 'postAuto' so they don't re-probe every boot). The Settings
+  // toggle re-arms the probe once when forced back on. Deterministic escape hatches for
+  // headless swiftshader tests/screenshots: a '?nopost-probe' query flag disarms the probe,
+  // and __harbor.setPost() disarms it too (forced state). Any FBO failure → direct path.
+  var POST_FOCUS_Y = 0.44, POST_FOCUS_W = 0.17, POST_BLOOM_T = 0.78, POST_BLOOM_A = 0.35;
+  var postUserOn = window.Retention ? !!Retention.get(GAME, 'post', true) : true;
+  var postAutoOff = window.Retention ? !!Retention.get(GAME, 'postAuto', false) : false;
+  var postFail = false, postRT = null;
+  var postProbe = { armed: !postAutoOff && !/[?&]nopost-probe\b/.test(window.location.search), done: false, t: 0, n: 0, warm: 0, avgMs: 0 };
+  function postEnabled() { return postUserOn && !postAutoOff && !postFail && !!gl; }
+  function setPost(v, fromUI) {
+    postUserOn = !!v; if (window.Retention) Retention.set(GAME, 'post', postUserOn);
+    if (postUserOn) {
+      postAutoOff = false; if (window.Retention) Retention.set(GAME, 'postAuto', false);
+      postFail = false;                                                       // give the FBO another chance
+      if (fromUI) postProbe = { armed: true, done: false, t: 0, n: 0, warm: 0, avgMs: postProbe.avgMs };  // Settings re-arms the probe once
+      else postProbe.armed = false;                                           // forced (tests) → no probe, deterministic
+    }
+    if (settingsOpen) renderSettings();
+  }
+  function ensurePostRT() {   // (re)create / resize the offscreen RT; null (and direct path) on any failure
+    if (postFail || !E || !E.createRT) return null;
+    if (!postRT) { postRT = E.createRT(canvas.width, canvas.height); if (!postRT) { postFail = true; return null; } }
+    else if (postRT.w !== canvas.width || postRT.h !== canvas.height) { if (!postRT.resize(canvas.width, canvas.height)) { postFail = true; return null; } }
+    return postRT;
+  }
+
   // ---- 2D FX overlay (juice: particles / popups / screenshake), drawn over the WebGL canvas ----
   var fxCanvas = null, fxCtx = null, FX = null;
   function ensureFX() {
@@ -79,6 +110,7 @@
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
   var sites = [], selSite = -1;                              // curated harbour candidates + selected index
   var ambient = null;                                        // living port: sailing boats + wheeling gulls
+  var geomStats = null;                                      // static-scene vertex/index counts (budget guard)
   function buildBiome(id) {
     if (!HARBOR_BIOMES[id]) id = 'green';
     biomeId = id; biome = HARBOR_BIOMES[id]; ambient = null;
@@ -91,6 +123,8 @@
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
     var port = founded[id] || null;
     scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era, port) || { city: [], blobs: [], crane: false, era: era, founded: !!port, port: null };
+    geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3,
+      verts: (fac.P.length + grit.P.length + flat.P.length) / 3, indices: fac.I.length + grit.I.length + flat.I.length };   // vertex-budget guard (Phase 10b)
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
     sites = port ? [] : HARBOR_MODELS.sites(); selSite = -1;  // curated candidates only when wild
     if (window.Retention) Retention.set(GAME, 'biome', id);
@@ -130,18 +164,64 @@
     });
   }
 
-  // ---- day/night ----
+  // ---- day/night: authored time-of-day colour scripts (Phase 10a) ----
+  // Four keyframed moods — night / dawn / day / dusk — smoothly interpolated by tod.
+  // Each defines sky top/bot, sun colour, hemisphere ambient, fog colour+density and
+  // how strongly shadows shift toward the biome's cool shadowTint. The keys are built
+  // from the biome palette so every world keeps its identity across the whole cycle.
+  function m3(c, m) { return [c[0] * m[0], c[1] * m[1], c[2] * m[2]]; }
+  function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  function todKeys() {
+    var b = biome;
+    var night = { // cool blue-violet, moonlit; stars + window glow carry the magic
+      top: m3(b.skyTop, [0.10, 0.14, 0.34]), bot: m3(b.skyBot, [0.09, 0.13, 0.30]),
+      sun: [0.16, 0.22, 0.38],
+      ambTop: [0.16, 0.21, 0.38], ambBot: [0.09, 0.11, 0.22],
+      fog: m3(b.fog, [0.09, 0.12, 0.26]), fogD: 0.0011, shadowK: 0.40, water: [0.11, 0.15, 0.42],
+      horizon: [0.05, 0.07, 0.16], sparkle: 0.16                 // near-black blue rim; faint moon-glints
+    };
+    var dawn = { // golden-pink sunrise: violet zenith, peach horizon, long warm light
+      top: lerp3(m3(b.skyTop, [0.52, 0.48, 0.80]), [0.46, 0.36, 0.66], 0.35),
+      bot: lerp3(m3(b.skyBot, [1.00, 0.72, 0.62]), [1.10, 0.62, 0.46], 0.5),
+      sun: [1.42, 0.92, 0.56],
+      ambTop: [0.42, 0.37, 0.54], ambBot: [0.32, 0.22, 0.28],
+      fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68],
+      horizon: [1.28, 0.74, 0.50], sparkle: 0.62                 // warm peach sunrise glow
+    };
+    var day = { // bright, clean, cheerful — the biome palette as painted
+      top: b.skyTop.slice(), bot: b.skyBot.slice(), sun: b.sun.slice(),
+      ambTop: [0.50, 0.56, 0.70], ambBot: [0.27, 0.245, 0.225],
+      fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1],
+      horizon: lerp3(b.skyBot, [1.0, 0.99, 0.94], 0.55), sparkle: 0.55   // soft bright haze
+    };
+    var dusk = { // molten gold-rose sunset, a touch redder than dawn
+      top: lerp3(m3(b.skyTop, [0.46, 0.40, 0.74]), [0.42, 0.30, 0.60], 0.4),
+      bot: lerp3(m3(b.skyBot, [1.05, 0.66, 0.52]), [1.15, 0.55, 0.36], 0.55),
+      sun: [1.48, 0.86, 0.44],
+      ambTop: [0.42, 0.33, 0.50], ambBot: [0.33, 0.21, 0.25],
+      fog: lerp3(m3(b.fog, [1.02, 0.66, 0.54]), [1.05, 0.55, 0.42], 0.45), fogD: 0.0009, shadowK: 0.78, water: [0.76, 0.60, 0.64],
+      horizon: [1.42, 0.68, 0.38], sparkle: 0.70                 // molten peach-gold band low over the sea
+    };
+    // sun crosses the horizon at tod≈0.23 / 0.77 (see sunDir) — keys straddle those moments
+    return [[0.00, night], [0.185, night], [0.25, dawn], [0.34, day], [0.66, day], [0.755, dusk], [0.84, night], [1.00, night]];
+  }
   function env() {
     var day = (1 - Math.cos(tod * Math.PI * 2)) / 2;          // 0 night .. 1 noon
     var night = clamp(1 - day * 1.7, 0, 1);
-    var warm = clamp(1 - Math.abs(day - 0.16) * 2.2, 0, 1) * 0.6;   // dawn/dusk glow
-    function s(c, k) { return [c[0] * k, c[1] * k, c[2] * k]; }
-    function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
-    var top = s(biome.skyTop, 0.16 + 0.9 * day);
-    var bot = lerp3(s(biome.skyBot, 0.2 + 0.85 * day), [1.0, 0.55, 0.3], warm);
-    var sun = s(biome.sun, 0.3 + 0.8 * day);
-    var fog = lerp3(s(biome.fog, 0.22 + 0.85 * day), [1.0, 0.6, 0.4], warm * 0.6);
-    return { day: day, night: night, top: top, bot: bot, sun: sun, fog: fog };
+    var K = todKeys(), a = K[0], b = K[K.length - 1], i;
+    for (i = 1; i < K.length; i++) if (K[i][0] >= tod) { a = K[i - 1]; b = K[i]; break; }
+    var span = Math.max(1e-5, b[0] - a[0]), t = clamp((tod - a[0]) / span, 0, 1);
+    t = t * t * (3 - 2 * t);                                   // smoothstep between keys
+    var A = a[1], B = b[1];
+    return {
+      day: day, night: night,
+      top: lerp3(A.top, B.top, t), bot: lerp3(A.bot, B.bot, t),
+      sun: lerp3(A.sun, B.sun, t), fog: lerp3(A.fog, B.fog, t),
+      ambTop: lerp3(A.ambTop, B.ambTop, t), ambBot: lerp3(A.ambBot, B.ambBot, t),
+      water: lerp3(A.water, B.water, t), horizon: lerp3(A.horizon, B.horizon, t),
+      fogD: A.fogD + (B.fogD - A.fogD) * t, shadowK: A.shadowK + (B.shadowK - A.shadowK) * t,
+      sparkle: A.sparkle + (B.sparkle - A.sparkle) * t
+    };
   }
   function sunDir() { var ang = (tod - 0.25) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
   function norm(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
@@ -172,15 +252,22 @@
     gl.uniform1f(M.u.uAlbedo, 0);
   }
 
-  // soft contact shadows: flat dark radial decals on the ground under objects (no shadow map)
-  function drawBlobs() {
+  // soft contact shadows: flat dark radial decals on the ground under objects (no shadow map).
+  // Coupled to the sun: low sun = longer, softer shadows stretched away from the light.
+  function drawBlobs(sd) {
     if (!blobTex || !scene.blobs || !scene.blobs.length) return;
+    sd = sd || sunDir();
+    var sunY = clamp(sd[1], 0.07, 1);
+    var str = 0.34 * clamp(0.30 + sunY * 1.25, 0.30, 1.0);              // fainter as the sun sinks
+    var stretch = clamp(1.0 + (0.55 - sunY) * 1.4, 1.0, 1.85);          // longer at low sun
+    var yaw = Math.atan2(-sd[0], -sd[2]);                               // stretch away from the light
+    var hh = Math.hypot(sd[0], sd[2]) || 1, ox = -sd[0] / hh, oz = -sd[2] / hh;
     var Bp = E.P_blob; gl.useProgram(Bp.p); gl.uniformMatrix4fv(Bp.u.uVP, false, mVP);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blobTex); gl.uniform1i(Bp.u.uTex, 1); gl.uniform1f(Bp.u.uStr, 0.34);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blobTex); gl.uniform1i(Bp.u.uTex, 1); gl.uniform1f(Bp.u.uStr, str);
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
     for (var i = 0; i < scene.blobs.length; i++) {
-      var b = scene.blobs[i], y = HARBOR_MODELS.heightAt(b.x, b.z) + 0.06;
-      compose(mModel, b.x, y, b.z, b.r, 1, b.r); gl.uniformMatrix4fv(Bp.u.uModel, false, mModel);
+      var b = scene.blobs[i], y = HARBOR_MODELS.heightAt(b.x, b.z) + 0.06, sh = (stretch - 1) * b.r * 0.4;
+      composeRYS(mModel, b.x + ox * sh, y, b.z + oz * sh, b.r, 1, b.r * stretch, yaw); gl.uniformMatrix4fv(Bp.u.uModel, false, mModel);
       drawMesh(Bp, E.blobQuad);
     }
     gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
@@ -226,6 +313,10 @@
     }
     ambient = { boats: boats, gulls: gulls, cx: cx, cz: cz, dev: dev };
   }
+  // Phase 10b wind: one shared breeze, per-boat phase. Sails wobble a few degrees around their
+  // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
+  function sailSway(ph) { return Math.sin(clock * 1.7 + ph) * 0.07 + Math.sin(clock * 0.53 + ph * 0.7) * 0.025; }   // ±~5.5°
+  function sailBillow(ph) { return 1 + Math.sin(clock * 2.4 + ph * 1.9) * 0.045; }                                  // ±4.5% width
   // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
   function drawAmbient(M) {
     if (!ambient) return;
@@ -243,9 +334,9 @@
       // little deck cabin
       gl.uniform3fv(M.u.uBase, [b.hull[0] * 0.8, b.hull[1] * 0.8, b.hull[2] * 0.78]);
       composeRYS(mModel, x, 1.2 + bob, z, 1.5 * sc, 1.0, 1.2 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // tall triangular sail
+      // tall triangular sail — swaying + billowing in the shared breeze
       gl.uniform3fv(M.u.uBase, [0.96, 0.95, 0.92]);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc, 4.6 * sc, 0.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc * sailBillow(b.a0), 4.6 * sc, 0.5, yaw + sailSway(b.a0)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
     }
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
@@ -257,14 +348,104 @@
     }
   }
 
+  // ---- Phase 9b: the living world — the meta systems made visible on the water ----
+  // Expedition ships sail OUT for the first half of a voyage and BACK for the second, so a
+  // ready-to-collect ship waits just off the harbour. Trade-route freighters shuttle between
+  // the active port and the horizon on stable per-route headings (capped at 4). While a rival
+  // race is on, Baron Krall's black-sailed ship patrols offshore. State is cached from the sim
+  // ~1/sec (keyed per voyage seq / route id); the per-frame draw allocates nothing.
+  var fleet = { exp: [], routes: [], rival: null, at: -1e9 };
+  var FLEET_SAIL = [[0.78, 0.9, 1.0], [0.55, 0.95, 0.72], [1.0, 0.82, 0.34], [0.85, 0.5, 1.0]];       // sail tint per destination tier 1..4
+  var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
+  var EXP_HULL = [0.38, 0.26, 0.17], EXP_CABIN = [0.3, 0.21, 0.14], RTE_SAIL = [0.93, 0.91, 0.87],
+      RVL_HULL = [0.15, 0.13, 0.18], RVL_CABIN = [0.1, 0.09, 0.13], RVL_SAIL = [0.06, 0.05, 0.08];
+  function refreshFleet() {
+    fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null;
+    var p = scene.port; if (!p || !simReady()) return;
+    // offshore heading: reuse the deep-water lane the ambient boats found (fallback: downhill to the sea)
+    var ox, oz;
+    if (ambient && (ambient.cx !== p.x || ambient.cz !== p.z)) { var ol = Math.hypot(ambient.cx - p.x, ambient.cz - p.z) || 1; ox = (ambient.cx - p.x) / ol; oz = (ambient.cz - p.z) / ol; }
+    else { var a0 = seaAz(p.x, p.z); ox = Math.sin(a0); oz = Math.cos(a0); }
+    var i, k, ca, sa, dx, dz;
+    var v = SIM.voyages();
+    for (i = 0; i < v.active.length; i++) {
+      var a = v.active[i], off = (((a.seq * 0.618034) % 1) - 0.5) * 1.1;   // stable fan-out per voyage
+      ca = Math.cos(off); sa = Math.sin(off); dx = ox * ca + oz * sa; dz = oz * ca - ox * sa;
+      fleet.exp.push({
+        prog: a.ready ? 1 : clamp(1 - a.remaining / Math.max(1, a.total), 0, 1),
+        dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), ph: a.seq * 2.4,
+        sail: FLEET_SAIL[clamp((a.tier || 1) - 1, 0, 3)]
+      });
+    }
+    var net = SIM.network();
+    for (i = 0, k = 0; i < net.routes.length && k < 4; i++) {
+      var rt = net.routes[i]; if (rt.a !== biomeId && rt.b !== biomeId) continue;
+      var h = hash('rt:' + rt.id), roff = ((h % 1000) / 1000 - 0.5) * 1.7;   // stable heading per route id
+      ca = Math.cos(roff); sa = Math.sin(roff); dx = ox * ca + oz * sa; dz = oz * ca - ox * sa;
+      var hull = FLEET_HULL[rt.res] || FLEET_HULL.goods;
+      fleet.routes.push({ dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), sp: 0.09 + (h % 7) * 0.008, ph: (h % 200) / 100, hull: hull, cargo: [hull[0] * 0.8, hull[1] * 0.8, hull[2] * 0.8] });
+      k++;
+    }
+    var rr = rivalGet();
+    if (rr && rr.race) fleet.rival = { cx: p.x + ox * 96, cz: p.z + oz * 96, px: oz, pz: -ox };   // patrol line runs along the coast
+  }
+  // draw the meta fleet; assumes the same flat-colour program state as drawAmbient
+  function drawFleet(M) {
+    var p = scene.port; if (!p) return;
+    if (clock - fleet.at > 1) refreshFleet();
+    var i, x, z, yaw, bob, e, r;
+    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships (1.3x, tier-tinted sail)
+      e = fleet.exp[i];
+      var f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2;        // out for the first half, home for the second
+      var d = 28 + f * 132;                                        // ready ships wait just off the harbour
+      x = p.x + e.dx * d; z = p.z + e.dz * d;
+      yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
+      bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
+      gl.uniform3fv(M.u.uBase, EXP_HULL);
+      composeRYS(mModel, x, 0.55 + bob, z, 4.68, 1.0, 1.95, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      gl.uniform3fv(M.u.uBase, EXP_CABIN);
+      composeRYS(mModel, x, 1.2 + bob, z, 1.95, 1.0, 1.56, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      gl.uniform3fv(M.u.uBase, e.sail);
+      composeRYS(mModel, x, 1.4 + bob, z, 2.86 * sailBillow(e.ph), 5.98, 0.5, yaw + sailSway(e.ph)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+    }
+    for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters (resource-tinted hull + deck cargo)
+      r = fleet.routes[i];
+      var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph;
+      var dd = 24 + ff * 92;
+      x = p.x + r.dx * dd; z = p.z + r.dz * dd;
+      yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
+      bob = Math.sin(clock * 1.3 + r.ph * 3) * 0.3;
+      gl.uniform3fv(M.u.uBase, r.hull);
+      composeRYS(mModel, x, 0.55 + bob, z, 3.6, 1.0, 1.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      gl.uniform3fv(M.u.uBase, r.cargo);
+      composeRYS(mModel, x, 1.35 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      gl.uniform3fv(M.u.uBase, RTE_SAIL);
+      composeRYS(mModel, x, 1.4 + bob, z, 1.9 * sailBillow(r.ph * 3), 3.7, 0.5, yaw + sailSway(r.ph * 3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+    }
+    if (fleet.rival) {                                             // Baron Krall patrols while the race is on
+      var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
+      x = rv.cx + rv.px * Math.sin(pa) * 46; z = rv.cz + rv.pz * Math.sin(pa) * 46;
+      yaw = Math.atan2(rv.px * dir, rv.pz * dir);
+      bob = Math.sin(clock * 1.3) * 0.3;
+      gl.uniform3fv(M.u.uBase, RVL_HULL);
+      composeRYS(mModel, x, 0.55 + bob, z, 5.76, 1.1, 2.4, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      gl.uniform3fv(M.u.uBase, RVL_CABIN);
+      composeRYS(mModel, x, 1.3 + bob, z, 2.4, 1.1, 1.9, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
+      gl.uniform3fv(M.u.uBase, RVL_SAIL);
+      composeRYS(mModel, x, 1.5 + bob, z, 3.5 * sailBillow(1.3), 7.4, 0.5, yaw + sailSway(1.3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+    }
+  }
+
   function render() {
     if (!gl) return;
     if (scene.port && !ambient) buildAmbient();
     var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
     var parts = scene.crane ? craneParts() : [];
 
-    // main (shadows removed — cleaner cartoon look)
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+    // main (shadows removed — cleaner cartoon look). Phase 10c: when the miniature look is on,
+    // the whole scene renders into an offscreen RT and composites to screen at the end.
+    var rt = postEnabled() ? ensurePostRT() : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fb : null); gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(en.bot[0], en.bot[1], en.bot[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     mat4.perspective(mProj, 0.82, canvas.width / canvas.height, 0.5, 1600); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
     var i;
@@ -273,16 +454,24 @@
     gl.depthMask(false); gl.disable(gl.CULL_FACE);
     var S = E.P_sky; gl.useProgram(S.p);
     gl.uniform3fv(S.u.uTop, en.top); gl.uniform3fv(S.u.uBot, en.bot); gl.uniform3fv(S.u.uSunCol, en.sun);
+    gl.uniform3fv(S.u.uHorizon, en.horizon);                    // 3rd stop: authored horizon glow band
+    // anchor the glow to the real sea horizon: project a far sea-level point along the view heading
+    var hfl = Math.hypot(target[0] - ev[0], target[2] - ev[2]) || 1;
+    var hpx = ev[0] + (target[0] - ev[0]) / hfl * 1400, hpz = ev[2] + (target[2] - ev[2]) / hfl * 1400;
+    var hcy = mVP[1] * hpx + mVP[9] * hpz + mVP[13], hcw = mVP[3] * hpx + mVP[11] * hpz + mVP[15];
+    gl.uniform1f(S.u.uHorizonY, clamp((hcy / (hcw || 1)) * 0.5 + 0.5, 0.04, 0.8));
     gl.uniform2fv(S.u.uSun, [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5]);
+    gl.uniform1f(S.u.uNight, en.night); gl.uniform1f(S.u.uTime, clock);   // night starfield
     drawMesh(S, E.quad); gl.depthMask(true); gl.enable(gl.CULL_FACE);
 
     // scene meshes
     var M = E.P_main; gl.useProgram(M.p);
     gl.uniformMatrix4fv(M.u.uVP, false, mVP);
     gl.uniform3fv(M.u.uSunDir, sd); gl.uniform3fv(M.u.uSunCol, en.sun);
-    gl.uniform3fv(M.u.uAmbTop, [0.42 * (0.5 + en.day * 0.8), 0.47 * (0.5 + en.day * 0.8), 0.58 * (0.5 + en.day * 0.8)]);
-    gl.uniform3fv(M.u.uAmbBot, [0.18, 0.19, 0.22]);
-    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.bot); gl.uniform1f(M.u.uFogD, 0.0);  // no fog — crisp distance
+    gl.uniform3fv(M.u.uAmbTop, en.ambTop);                      // authored ToD ambient (sky bounce)
+    gl.uniform3fv(M.u.uAmbBot, en.ambBot);                      // authored ToD ambient (ground bounce)
+    gl.uniform3fv(M.u.uShadowTint, biome.shadowTint || [0.68, 0.72, 1.06]); gl.uniform1f(M.u.uShadowK, en.shadowK);
+    gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.fog); gl.uniform1f(M.u.uFogD, en.fogD);  // gentle authored distance fog
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
     gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.36); gl.uniform1f(M.u.uShadowOn, 0);
     gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1); gl.uniform1f(M.u.uAlbedo, 0);
@@ -303,7 +492,7 @@
       gl.uniform3fv(M.u.uBase, parts[i].c); composeRYS(mModel, wx, wy, wz, parts[i].s[0], parts[i].s[1], parts[i].s[2], pf ? pf.yaw : 0); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
     }
     // living port: sailing boats + wheeling gulls (flat-colour, same program state as crane parts)
-    if (scene.port) drawAmbient(M);
+    if (scene.port) { drawAmbient(M); drawFleet(M); }
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
     if (foundMode() && sites.length) {
@@ -316,15 +505,33 @@
     }
 
     // soft contact shadows
-    drawBlobs();
+    drawBlobs(sd);
 
     // water
     var W = E.P_water; gl.useProgram(W.p); gl.uniformMatrix4fv(W.u.uVP, false, mVP); gl.uniform1f(W.u.uTime, clock);
     gl.uniform3fv(W.u.uCam, ev); gl.uniform3fv(W.u.uSunDir, sd); gl.uniform3fv(W.u.uSunCol, en.sun);
-    gl.uniform3fv(W.u.uDeep, biome.deep); gl.uniform3fv(W.u.uShallow, biome.shallow);
-    gl.uniform3fv(W.u.uSky, en.bot); gl.uniform3fv(W.u.uFog, en.bot); gl.uniform1f(W.u.uFogD, 0.0);
+    gl.uniform3fv(W.u.uDeep, m3(biome.deep, en.water)); gl.uniform3fv(W.u.uShallow, m3(biome.shallow, en.water));   // ToD-lit water body
+    gl.uniform3fv(W.u.uSky, lerp3(en.bot, en.horizon, 0.4)); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient incl. the horizon glow
+    gl.uniform3fv(W.u.uFog, en.fog); gl.uniform1f(W.u.uFogD, en.fogD);
+    gl.uniform1f(W.u.uSparkle, en.sparkle);   // ToD-authored sparkle: strong day/dusk, faint moon-glints at night
     gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
+
+    // Phase 10c composite: tilt-shift miniature DoF + bloom-lite, one fullscreen kernel.
+    // (The 2D cinematic/FX layers are DOM canvases ABOVE the WebGL canvas — untouched.)
+    if (rt) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      var PP = E.P_post; gl.useProgram(PP.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rt.tex); gl.uniform1i(PP.u.uTex, 0);
+      gl.uniform2fv(PP.u.uTexel, [1 / rt.w, 1 / rt.h]);
+      gl.uniform1f(PP.u.uFocusY, POST_FOCUS_Y); gl.uniform1f(PP.u.uFocusW, POST_FOCUS_W);
+      gl.uniform1f(PP.u.uBloomThresh, POST_BLOOM_T); gl.uniform1f(PP.u.uBloomAmt, POST_BLOOM_A);
+      drawMesh(PP, E.quad);
+      gl.bindTexture(gl.TEXTURE_2D, null);   // CRITICAL: unbind rt.tex from unit 0 — P_main's uShadow sampler defaults to 0, so leaving it bound = feedback loop next frame (P_main draws dropped)
+      gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.enable(gl.CULL_FACE);
+      gl.activeTexture(gl.TEXTURE1);   // scene passes bind their textures on unit 1 — restore
+    }
   }
 
   // ---- founding a harbour (tap the wild coast; rated) ----
@@ -392,6 +599,7 @@
     canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     canvas.addEventListener('pointerdown', function (e) {
       if (window.Juice && !muted) Juice.Audio.unlock();           // unlock WebAudio on first gesture
+      if (!muted) startAmbient();                                 // start the harbour soundscape
       if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
       ptrs.set(e.pointerId, pxy(e)); C.vAz = C.vEl = C.vTx = C.vTz = 0;
       if (ptrs.size === 1) { downPt = pxy(e); moved = false; multi = false; orbitMode = (e.button === 2 || e.shiftKey); var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; }
@@ -443,9 +651,74 @@
   }
 
   // ---- feel: audio + particle/popup helpers ----
-  var muted = false, hudShownMoney = 0, prevMoney = 0, incomeTimer = 0, cine = null, ascendBanner = null;
+  var muted = !!(window.Retention && Retention.get(GAME, 'muted', false));
+  var hapticsOff = !!(window.Retention && Retention.get(GAME, 'hapticsOff', false));
+  var hudShownMoney = 0, prevMoney = 0, incomeTimer = 0, cine = null, ascendBanner = null;
   function sfx(name, a) { if (window.Juice && !muted) Juice.Audio.play(name, a); }
-  function haptic(ms) { if (window.Juice) Juice.vibrate(ms); }
+  function haptic(ms) { if (window.Juice && !hapticsOff) Juice.vibrate(ms); }
+  function applyMuted(v) {
+    muted = !!v; if (window.Juice) Juice.Audio.setMuted(muted); if (window.Retention) Retention.set(GAME, 'muted', muted);
+    if (muteBtn) { muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); }
+    if (muted) stopAmbient(); else startAmbient();
+    if (settingsOpen) renderSettings();
+  }
+  function applyHaptics(off) { hapticsOff = !!off; if (window.Retention) Retention.set(GAME, 'hapticsOff', hapticsOff); if (settingsOpen) renderSettings(); }
+
+  // Ambient harbour soundscape — a gentle synthesized wave bed with a slow swell
+  // plus occasional gull cries, on its own WebAudio graph. Subtle, respects the
+  // Sound toggle, pauses when the tab is hidden. No audio assets required.
+  var amb = null, ambGullT = null;
+  function startAmbient() {
+    if (muted) return;
+    if (!amb) {
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+        var ctx = new AC();
+        var master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+        var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), d = buf.getChannelData(0), last = 0;
+        for (var i = 0; i < d.length; i++) { var w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3.2; }   // brown-ish noise
+        var src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+        var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 540; lp.Q.value = 0.4;
+        var wave = ctx.createGain(); wave.gain.value = 0.5;
+        src.connect(lp); lp.connect(wave); wave.connect(master);
+        var lfo = ctx.createOscillator(); lfo.frequency.value = 0.09; var lfoG = ctx.createGain(); lfoG.gain.value = 0.22;
+        lfo.connect(lfoG); lfoG.connect(wave.gain); lfo.start();                                   // slow tidal swell
+        src.start();
+        amb = { ctx: ctx, master: master };
+        scheduleGull();
+      } catch (e) { amb = null; return; }
+    }
+    if (amb.ctx.state === 'suspended') { try { amb.ctx.resume(); } catch (e) {} }
+    var t = amb.ctx.currentTime;
+    amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
+    amb.master.gain.linearRampToValueAtTime(0.16, t + 1.5);
+  }
+  function stopAmbient() {
+    if (!amb) return;
+    var t = amb.ctx.currentTime;
+    amb.master.gain.cancelScheduledValues(t); amb.master.gain.setValueAtTime(amb.master.gain.value, t);
+    amb.master.gain.linearRampToValueAtTime(0, t + 0.6);
+  }
+  function gullCry() {
+    if (!amb || muted) return;
+    var ctx = amb.ctx, t0 = ctx.currentTime;
+    for (var k = 0; k < 2; k++) {
+      var o = ctx.createOscillator(), g = ctx.createGain(), st = t0 + k * 0.17;
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(1250 + Math.random() * 320, st);
+      o.frequency.exponentialRampToValueAtTime(700, st + 0.15);
+      g.gain.setValueAtTime(0.0001, st); g.gain.linearRampToValueAtTime(0.05, st + 0.02); g.gain.exponentialRampToValueAtTime(0.0008, st + 0.2);
+      o.connect(g); g.connect(amb.master); o.start(st); o.stop(st + 0.24);
+    }
+  }
+  function scheduleGull() {
+    clearTimeout(ambGullT);
+    ambGullT = setTimeout(function () {
+      if (amb && !muted && !document.hidden && scene && scene.port) gullCry();
+      scheduleGull();
+    }, 7000 + Math.random() * 13000);
+  }
+  document.addEventListener('visibilitychange', function () { if (!amb) return; if (document.hidden) stopAmbient(); else if (!muted) startAmbient(); });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -466,7 +739,9 @@
       smokeT -= every;
       var pw = portWorld(); if (!pw) return; var sc = worldToScreen(pw.x - 18 + Math.random() * 36, pw.y + 8, pw.z - 4 + Math.random() * 8); if (!sc) continue;
       var g = 0.55 + Math.random() * 0.2;
-      FX.p.list.push({ x: sc.x, y: sc.y, vx: (Math.random() - 0.3) * 14, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
+      // steady drift in the same shared breeze that sways the sails (+x, gently gusting)
+      var wind = 8 + Math.sin(clock * 0.53) * 4;
+      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
     }
   }
 
@@ -505,6 +780,23 @@
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
+    // frame is > ~26ms (below ~38fps) auto-disable the miniature look for this device
+    // (persisted, so weak devices don't re-probe every boot; Settings can re-arm it).
+    if (postProbe.armed && !postProbe.done && postEnabled()) {
+      if (postProbe.warm < 0.8) postProbe.warm += dt;                    // let shaders/JIT warm up first
+      else {
+        postProbe.t += dt; postProbe.n++;
+        if (postProbe.t >= 5) {
+          postProbe.done = true; postProbe.avgMs = postProbe.t / postProbe.n * 1000;
+          if (postProbe.avgMs > 26) {
+            postAutoOff = true; if (window.Retention) Retention.set(GAME, 'postAuto', true);
+            showHint('✨ Miniature look off — keeping things smooth');
+            if (settingsOpen) renderSettings();
+          }
+        }
+      }
+    }
     if (cine) updateCine(dt);
     if (ptrs.size === 0) {
       C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0;
@@ -751,6 +1043,8 @@
 
   // ---- economy HUD + port management ----
   var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
+  var setBtn = null, settingsPanel = null, settingsOpen = false, resetArm = false;
+  var expBtn = null, expPanel = null, expOpen = false;
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
   // idle number notation: 1.2k, 3.40M, 5.7B … Td, then scientific. Stays readable as numbers explode.
@@ -856,6 +1150,291 @@
     }
   }
 
+  // ---- dynamic events (Phase 7a): ambient surprises via the hint toast, choices via a modal ----
+  var eventModal = null, shownEvtSeq = 0;
+  function evIcon(id) { return ({ goldrush: '💰', festival: '🎆', castaway: '🛟', raid: '🏴‍☠️', gamble: '🎲', commission: '👑', smuggler: '🦜' })[id] || '⚓'; }
+  function evDesc(ev) {
+    var d = ev.data || {};
+    if (ev.id === 'castaway') return 'A castaway raft drifts toward your harbour — haul it in for salvage?';
+    if (ev.id === 'raid') return 'Pirates threaten the port! Pay them off, or fight them off and risk damage for loot.';
+    if (ev.id === 'gamble') return 'A merchant offers a risky venture: wager £' + fmt(d.wager) + ' for a ' + Math.round(d.odds * 100) + '% shot to double it.';
+    if (ev.id === 'commission') return 'The Crown will pay £' + fmt(d.reward) + ' for ' + fmt(d.amt) + ' ' + d.res + ' delivered right now.';
+    if (ev.id === 'smuggler') return 'A smuggler offers ' + fmt(d.amt) + ' ' + d.res + ' for £' + fmt(d.cost) + ' — well below market. No questions asked.';
+    return '';
+  }
+  function evButtons(ev) {
+    var d = ev.data || {};
+    if (ev.id === 'castaway') return [{ t: 'Haul it in 🛟', i: 0, cls: 'primary' }];
+    if (ev.id === 'raid') return [{ t: 'Pay £' + fmt(d.tribute), i: 0 }, { t: 'Fight! ⚔ ' + Math.round(d.winOdds * 100) + '%', i: 1, cls: 'primary' }];
+    if (ev.id === 'gamble') return [{ t: 'Decline', i: 1 }, { t: 'Gamble £' + fmt(d.wager), i: 0, cls: 'primary' }];
+    if (ev.id === 'commission') { var s = SIM.state(); var can = ((s.res && s.res[d.res]) || 0) >= d.amt; return [{ t: 'Decline', i: 1 }, { t: 'Fulfil · ' + fmt(d.amt) + ' ' + d.res, i: 0, cls: 'primary', dis: !can }]; }
+    if (ev.id === 'smuggler') { var afford = (SIM.state().money || 0) >= d.cost; return [{ t: 'Decline', i: 1 }, { t: 'Buy £' + fmt(d.cost), i: 0, cls: 'primary', dis: !afford }]; }
+    return [{ t: 'OK', i: 1 }];
+  }
+  function ensureEventModal() {
+    if (eventModal) return;
+    eventModal = document.createElement('div'); eventModal.id = 'eventmodal'; eventModal.className = 'evm';
+    eventModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ev-ic">⚓</div><div class="ev-name" id="ev-name"></div><div class="ev-desc" id="ev-desc"></div><div class="ev-btns" id="ev-btns"></div></div>';
+    wrap.appendChild(eventModal);
+  }
+  function showEventModal(ev) {
+    ensureEventModal();
+    eventModal.querySelector('#ev-ic').textContent = evIcon(ev.id);
+    eventModal.querySelector('#ev-name').textContent = ev.name;
+    eventModal.querySelector('#ev-desc').textContent = evDesc(ev);
+    var bw = eventModal.querySelector('#ev-btns'); bw.innerHTML = '';
+    evButtons(ev).forEach(function (b) {
+      var el = document.createElement('button'); el.className = 'ev-btn' + (b.cls ? ' ' + b.cls : ''); el.textContent = b.t; if (b.dis) el.disabled = true;
+      el.addEventListener('click', function () { onEventChoice(b.i); });
+      bw.appendChild(el);
+    });
+    eventModal.classList.add('show'); sfx('score'); haptic(12);
+  }
+  function onEventChoice(i) {
+    var out = SIM.resolveEvent(i); if (eventModal) eventModal.classList.remove('show');
+    if (!out) return;
+    if (!out.ok) { showHint(out.text || 'Cannot do that yet.'); sfx('lose'); return; }
+    if (out.crate) grantCrate(out.crate);
+    var pw = portWorld();
+    if (out.cash > 0) {
+      if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(out.cash), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: out.win ? 36 : 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 210, life: 1.1, size: 5 }); }
+      sfx('win'); haptic(24); if (out.win) confettiBurst();
+    } else if (out.cash < 0) { sfx('lose'); haptic(16); }
+    else sfx('tap');
+    if (out.cash > 0) seasonAdd(12);
+    if (out.text) showHint(out.text);
+    updateHUD();
+  }
+  function handleEvent(s) {
+    var ev = s.event;
+    if (!ev) { if (eventModal) eventModal.classList.remove('show'); return; }
+    if (ev.seq === shownEvtSeq) return;                                // already surfaced this one
+    shownEvtSeq = ev.seq;
+    if (ev.kind === 'ambient') {                                       // gold rush / festival — a felt boost, toast + sparkle
+      showHint(evIcon(ev.id) + ' ' + ev.name + '! +' + Math.round((ev.data.mult - 1) * 100) + '% output');
+      var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.1, size: 5 });
+      sfx('win'); haptic(18);
+      if (ev.id === 'festival') startFever();                          // Festival kicks off the active tap-frenzy
+    } else showEventModal(ev);                                         // choice / collect — a decision modal
+  }
+
+  // ---- expeditions (Phase 7b): send ships on timed voyages (resolve offline), collect rewards ----
+  function toggleExp() {
+    expOpen = !expOpen;
+    if (expOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } }
+    expPanel.classList.toggle('show', expOpen);
+    if (expOpen) { renderExp(); sfx('tap'); haptic(8); }
+  }
+  function tierStars(t) { return new Array(t + 1).join('★'); }
+  function mmss(s) { var m = Math.floor(s / 60), ss = s % 60; return (m > 0 ? m + 'm ' : '') + ss + 's'; }
+  function renderExp() {
+    if (!simReady()) { expPanel.classList.remove('show'); expOpen = false; return; }
+    var v = SIM.voyages();
+    var h = '<div class="mp-head">Expeditions <span class="ex-slots">' + v.used + '/' + v.slots + '</span><button id="ex-close">✕</button></div>';
+    if (v.active.length) {
+      h += '<div class="mp-sec">At sea</div><div class="mp-grid">';
+      v.active.forEach(function (a) {
+        if (a.ready) h += '<button class="mp-item ex-go ready" data-collect="' + a.seq + '"><span class="mi-n">' + a.name + ' ' + tierStars(a.tier) + '</span><span class="mi-c">Collect 🎁</span></button>';
+        else { var pct = Math.round(100 * (1 - a.remaining / a.total)); h += '<div class="mp-item ex-go"><span class="mi-n">' + a.name + ' ' + tierStars(a.tier) + '</span><span class="mi-c">' + mmss(a.remaining) + '</span><div class="ex-bar"><i style="width:' + pct + '%"></i></div></div>'; }
+      });
+      h += '</div>';
+    }
+    h += '<div class="mp-sec">Send a ship</div><div class="mp-grid">';
+    v.dests.forEach(function (d) {
+      h += '<button class="mp-item ex-send" data-send="' + d.id + '"' + (d.can ? '' : ' disabled') + '><span class="mi-n">' + d.name + ' ' + tierStars(d.tier) + '</span><span class="mi-d">' + mmss(d.secs) + ' voyage</span><span class="mi-c">£' + fmt(d.cost) + '</span></button>';
+    });
+    h += '</div>';
+    if (v.used >= v.slots) h += '<div class="ex-note">All ships are at sea — collect a voyage, or grow your empire for more berths.</div>';
+    expPanel.innerHTML = h;
+    expPanel.querySelector('#ex-close').addEventListener('click', toggleExp);
+    expPanel.querySelectorAll('[data-send]').forEach(function (el) { el.addEventListener('click', function () { if (SIM.startVoyage(el.getAttribute('data-send'))) { sfx('move'); haptic(14); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 14, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 150, life: 0.8, size: 4 }); renderExp(); updateHUD(); } else sfx('lose'); }); });
+    expPanel.querySelectorAll('[data-collect]').forEach(function (el) { el.addEventListener('click', function () { collectVoyageUI(+el.getAttribute('data-collect')); }); });
+  }
+  function collectVoyageUI(seq) {
+    var out = SIM.collectVoyage(seq); if (!out) return;
+    if (out.crate) grantCrate(out.crate);
+    var rel = out.relic ? grantRandomRelic() : null;
+    var pw = portWorld();
+    if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(out.cash), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#7fe0d6', '#ffe08a', '#fff3c4'], speed: 210, life: 1.1, size: 5 }); }
+    var extra = out.res ? (' + ' + Object.keys(out.res).map(function (k) { return fmt(out.res[k]) + ' ' + k; }).join(', ')) : '';
+    showHint('⛵ ' + out.name + ' returned! +£' + fmt(out.cash) + extra + (out.crate ? ' + a crate 🎁' : ''));
+    sfx('win'); haptic(26); confettiBurst();
+    if (rel) announceRelic(rel);
+    seasonAdd(8 * (out.tier || 1));
+    if (achUnlock('voy1')) popAch('First Expedition!', true);
+    renderExp(); updateHUD();
+  }
+
+  // ---- the Rival: Baron Krall (Phase 7d) — recurring antagonist with taunts + head-to-head races ----
+  var RIVAL_NAME = 'Baron Krall';
+  var RIVAL_TAUNTS = [
+    'You call that a harbour? Let me show you how a real magnate trades.',
+    'Beginner’s luck. I’ll bury you in cargo.',
+    'Still here? Persistent little barnacle. Try THIS.',
+    'You’re becoming a nuisance. Let’s settle this on the water.',
+    'Impossible… how are you keeping pace with me?!'
+  ];
+  var RIVAL_LOSE = ['“Pathetic. The sea favours the bold — and that’s me.”', '“Was that your best? My grandmother ships faster.”', '“Run home, harbourmaster.”'];
+  var RIVAL_WIN = ['“You… beat me? Bah! A fluke!”', '“Impossible! I’ll have my revenge, PortMaster.”', '“Enjoy your trophy. It won’t happen again.”'];
+  var rivalModal = null, rivalPending = false, raceBanner = null;
+  function rivalGet() { var d = { stage: 0, wins: 0, losses: 0, race: null }; return (window.Retention && Retention.get(GAME, 'rival', d)) || d; }
+  function rivalSet(r) { if (window.Retention) Retention.set(GAME, 'rival', r); }
+  function rivalThreshold(stage) { return 2 + stage * 2; }                       // era at which the next challenge appears
+  function raceCounter(kind) { var s = SIM.state(); return kind === 'ship' ? ((s.stats && s.stats.shipped) || 0) : (s.lifetimeMoney || 0); }
+  function rivalTarget(kind, era, stage) {
+    if (kind === 'ship') return Math.round(40 * (1 + era * 0.7) * (1 + stage * 0.4));
+    return Math.round(Math.max(800, (SIM.state().lifetimeMoney || 0) * 0.03 + 500 * Math.pow(1.8, era)) * (1 + stage * 0.25));
+  }
+  function ensureRivalModal() {
+    if (rivalModal) return;
+    rivalModal = document.createElement('div'); rivalModal.id = 'rivalmodal'; rivalModal.className = 'evm';
+    rivalModal.innerHTML = '<div class="ev-card rival"><div class="ev-ic">🎩</div><div class="ev-name" id="rv-name"></div><div class="ev-desc" id="rv-desc"></div><div class="ev-btns" id="rv-btns"></div></div>';
+    wrap.appendChild(rivalModal);
+  }
+  function rvButtons(list) { var bw = rivalModal.querySelector('#rv-btns'); bw.innerHTML = ''; list.forEach(function (b) { var el = document.createElement('button'); el.className = 'ev-btn' + (b.cls ? ' ' + b.cls : ''); el.textContent = b.t; el.addEventListener('click', b.fn); bw.appendChild(el); }); }
+  function showRivalChallenge() {
+    var r = rivalGet(), s = SIM.state(), kind = (r.stage % 2 === 0) ? 'earn' : 'ship', target = rivalTarget(kind, s.era, r.stage);
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = RIVAL_NAME;
+    var goal = kind === 'ship' ? ('ship ' + fmt(target) + ' cargo') : ('earn £' + fmt(target));
+    rivalModal.querySelector('#rv-desc').textContent = '“' + RIVAL_TAUNTS[Math.min(r.stage, RIVAL_TAUNTS.length - 1)] + '” — Race him: ' + goal + ' within 3 minutes.';
+    rvButtons([
+      { t: 'Back down', fn: function () { declineRival(); rivalModal.classList.remove('show'); } },
+      { t: 'Accept ⚔', cls: 'primary', fn: function () { startRace(kind, target, 180); rivalModal.classList.remove('show'); } }
+    ]);
+    rivalModal.classList.add('show'); sfx('score'); haptic(14);
+  }
+  function startRace(kind, target, secs) { var r = rivalGet(); r.race = { kind: kind, target: target, base: raceCounter(kind), endsAt: Date.now() + secs * 1000 }; rivalPending = false; rivalSet(r); showHint('🏁 Race on! Beat ' + RIVAL_NAME + '!'); updateHUD(); }
+  function declineRival() { var r = rivalGet(); r.losses = (r.losses || 0) + 1; r.stage = (r.stage || 0) + 1; rivalPending = false; rivalSet(r); showHint(RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)]); }
+  function resolveRace(win) {
+    var r = rivalGet(); r.race = null; r.stage = (r.stage || 0) + 1;
+    if (win) {
+      r.wins = (r.wins || 0) + 1; rivalSet(r);
+      var prize = Math.round(Math.max(1000, (SIM.state().lifetimeMoney || 0) * 0.03));
+      if (SIM.raw()) { SIM.raw().money += prize; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + prize; }
+      var rel = grantRandomRelic(); seasonAdd(40); if (achUnlock('rival1')) popAch('Bested Baron Krall!', true); showRivalResult(true, prize, rel);
+    } else { r.losses = (r.losses || 0) + 1; rivalSet(r); showRivalResult(false, 0, null); }
+    updateHUD();
+  }
+  function showRivalResult(win, prize, rel) {
+    ensureRivalModal();
+    rivalModal.querySelector('#rv-name').textContent = win ? (RIVAL_NAME + ' — defeated!') : (RIVAL_NAME + ' wins this round');
+    rivalModal.querySelector('#rv-desc').textContent = win ? ((RIVAL_WIN[Math.floor(Math.random() * RIVAL_WIN.length)]) + ' You won £' + fmt(prize) + (rel ? ' and a relic — ' + rel.name + '!' : '!')) : RIVAL_LOSE[Math.floor(Math.random() * RIVAL_LOSE.length)];
+    rvButtons([{ t: win ? 'Victory! 🏆' : 'Hmph.', cls: 'primary', fn: function () { rivalModal.classList.remove('show'); } }]);
+    rivalModal.classList.add('show');
+    if (win) { sfx('win'); haptic([10, 40, 20, 40]); confettiBurst(); if (rel && rel.completed) announceRelic(rel); } else { sfx('lose'); haptic(20); }
+  }
+  function maybeTriggerRival(s) {
+    if (rivalPending) return; var r = rivalGet();
+    if (r.race) return;
+    if (eventModal && eventModal.classList.contains('show')) return;             // don't collide with an event modal
+    if (s.era >= rivalThreshold(r.stage || 0)) { rivalPending = true; showRivalChallenge(); }
+  }
+  function updateRaceBanner() {
+    if (!raceBanner) return; var r = rivalGet();
+    if (r.race) {
+      var prog = raceCounter(r.race.kind) - r.race.base, rem = Math.ceil((r.race.endsAt - Date.now()) / 1000);
+      if (prog >= r.race.target) { resolveRace(true); return; }
+      if (rem <= 0) { resolveRace(false); return; }
+      var label = r.race.kind === 'ship' ? (fmt(Math.max(0, Math.floor(prog))) + '/' + fmt(r.race.target) + ' cargo') : ('£' + fmt(Math.max(0, Math.floor(prog))) + ' / £' + fmt(r.race.target));
+      raceBanner.querySelector('.rb-txt').textContent = '🏁 vs ' + RIVAL_NAME + ': ' + label;
+      raceBanner.querySelector('.rb-cd').textContent = rem + 's';
+      raceBanner.classList.add('show');
+    } else raceBanner.classList.remove('show');
+  }
+
+  // ---- active Fever (Phase 7e): a Festival opens a tap-frenzy — coins rain over the harbour, a
+  // combo meter rewards rapid taps. Pure upside; ignoring it just means normal idle play. ----
+  var feverEnd = 0, feverSpawnT = null, feverLoopT = null, combo = 0, comboT = 0, feverLayer = null, comboEl = null;
+  function ensureFeverUI() {
+    if (feverLayer) return;
+    feverLayer = document.createElement('div'); feverLayer.id = 'fever'; wrap.appendChild(feverLayer);
+    comboEl = document.createElement('div'); comboEl.id = 'combo'; comboEl.innerHTML = '<span class="cb-x"></span><div class="cb-bar"><i></i></div>'; wrap.appendChild(comboEl);
+  }
+  function feverActive() { return Date.now() < feverEnd; }
+  function comboMult() { return 1 + Math.min(combo * 0.12, 4); }
+  function startFever(secs) {
+    ensureFeverUI(); secs = secs || 14; feverEnd = Date.now() + secs * 1000; combo = 0; comboT = 0;
+    showHint('🎆 FEVER! Tap the coins!'); sfx('win'); haptic(20);
+    spawnLoop(); clearTimeout(feverLoopT); feverTick();
+  }
+  function spawnLoop() {
+    clearTimeout(feverSpawnT); if (!feverActive()) return;
+    spawnCoin(); feverSpawnT = setTimeout(spawnLoop, 380 + Math.random() * 340);
+  }
+  function spawnCoin() {
+    ensureFeverUI();
+    var gem = Math.random() < 0.25;
+    var c = document.createElement('button'); c.className = 'coin'; c.textContent = gem ? '💎' : '🪙'; c.dataset.gem = gem ? '1' : '';
+    var x = 28 + Math.random() * (Math.max(120, CW) - 56), y = (CH || 700) * 0.34 + Math.random() * ((CH || 700) * 0.4);
+    c.style.left = x + 'px'; c.style.top = y + 'px';
+    c.addEventListener('click', function (e) { e.stopPropagation(); collectCoin(c); });
+    feverLayer.appendChild(c);
+    setTimeout(function () { if (c.parentNode) c.parentNode.removeChild(c); }, 2600);
+  }
+  function collectCoin(c) {
+    if (!feverActive()) { if (c.parentNode) c.parentNode.removeChild(c); return; }
+    combo++; comboT = 1.6;
+    var era = SIM.state().era || 0, mult = comboMult() * (c.dataset.gem ? 3 : 1);
+    var base = Math.max(20, Math.round((SIM.state().lifetimeMoney || 0) * 0.0008) + 28 * Math.pow(1.6, era));
+    var gain = Math.round(base * mult);
+    if (SIM.raw()) { SIM.raw().money += gain; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + gain; }
+    var r = c.getBoundingClientRect();
+    if (FX) { FX.pop.add(r.left + r.width / 2, r.top, '+£' + fmt(gain), { color: c.dataset.gem ? '#bfe9ff' : '#ffe08a', size: 16, life: 1.0, vy: -50 }); FX.p.burst(r.left + r.width / 2, r.top + r.height / 2, { count: 8, colors: ['#ffe08a', '#fff3c4'], speed: 140, life: 0.7, size: 4 }); }
+    sfx('score'); haptic(7); seasonAdd(1);
+    if (combo >= 10 && achUnlock('combo')) popAch('Fever Pitch — 10 combo!', true);
+    if (c.parentNode) c.parentNode.removeChild(c);
+    updateComboUI();
+  }
+  function updateComboUI() {
+    if (!comboEl) return;
+    if (combo > 1 && feverActive()) { comboEl.classList.add('show'); comboEl.querySelector('.cb-x').textContent = '×' + comboMult().toFixed(1) + ' COMBO'; comboEl.querySelector('.cb-bar i').style.width = Math.min(100, comboT / 1.6 * 100) + '%'; }
+    else comboEl.classList.remove('show');
+  }
+  function feverTick() {
+    if (!feverActive()) { combo = 0; if (comboEl) comboEl.classList.remove('show'); if (feverLayer) feverLayer.innerHTML = ''; updateHUD(); return; }
+    comboT -= 0.1; if (comboT <= 0) combo = 0;
+    updateComboUI();
+    feverLoopT = setTimeout(feverTick, 100);
+  }
+
+  // ---- seasons & the free Harbour Pass (Phase 7f): a rotating themed season; earn season points
+  // from everything you do and claim a free milestone reward track. Ethical: no paid tier, no
+  // punishing expiry — rewards are applied the moment you claim them and are yours forever. ----
+  var SEASON_EPOCH = Date.UTC(2026, 0, 1), SEASON_LEN = 14 * 24 * 3600 * 1000;
+  var SEASON_THEMES = ['Tides of Fortune', 'Monsoon Trade Winds', 'The Gold Run', 'Harvest of the Sea', 'Lanterns & Lighthouses', 'Stormwatch Season', 'The Great Regatta', 'Frostwater Passage'];
+  var PASS_TIERS = [
+    { at: 60, reward: { crate: 1 }, label: 'Salvage crate' },
+    { at: 150, reward: { legacy: 3 }, label: '+3 ✦ Legacy' },
+    { at: 320, reward: { crate: 2 }, label: '2 crates' },
+    { at: 560, reward: { relic: 1 }, label: 'A relic' },
+    { at: 880, reward: { legacy: 8 }, label: '+8 ✦ Legacy' },
+    { at: 1300, reward: { crate: 3 }, label: '3 crates' },
+    { at: 1850, reward: { relic: 1 }, label: 'A relic' },
+    { at: 2600, reward: { legacy: 20 }, label: '+20 ✦ Legacy' },
+    { at: 3600, reward: { crate: 5 }, label: '5 crates' },
+    { at: 5000, reward: { relic: 1, legacy: 30 }, label: 'Relic + 30 ✦ Legacy' }
+  ];
+  function seasonId() { return Math.floor((Date.now() - SEASON_EPOCH) / SEASON_LEN); }
+  function seasonTheme() { var i = seasonId() % SEASON_THEMES.length; return SEASON_THEMES[(i + SEASON_THEMES.length) % SEASON_THEMES.length]; }
+  function seasonGet() { var s = window.Retention && Retention.get(GAME, 'season', null), id = seasonId(); if (!s || s.id !== id) { s = { id: id, points: 0, claimed: [] }; if (window.Retention) Retention.set(GAME, 'season', s); } return s; }
+  function seasonSet(s) { if (window.Retention) Retention.set(GAME, 'season', s); }
+  function seasonAdd(n) { if (!n) return; var s = seasonGet(); s.points = (s.points || 0) + n; seasonSet(s); }
+  function seasonDaysLeft() { return Math.max(1, Math.ceil((SEASON_EPOCH + (seasonId() + 1) * SEASON_LEN - Date.now()) / (24 * 3600 * 1000))); }
+  function passClaimable(i) { var s = seasonGet(); return (s.points || 0) >= PASS_TIERS[i].at && s.claimed.indexOf(i) < 0; }
+  function claimPass(i) {
+    if (!passClaimable(i)) return false;
+    var rw = PASS_TIERS[i].reward, s = seasonGet(); s.claimed.push(i); seasonSet(s);
+    if (rw.crate) grantCrate(rw.crate);
+    if (rw.legacy) setLegacyBal(legacyBal() + rw.legacy);
+    if (rw.relic) { var rel = grantRandomRelic(); if (rel) announceRelic(rel); }
+    sfx('win'); haptic(26); confettiBurst();
+    if (achUnlock('pass1')) popAch('Season Sailor!', true);
+    showHint('🎟️ Harbour Pass: ' + PASS_TIERS[i].label + ' claimed!');
+    computeMeta(); updateHUD();
+    return true;
+  }
+
   // ---- Legacy / Prestige: meta progression persisted across runs (via Retention, survives a wipe) ----
   var LEGACY_TREE = [
     { id: 'prod', name: 'Master Shipwrights', desc: '+25% global production / lvl', base: 3, mul: 1.6, per: 0.25, max: 30, meta: 'prodMul' },
@@ -882,8 +1461,95 @@
     var tr = legacyTreeMap(); tr[id] = (tr[id] || 0) + 1; Retention.set(GAME, 'legacyTree', tr);
     computeMeta(); return true;
   }
+  // ---- relics & collection sets (Phase 7c): permanent set-bonuses; stored in Retention so they
+  // survive prestige. Relics drop from expeditions, rare events, and Legendary crates. ----
+  var RELIC_SETS = [
+    { id: 'carto', name: 'Cartographer’s Cache', bonus: '+1 expedition ship', meta: 'voyageSlots', amt: 1, relics: ['Brass Astrolabe', 'Tattered Sea Chart', 'Star Compass'] },
+    { id: 'smug', name: 'Smuggler’s Hoard', bonus: '+25% faster voyages', meta: 'voyageSpeed', amt: 0.25, relics: ['Black Pearl', 'Forged Ledger', 'Hidden Cove Key'] },
+    { id: 'salt', name: 'Old Salt’s Charms', bonus: '+15% storm resistance', meta: 'hazardResist', amt: 0.15, relics: ['Whale-bone Talisman', 'Mermaid’s Tear', 'Storm Glass'] },
+    { id: 'prince', name: 'Merchant Prince’s Regalia', bonus: '+30% production', meta: 'prodMul', amt: 0.30, relics: ['Gilded Sextant', 'Ivory Abacus', 'Royal Seal'] }
+  ];
+  function ownedRelics() { return (window.Retention && Retention.get(GAME, 'relics', {})) || {}; }
+  function hasRelic(id) { return !!ownedRelics()[id]; }
+  function setById(id) { for (var i = 0; i < RELIC_SETS.length; i++) if (RELIC_SETS[i].id === id) return RELIC_SETS[i]; return null; }
+  function setComplete(set) { for (var i = 0; i < set.relics.length; i++) if (!hasRelic(set.id + i)) return false; return true; }
+  function relicCount() { var o = ownedRelics(), n = 0; for (var k in o) if (o[k]) n++; return n; }
+  function totalRelics() { var n = 0; RELIC_SETS.forEach(function (s) { n += s.relics.length; }); return n; }
+  function allRelicIds() { var a = []; RELIC_SETS.forEach(function (s) { s.relics.forEach(function (_, ri) { a.push(s.id + ri); }); }); return a; }
+  function unownedRelicIds() { var o = ownedRelics(); return allRelicIds().filter(function (id) { return !o[id]; }); }
+  function relicInfo(id) { var setId = id.replace(/[0-9]+$/, ''), ri = +id.slice(setId.length), s = setById(setId); return s ? { name: s.relics[ri], set: s.name, setId: setId } : null; }
+  function grantRelicById(id) {
+    if (!window.Retention || hasRelic(id)) return null;
+    var o = ownedRelics(); o[id] = true; Retention.set(GAME, 'relics', o); computeMeta();
+    var info = relicInfo(id); if (info) { var s = setById(info.setId); info.completed = s ? setComplete(s) : false; info.bonus = s ? s.bonus : ''; }
+    return info;
+  }
+  function grantRandomRelic() { var pool = unownedRelicIds(); if (!pool.length) return null; return grantRelicById(pool[Math.floor(Math.random() * pool.length)]); }
+
+  // ---- Phase 9c: Doctrines — a mutually-exclusive branch pick on top of the flat Legacy tree.
+  // Unlocks at ≥3 charters; pick costs ✦, respec swaps the branch for a higher ✦ fee (no refunds).
+  // Each branch has one capstone (max 1); a bought capstone stays owned but only counts while
+  // its branch is the active pick, so respecing back re-activates it. Survives prestige. ----
+  var DOCTRINE_UNLOCK = 3, DOCTRINE_PICK_COST = 25, DOCTRINE_RESPEC_COST = 50;
+  var DOCTRINES = [
+    { id: 'merchant', icon: '⚖️', name: 'Merchant Doctrine', desc: '+35% sales · +10% route capacity',
+      cap: { name: 'Monopoly', desc: '+1 permanent contract slot', cost: 120 } },
+    { id: 'explorer', icon: '🧭', name: 'Explorer Doctrine', desc: '+35% voyage speed · +1 voyage slot',
+      cap: { name: 'Flagship', desc: '+40% voyage rewards', cost: 120 } }
+  ];
+  function doctrineDef(id) { for (var i = 0; i < DOCTRINES.length; i++) if (DOCTRINES[i].id === id) return DOCTRINES[i]; return null; }
+  function doctrineGet() { var d = (window.Retention && Retention.get(GAME, 'doctrine', null)) || {}; return { pick: d.pick || null, caps: d.caps || {} }; }
+  function doctrineSet(d) { if (window.Retention) Retention.set(GAME, 'doctrine', d); }
+  function doctrineUnlocked() { return chartersCount() >= DOCTRINE_UNLOCK; }
+  function doctrinePickCost() { return doctrineGet().pick ? DOCTRINE_RESPEC_COST : DOCTRINE_PICK_COST; }
+  function pickDoctrine(id) {
+    if (!doctrineUnlocked() || !doctrineDef(id)) return false;
+    var d = doctrineGet(); if (d.pick === id) return false;              // already on this path
+    var cost = doctrinePickCost(); if (legacyBal() < cost) return false;
+    setLegacyBal(legacyBal() - cost); d.pick = id; doctrineSet(d);
+    computeMeta(); return true;
+  }
+  function buyCapstone() {
+    var d = doctrineGet(), def = d.pick && doctrineDef(d.pick);
+    if (!def || d.caps[d.pick]) return false;                            // needs a pick; max 1 per branch
+    if (legacyBal() < def.cap.cost) return false;
+    setLegacyBal(legacyBal() - def.cap.cost); d.caps[d.pick] = true; doctrineSet(d);
+    computeMeta(); return true;
+  }
+
+  // ---- Phase 9c: Relic loadout — equip up to 3 owned relics (4th slot at ≥9 relics owned) for a
+  // small INDIVIDUAL bonus per relic by set family, on top of the set-completion passives. ----
+  var LOADOUT_BONUS = {
+    carto: { meta: 'voyageSpeed', amt: 0.06, label: '+6% voyage speed' },
+    smug: { meta: 'sellMul', amt: 0.04, label: '+4% sales' },
+    salt: { meta: 'hazardResist', amt: 0.05, label: '+5% storm resist' },
+    prince: { meta: 'prodMul', amt: 0.06, label: '+6% production' }
+  };
+  var LOADOUT_CAP = 0.25;                                                // each bonus type ≤ +25% from the loadout
+  function loadoutSlots() { return 3 + (relicCount() >= 9 ? 1 : 0); }
+  function loadoutGet() {                                                // sanitised: owned, unique, within slots
+    var raw = (window.Retention && Retention.get(GAME, 'loadout', [])) || [];
+    if (!Array.isArray(raw)) raw = [];
+    var seen = {}, out = [];
+    for (var i = 0; i < raw.length && out.length < loadoutSlots(); i++) { var id = raw[i]; if (typeof id === 'string' && hasRelic(id) && !seen[id]) { seen[id] = 1; out.push(id); } }
+    return out;
+  }
+  function loadoutSet(a) { if (window.Retention) Retention.set(GAME, 'loadout', a); }
+  function equipped(id) { return loadoutGet().indexOf(id) >= 0; }
+  function equipRelic(id) {                                              // tap-to-toggle; false when full/unowned
+    var lo = loadoutGet(), i = lo.indexOf(id);
+    if (i >= 0) lo.splice(i, 1);
+    else { if (!hasRelic(id) || lo.length >= loadoutSlots()) return false; lo.push(id); }
+    loadoutSet(lo); computeMeta(); return true;
+  }
+  function announceRelic(rel) {
+    if (!rel) return;
+    if (rel.completed) { showHint('🏺 ' + rel.name + ' — ' + rel.set + ' COMPLETE! ' + rel.bonus); confettiBurst(); sfx('win'); haptic([10, 40, 20, 40]); if (achUnlock('relset')) popAch('Relic Set Complete!', true); }
+    else { showHint('🏺 Relic found: ' + rel.name + ' · ' + rel.set); sfx('score'); haptic(20); }
+  }
+
   function computeMeta() {
-    var tr = legacyTreeMap(), M = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1 };
+    var tr = legacyTreeMap(), M = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
     LEGACY_TREE.forEach(function (nd) {
       var amt = nd.per * (tr[nd.id] || 0);
       if (nd.meta === 'prodMul') M.prodMul = 1 + amt;
@@ -901,6 +1567,30 @@
       else if (bp.meta === 'routeMul') M.routeMul += bp.amt; else if (bp.meta === 'offlineHours') M.offlineHours += bp.amt;
       else if (bp.meta === 'hazardResist') M.hazardResist += bp.amt;
     });
+    // completed relic sets stack permanent passives on top (Phase 7c)
+    RELIC_SETS.forEach(function (set) {
+      if (!setComplete(set)) return;
+      if (set.meta === 'prodMul') M.prodMul += set.amt;
+      else if (set.meta === 'hazardResist') M.hazardResist += set.amt;
+      else if (set.meta === 'voyageSpeed') M.voyageSpeed += set.amt;
+      else if (set.meta === 'voyageSlots') M.voyageSlots += set.amt;
+    });
+    // Phase 9c: active doctrine branch (+ its capstone, only while that branch is picked)
+    var doc = doctrineGet();
+    if (doc.pick === 'merchant') {
+      M.sellMul += 0.35; M.routeMul += 0.10;
+      if (doc.caps.merchant) M.contractSlots += 1;                       // Monopoly
+    } else if (doc.pick === 'explorer') {
+      M.voyageSpeed += 0.35; M.voyageSlots += 1;
+      if (doc.caps.explorer) M.voyageYield += 0.40;                      // Flagship
+    }
+    // Phase 9c: relic loadout — small per-relic bonuses, capped per bonus type
+    var loAcc = {};
+    loadoutGet().forEach(function (id) {
+      var fam = LOADOUT_BONUS[id.replace(/[0-9]+$/, '')]; if (!fam) return;
+      loAcc[fam.meta] = Math.min(LOADOUT_CAP, (loAcc[fam.meta] || 0) + fam.amt);
+    });
+    for (var lk in loAcc) M[lk] += loAcc[lk];
     if (SIM && SIM.applyMeta) SIM.applyMeta(M);
     return M;
   }
@@ -944,7 +1634,38 @@
     pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
       '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £' + fmt(p.threshold || 250000) + ' lifetime to prestige') + '</button>' +
       '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
-    var tree = legacyPanel.querySelector('#lg-tree'), html = '<div class="lg-sec">Permanent upgrades</div>';
+    var tree = legacyPanel.querySelector('#lg-tree'), html = '';
+    // Harbour Pass — the free seasonal reward track
+    var ss = seasonGet(), maxAt = PASS_TIERS[PASS_TIERS.length - 1].at;
+    html += '<div class="lg-sec">🎟️ Harbour Pass · ' + seasonTheme() + ' · ' + seasonDaysLeft() + 'd left</div>';
+    html += '<div class="lg-passbar"><i style="width:' + Math.min(100, Math.round((ss.points / maxAt) * 100)) + '%"></i></div>';
+    html += '<div class="lg-passpts">' + fmt(ss.points) + ' season points</div>';
+    html += '<div class="lg-pass">';
+    PASS_TIERS.forEach(function (t, ti) {
+      var claimed = ss.claimed.indexOf(ti) >= 0, can = passClaimable(ti);
+      html += '<div class="pass-tier' + (claimed ? ' done' : '') + (can ? ' can' : '') + '"' + (can ? ' data-pass="' + ti + '"' : '') + '><span class="pt-at">' + fmt(t.at) + '</span><span class="pt-l">' + t.label + '</span><span class="pt-s">' + (claimed ? '✓' : can ? 'CLAIM' : '') + '</span></div>';
+    });
+    html += '</div>';
+    // ---- Phase 9c: Doctrine — a choose-a-path branch (unlocks at ≥3 charters) ----
+    if (doctrineUnlocked()) {
+      var doc = doctrineGet(), pcost = doctrinePickCost();
+      html += '<div class="lg-sec">Doctrine — choose your path</div><div class="lg-doct">';
+      DOCTRINES.forEach(function (d) {
+        var on = doc.pick === d.id, canPick = !on && legacyBal() >= pcost;
+        html += '<div class="lg-doc' + (on ? ' on' : '') + '"><span class="ld-i">' + d.icon + '</span><span class="ld-n">' + d.name + '</span><span class="ld-d">' + d.desc + '</span>' +
+          (on ? '<span class="ld-tag">ACTIVE ✓</span>'
+              : '<button class="ld-btn" data-doct="' + d.id + '"' + (canPick ? '' : ' disabled') + '>' + (doc.pick ? 'Respec' : 'Pick') + ' · ✦ ' + pcost + '</button>') +
+          '</div>';
+      });
+      html += '</div>';
+      if (doc.pick) {                                                    // capstone row for the active branch
+        var dd = doctrineDef(doc.pick), owned9c = !!doc.caps[doc.pick], canCap = !owned9c && legacyBal() >= dd.cap.cost;
+        html += '<button class="lg-node lg-cap" data-cap="1"' + ((canCap) ? '' : ' disabled') + '>' +
+          '<span class="ln-n">👑 ' + dd.cap.name + (owned9c ? ' <i>OWNED</i>' : '') + '</span><span class="ln-d">' + dd.cap.desc + ' — ' + dd.name + ' capstone</span>' +
+          '<span class="ln-c">' + (owned9c ? '✓' : '✦ ' + dd.cap.cost) + '</span></button>';
+      }
+    }
+    html += '<div class="lg-sec">Permanent upgrades</div>';
     LEGACY_TREE.forEach(function (nd) {
       var lv = legacyLvl(nd.id), maxed = lv >= nd.max, can = canBuyLegacy(nd);
       html += '<button class="lg-node" data-leg="' + nd.id + '"' + ((can && !maxed) ? '' : ' disabled') + '>' +
@@ -961,6 +1682,20 @@
     var owned = ownedBlueprints().length;
     html += '<div class="lg-sec">Blueprints (' + owned + '/' + BLUEPRINTS.length + ')</div>';
     BLUEPRINTS.forEach(function (bp) { var has = window.Progress && Progress.unlocked(GAME, bp.id); html += '<div class="lg-bp' + (has ? '' : ' locked') + '"><span class="bp-n">' + (has ? '📜 ' + bp.name : '🔒 ???') + '</span><span class="bp-d">' + (has ? bp.desc : 'Find in a Legendary crate') + '</span></div>'; });
+    var lo = loadoutGet(), loMax = loadoutSlots();
+    html += '<div class="lg-sec">Relics (' + relicCount() + '/' + totalRelics() + ') · Loadout ' + lo.length + '/' + loMax + '</div>';
+    if (relicCount() > 0) html += '<div class="lg-lohint">Tap an owned relic to equip it — each equipped relic adds its family bonus' + (relicCount() >= 9 ? '' : ' (own 9 relics for a 4th slot)') + '.</div>';
+    RELIC_SETS.forEach(function (set) {
+      var done = setComplete(set), fam = LOADOUT_BONUS[set.id];
+      html += '<div class="lg-relset' + (done ? ' done' : '') + '"><div class="rs-head"><span class="rs-n">' + set.name + '</span><span class="rs-b">' + set.bonus + (done ? ' ✓' : '') + '</span></div>' +
+        (fam ? '<div class="rs-each">Equip: ' + fam.label + ' each</div>' : '') + '<div class="rs-dots">';
+      set.relics.forEach(function (rn, ri) {
+        var id = set.id + ri, has = hasRelic(id), eq = has && lo.indexOf(id) >= 0;
+        if (has) html += '<button class="rs-dot on chip' + (eq ? ' eq' : '') + '" data-relic="' + id + '">' + (eq ? '◈ ' : '◆ ') + rn + (eq ? ' ✓' : '') + '</button>';
+        else html += '<span class="rs-dot">◇ ???</span>';
+      });
+      html += '</div></div>';
+    });
     var got = 0; ACHIEVEMENTS.forEach(function (a) { if (achOwned(a.id)) got++; });
     html += '<div class="lg-sec">Achievements (' + got + '/' + ACHIEVEMENTS.length + ')</div><div class="lg-achgrid">';
     ACHIEVEMENTS.forEach(function (a) { var has = achOwned(a.id); html += '<div class="lg-ach' + (has ? '' : ' locked') + '">' + (has ? '🏆' : '🔒') + '<span>' + (has ? a.name : '???') + '</span></div>'; });
@@ -968,6 +1703,10 @@
     tree.innerHTML = html;
     pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-pass]').forEach(function (el) { el.addEventListener('click', function () { if (claimPass(+el.getAttribute('data-pass'))) renderLegacy(); }); });
+    tree.querySelectorAll('[data-doct]').forEach(function (el) { el.addEventListener('click', function () { if (pickDoctrine(el.getAttribute('data-doct'))) { sfx('win'); haptic(22); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-cap]').forEach(function (el) { el.addEventListener('click', function () { if (buyCapstone()) { sfx('win'); haptic([10, 30, 20]); confettiBurst(); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
+    tree.querySelectorAll('[data-relic]').forEach(function (el) { el.addEventListener('click', function () { if (equipRelic(el.getAttribute('data-relic'))) { sfx('tap'); haptic(12); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
   }
 
   // ---- Daily cadence: rotating market tide, daily missions, login streak (reuses Progress/Retention) ----
@@ -1010,16 +1749,51 @@
   }
   function showStreak() {                                             // once-per-day login reward
     if (!window.Retention) return;
-    var last = Retention.get(GAME, 'lastDay', null), today = Retention.todayStr();
-    var st = Retention.touchStreak(GAME);
-    if (last !== today && st > 0) {
-      var reward = Math.max(1, Math.min(10, st));
-      setLegacyBal(legacyBal() + reward);
-      showHint('Day ' + st + ' streak! +' + reward + '✦ Legacy · Today: ' + todayTide().name);
-      setTimeout(function () { var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 26, colors: ['#9ef0b0', '#ffe08a', '#d9b8ff'], speed: 200, life: 1.1 }); sfx('score'); }, 400);
-    } else if (last === today) {
-      showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
-    }
+    var today = Retention.todayStr();
+    var st = Retention.touchStreak(GAME);                              // advance / read the login streak
+    if (Retention.get(GAME, 'fortuneDay', null) !== today && st > 0) showFortune(st);   // claim-gated daily draw
+    else showHint('Today: ' + todayTide().name + ' — ' + todayTide().desc);
+  }
+
+  // ---- Daily Fortune (Phase 8a): a free once-per-day draw, escalating with the login streak.
+  // Ethical: free, generous, claim-gated (not lost if you don't open it), feeds the whole economy. ----
+  var fortuneModal = null;
+  function ensureFortuneModal() {
+    if (fortuneModal) return;
+    fortuneModal = document.createElement('div'); fortuneModal.id = 'fortunemodal'; fortuneModal.className = 'evm';
+    fortuneModal.innerHTML = '<div class="ev-card"><div class="ev-ic" id="ft-ic">🧭</div><div class="ev-name" id="ft-name"></div><div class="ev-desc" id="ft-desc"></div><div class="ev-btns" id="ft-btns"></div></div>';
+    wrap.appendChild(fortuneModal);
+  }
+  function rollFortune(streak) {
+    var s = SIM.state(), r = Math.random(), sb = 1 + Math.min(streak, 14) * 0.15;
+    if (r < 0.45) { var cash = Math.round(Math.max(200, (s.lifetimeMoney || 0) * 0.02) * sb); if (SIM.raw()) { SIM.raw().money += cash; SIM.raw().lifetimeMoney = (SIM.raw().lifetimeMoney || 0) + cash; } return { icon: '💰', title: '+£' + fmt(cash), sub: 'Treasury windfall' }; }
+    if (r < 0.72) { var lg = Math.max(2, Math.round(streak * 0.7)); setLegacyBal(legacyBal() + lg); computeMeta(); return { icon: '✦', title: '+' + lg + ' Legacy', sub: 'Fortune favours you' }; }
+    if (r < 0.90) { var n = streak >= 7 ? 2 : 1; grantCrate(n); return { icon: '🎁', title: n + ' crate' + (n > 1 ? 's' : ''), sub: 'Salvage delivered' }; }
+    if (r < 0.97) { seasonAdd(60); return { icon: '🎟️', title: '+60 season points', sub: 'Harbour Pass progress' }; }
+    var rel = grantRandomRelic(); if (rel) return { icon: '🏺', title: rel.name, sub: rel.set + (rel.completed ? ' — set complete!' : ''), rel: rel }; var lg2 = 12; setLegacyBal(legacyBal() + lg2); computeMeta(); return { icon: '✦', title: '+' + lg2 + ' Legacy', sub: 'Rare fortune' };
+  }
+  function showFortune(streak) {
+    ensureFortuneModal();
+    fortuneModal.querySelector('#ft-ic').textContent = '🧭';
+    fortuneModal.querySelector('#ft-name').textContent = 'Daily Fortune';
+    fortuneModal.querySelector('#ft-desc').textContent = '🔥 Day ' + streak + ' streak — draw your daily reward!';
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var draw = document.createElement('button'); draw.className = 'ev-btn primary'; draw.textContent = 'Draw 🎰';
+    draw.addEventListener('click', function () { drawFortune(streak); });
+    bw.appendChild(draw);
+    fortuneModal.classList.add('show'); sfx('score'); haptic(12);
+  }
+  function drawFortune(streak) {
+    if (window.Retention) Retention.set(GAME, 'fortuneDay', Retention.todayStr());
+    var rew = rollFortune(streak);
+    fortuneModal.querySelector('#ft-ic').textContent = rew.icon;
+    fortuneModal.querySelector('#ft-name').textContent = rew.title;
+    fortuneModal.querySelector('#ft-desc').textContent = rew.sub;
+    var bw = fortuneModal.querySelector('#ft-btns'); bw.innerHTML = '';
+    var ok = document.createElement('button'); ok.className = 'ev-btn primary'; ok.textContent = 'Collect';
+    ok.addEventListener('click', function () { fortuneModal.classList.remove('show'); }); bw.appendChild(ok);
+    sfx('win'); haptic(24); confettiBurst(); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#9ef0b0', '#d9b8ff'], speed: 210, life: 1.1, size: 5 });
+    updateHUD();
   }
 
   // ---- Automation (idle comfort, unlocked via the Legacy tree) ----
@@ -1074,7 +1848,7 @@
     } else {                                                           // legendary — a blueprint (or jackpot Legacy)
       tier = 'Legendary'; color = '#ff9a5a'; var pool = unownedBlueprints();
       if (pool.length) { var bp = pool[Math.floor(Math.random() * pool.length)]; if (window.Progress) Progress.unlock(GAME, bp.id); computeMeta(); title = bp.name; sub = bp.desc; }
-      else { var jp = 15 + Math.floor(Math.random() * 25); setLegacyBal(legacyBal() + jp); title = '+' + jp + ' ✦ Legacy'; sub = 'Jackpot!'; }
+      else { var rel = grantRandomRelic(); if (rel) { title = '🏺 ' + rel.name; sub = rel.set + (rel.completed ? ' — set complete!' : ''); } else { var jp = 15 + Math.floor(Math.random() * 25); setLegacyBal(legacyBal() + jp); title = '+' + jp + ' ✦ Legacy'; sub = 'Jackpot!'; } }
     }
     return { tier: tier, color: color, title: title, sub: sub };
   }
@@ -1121,19 +1895,23 @@
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
     hudMoney = chip('e-money', '£'); hudFish = chip('e-fish', 'Fish'); hudPop = chip('e-pop', 'Crew');
-    muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = '♪'; muteBtn.title = 'Sound';
-    muteBtn.addEventListener('click', function () { muted = !muted; if (window.Juice) Juice.Audio.setMuted(muted); muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); });
+    muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.title = 'Sound'; muteBtn.classList.toggle('off', muted);
+    muteBtn.addEventListener('click', function () { applyMuted(!muted); sfx('tap'); });
+    if (window.Juice) Juice.Audio.setMuted(muted);
+    setBtn = document.createElement('button'); setBtn.id = 'setbtn'; setBtn.textContent = '⚙'; setBtn.title = 'Settings';
+    setBtn.addEventListener('click', toggleSettings);
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
     var nBtn = document.createElement('button'); nBtn.id = 'netbtn'; nBtn.textContent = 'Trade network'; nBtn.addEventListener('click', openTrade);
     legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
     crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
+    expBtn = document.createElement('button'); expBtn.id = 'expbtn'; expBtn.textContent = '⛵ Expeditions'; expBtn.addEventListener('click', toggleExp);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    // top row: resource chips + mute only (keeps it short so the era/goal bars stay clear)
-    econHud.appendChild(muteBtn);
+    // top row: resource chips + mute + settings only (keeps it short so the era/goal bars stay clear)
+    econHud.appendChild(muteBtn); econHud.appendChild(setBtn);
     wrap.appendChild(econHud);
     // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
     actionBar = document.createElement('div'); actionBar.id = 'actionbar';
-    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
+    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
     wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -1146,9 +1924,88 @@
     goalBanner.innerHTML = '<span class="gb-tick">◎</span><span class="gb-text"></span><span class="gb-rew"></span>';
     wrap.appendChild(goalBanner);
 
+    raceBanner = document.createElement('div'); raceBanner.id = 'racebar';
+    raceBanner.innerHTML = '<span class="rb-txt"></span><span class="rb-cd"></span>';
+    wrap.appendChild(raceBanner);
+
     managePanel = document.createElement('div'); managePanel.id = 'managepanel';
     wrap.appendChild(managePanel);
+
+    settingsPanel = document.createElement('div'); settingsPanel.id = 'settingspanel';
+    wrap.appendChild(settingsPanel);
+
+    expPanel = document.createElement('div'); expPanel.id = 'exppanel';
+    wrap.appendChild(expPanel);
     updateHUD();
+  }
+
+  var BUILD_TAG = 'v53';
+  function toggleSettings() {
+    settingsOpen = !settingsOpen;
+    if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
+    settingsPanel.classList.toggle('show', settingsOpen);
+    resetArm = false;
+    if (settingsOpen) { renderSettings(); sfx('tap'); haptic(8); }
+  }
+  function renderSettings() {
+    if (!settingsPanel) return;
+    var streak = (window.Retention && Retention.streak) ? Retention.streak(GAME) : 0;
+    var charters = chartersCount(), leg = legacyBal();
+    var h = '<div class="mp-head">Settings<button id="set-close">✕</button></div>';
+    h += '<div class="mp-sec">Audio & feedback</div><div class="mp-grid">';
+    h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
+    h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
+    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
+    h += '</div>';
+    h += '<div class="mp-sec">How to play</div>';
+    h += '<div class="set-help">⚓ Tap the glowing harbour, then <b>Found village</b>.<br>' +
+         '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
+         '📈 Fill the <b>era bar</b> (cash + required buildings) to <b>Advance</b> to bigger eras.<br>' +
+         '🚢 <b>Trade network</b> links your ports into routes for passive income.<br>' +
+         '🌊 Storms damage buildings — repair them in Manage.<br>' +
+         '✦ When growth slows, <b>Legacy</b> lets you prestige for permanent multipliers.<br>' +
+         '🖐️ Drag to pan · pinch to zoom · twist to rotate.</div>';
+    h += '<div class="mp-sec">About</div>';
+    h += '<div class="set-about">PortMaster · build ' + BUILD_TAG +
+         (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
+         (charters > 0 ? ' · ' + charters + ' charter' + (charters > 1 ? 's' : '') : '') +
+         (leg > 0 ? ' · ✦' + fmt(leg) + ' Legacy' : '') + '</div>';
+    h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
+         '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
+    h += '<div class="mp-sec">Danger zone</div>';
+    h += '<button class="mp-item set-reset' + (resetArm ? ' arm' : '') + '" data-set="reset"><span class="mi-n">' +
+         (resetArm ? 'Tap again to wipe everything' : 'Reset all progress') + '</span><span class="mi-c">' + (resetArm ? '⚠' : '↺') + '</span></button>';
+    settingsPanel.innerHTML = h;
+    settingsPanel.querySelector('#set-close').addEventListener('click', toggleSettings);
+    settingsPanel.querySelectorAll('[data-set]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var a = el.getAttribute('data-set');
+        if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
+        else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
+        else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
+        else if (a === 'install') { promptInstall(); }
+        else if (a === 'reset') {
+          if (!resetArm) { resetArm = true; haptic(20); renderSettings(); setTimeout(function () { resetArm = false; if (settingsOpen) renderSettings(); }, 4000); }
+          else { resetProgress(); }
+        }
+      });
+    });
+  }
+  function resetProgress() {
+    try {
+      var rm = [], pre = 'gf:' + GAME + ':';
+      for (var i = 0; i < localStorage.length; i++) { var key = localStorage.key(i); if (key && key.indexOf(pre) === 0) rm.push(key); }
+      rm.forEach(function (key) { localStorage.removeItem(key); });
+    } catch (e) {}
+    try { if (window.Juice) Juice.Audio.play('lose'); } catch (e) {}
+    location.reload();
+  }
+  // PWA install: use the captured beforeinstallprompt event when available.
+  var deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; });
+  function promptInstall() {
+    if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(function () { deferredPrompt = null; }); }
+    else { showHint('Use your browser menu → “Add to Home Screen” to install PortMaster'); }
   }
 
   function updateHUD() {
@@ -1156,7 +2013,7 @@
     var on = simReady();
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
-    if (!on) { if (managePanel) managePanel.classList.remove('show'); return; }
+    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
     var s = SIM.state();
     hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
     if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
@@ -1181,16 +2038,21 @@
     if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
     checkGoals(s);
     handleHazard(s);
+    handleEvent(s);
+    updateRaceBanner();
+    maybeTriggerRival(s);
     checkAchievements(s);
     trackDaily(s);
     if (scene.port && ambient && Math.abs((s.buildings ? s.buildings.length : 0) - (ambient.dev || 0)) >= 3) ambient = null;   // refresh harbour traffic as you grow
     // reveal the Legacy button once prestige is relevant; pulse when a prestige is available
     if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); }
     if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
+    if (expBtn) { var rd = (s.voyages && s.voyages.ready) || 0; expBtn.classList.toggle('hasready', rd > 0); expBtn.setAttribute('data-n', rd); }
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
+    if (expOpen) renderExp();
   }
-  function toggleManage() { manageOpen = !manageOpen; managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
+  function toggleManage() { manageOpen = !manageOpen; if (manageOpen) { if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } } managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
   function renderManage() {
     if (!simReady()) { managePanel.classList.remove('show'); manageOpen = false; return; }
     var s = SIM.state(), BT = SIM.BT, html = '<div class="mp-head">Build & upgrade<button id="mp-close">✕</button></div>';
@@ -1250,6 +2112,22 @@
       });
       html += '</div>';
     }
+    // Phase 9a: composition synergies readout — shows which building combos are firing right now
+    if (s.portFounded && s.synergies && s.synergies.length) {
+      html += '<div class="mp-sec">Synergies</div><div class="mp-grid">';
+      s.synergies.forEach(function (sy) {
+        html += '<div class="mp-item syn' + (sy.active ? ' on' : '') + '"><span class="mi-n">' + sy.name + (sy.active ? ' ✓' : '') + '</span><span class="mi-c">' + sy.effect + '</span></div>';
+      });
+      html += '</div>';
+    }
+    // Phase 9a: port focus / specialisation — a strategic tradeoff, one active per port
+    if (s.portFounded && SIM.FOCUS_DEFS) {
+      html += '<div class="mp-sec">Port focus</div><div class="mp-grid">';
+      SIM.FOCUS_DEFS.forEach(function (f) {
+        html += '<button class="mp-item focus' + (s.focus === f.id ? ' on' : '') + '" data-focus="' + f.id + '"><span class="mi-n">' + f.name + '</span><span class="mi-d">' + f.effect + '</span></button>';
+      });
+      html += '</div>';
+    }
     // managers: permanent multipliers — a real money sink that defines your port's strengths
     if (s.managers) {
       html += '<div class="mp-sec">Managers</div><div class="mp-grid">';
@@ -1278,7 +2156,8 @@
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
-    managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-focus]').forEach(function (el) { el.addEventListener('click', function () { var f = el.getAttribute('data-focus'); if (s.focus === f) { sfx('tap'); return; } if (SIM.setFocus(null, f)) { plopFeedback(2, 'Focus set'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-order]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-order'); var paid = SIM.fulfillContract(id); if (paid > 0) { statFlags.orders++; bumpDaily('order'); seasonAdd(15); var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(paid), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.0, size: 5 }); } shakeFX(5, 0.3); sfx('win'); haptic(30); confettiBurst(); updateHUD(); renderManage(); } else sfx('lose'); }); });
   }
   // build/upgrade "plop": shake + dust burst + ascending pitch + haptic + popup at the port
   function plopFeedback(tier, label) {
@@ -1295,7 +2174,9 @@
     { id: 'p3', name: 'Three Harbours' }, { id: 'p5', name: 'Master of Five Seas' },
     { id: 'r1', name: 'First Trade Route' }, { id: 'nl3', name: 'Network Insured' }, { id: 'nl5', name: 'Network Lv 5' },
     { id: 's1', name: 'First Storm Survived' }, { id: 's10', name: 'Storm-Hardened' },
-    { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' }
+    { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' },
+    { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
+    { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' }
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -1333,6 +2214,7 @@
     for (var bk in SIM.BT) if (SIM.BT[bk].era === toEra) newBuilds.push(SIM.BT[bk].name);
     var unlockTxt = newBuilds.concat(newWorlds).slice(0, 4).join(' · ');
     grantCrate(1);                                                  // every era-up drops a salvage crate
+    seasonAdd(30);                                                  // era-ups award season points
     if (window.Juice) Juice.Audio.unlock();
     startAscension(toEra, name, unlockTxt, bonus);                  // cinematic does buildBiome + bonus at the bloom
   }
@@ -1410,8 +2292,14 @@
   window.__harbor = {
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
+    env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
+    post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail }; },
+    setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
+    geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
+    setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },
+    synergies: function (id) { return SIM ? SIM.synergies(id) : []; },
     foundPort: function (x, z) { if (E) foundHere(x, z); }, autoFound: function () { if (E) autoFound(); }, rate: function (x, z) { return HARBOR_MODELS.rate(x, z); },
     sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },
@@ -1429,7 +2317,29 @@
     buyLegacy: function (id) { return buyLegacy(id); }, fmt: function (n) { return fmt(n); }, fxCount: function () { return FX ? FX.p.list.length : 0; },
     grantCrate: function (n) { grantCrate(n || 1); return crateCount(); }, crates: function () { return crateCount(); }, openCrate: function () { openCrate(); },
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
-    unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); }
+    unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); },
+    startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; },
+    fireEvent: function (id) { var ev = SIM.fireEvent(id); if (ev) { updateHUD(); } return ev; },
+    chooseEvent: function (i) { return onEventChoice(i); },
+    event: function () { return SIM.event(); },
+    voyages: function () { return SIM.voyages(); },
+    startVoyage: function (id) { var r = SIM.startVoyage(id); if (r) { updateHUD(); if (expOpen) renderExp(); } return r; },
+    collectVoyage: function (seq) { return collectVoyageUI(seq); },
+    openExp: function () { if (!expOpen) toggleExp(); },
+    relics: function () { return { count: relicCount(), total: totalRelics(), owned: ownedRelics(), meta: SIM.meta() }; },
+    doctrine: function () { var d = doctrineGet(); return { pick: d.pick, caps: d.caps, unlocked: doctrineUnlocked(), pickCost: doctrinePickCost(), meta: SIM.meta() }; },
+    pickDoctrine: function (id) { var r = pickDoctrine(id); if (r && legacyOpen) renderLegacy(); return r; },
+    buyCapstone: function () { var r = buyCapstone(); if (r && legacyOpen) renderLegacy(); return r; },
+    loadout: function () { return { equipped: loadoutGet(), slots: loadoutSlots(), meta: SIM.meta() }; },
+    equipRelic: function (id) { var r = equipRelic(id); if (r && legacyOpen) renderLegacy(); return r; },
+    grantRelic: function (id) { var r = id ? grantRelicById(id) : grantRandomRelic(); if (r) { announceRelic(r); updateHUD(); } return r; },
+    rival: function () { return rivalGet(); },
+    triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
+    raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
+    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0 }; },
+    startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
+    season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
+    fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); }
   };
 
   if (canvas && canvas.getContext) boot();

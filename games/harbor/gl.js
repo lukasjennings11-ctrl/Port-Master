@@ -71,6 +71,42 @@
     }
     return this;
   };
+  // BEVELLED box (Phase 10b shape language): same as box() but the TOP edges are chamfered —
+  // an inset top face joined to full-height sides by 4 sloped strips whose 45° normals catch the
+  // warm key light against the cool shadow ramp (the Townscaper/Tiny Glade roundness read).
+  // bev is in world units, clamped so tiny/thin boxes never invert. 40 verts vs box's 24.
+  Builder.prototype.bbox = function (cx, cy, cz, sx, sy, sz, c, ry, bev, uvr) {
+    var hx = sx / 2, hy = sy / 2, hz = sz / 2;
+    var b = Math.min(bev == null ? Math.min(sx, sz) * 0.11 : bev, hx * 0.45, hz * 0.45, sy * 0.42);
+    if (b <= 0.1) return this.box(cx, cy, cz, sx, sy, sz, c, ry, 0, uvr);   // masts/posts/trim: chamfer would be invisible — keep the cheap box
+    ry = ry || 0; uvr = uvr || 1;
+    var yr = hy - b, ix = hx - b, iz = hz - b, K = 0.70710678;
+    var faces = [
+      [[-hx, -hy, hz], [hx, -hy, hz], [hx, yr, hz], [-hx, yr, hz], [0, 0, 1]],
+      [[hx, -hy, -hz], [-hx, -hy, -hz], [-hx, yr, -hz], [hx, yr, -hz], [0, 0, -1]],
+      [[hx, -hy, hz], [hx, -hy, -hz], [hx, yr, -hz], [hx, yr, hz], [1, 0, 0]],
+      [[-hx, -hy, -hz], [-hx, -hy, hz], [-hx, yr, hz], [-hx, yr, -hz], [-1, 0, 0]],
+      [[-ix, hy, iz], [ix, hy, iz], [ix, hy, -iz], [-ix, hy, -iz], [0, 1, 0]],
+      [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], [-hx, -hy, hz], [0, -1, 0]],
+      // 4 chamfer strips (trapezoids sharing the sloped corner edges — watertight)
+      [[-hx, yr, hz], [hx, yr, hz], [ix, hy, iz], [-ix, hy, iz], [0, K, K]],
+      [[hx, yr, -hz], [-hx, yr, -hz], [-ix, hy, -iz], [ix, hy, -iz], [0, K, -K]],
+      [[hx, yr, hz], [hx, yr, -hz], [ix, hy, -iz], [ix, hy, iz], [K, K, 0]],
+      [[-hx, yr, -hz], [-hx, yr, hz], [-ix, hy, iz], [-ix, hy, -iz], [-K, K, 0]]
+    ];
+    var cy_ = Math.cos(ry), sy_ = Math.sin(ry), s1 = [1, 1, 1], t = [cx, cy, cz];
+    var uvs = [[0, 0], [uvr, 0], [uvr, uvr], [0, uvr]];
+    for (var f = 0; f < faces.length; f++) {
+      var fc = faces[f], base = this.P.length / 3, p = [0, 0, 0], n = [0, 0, 0];
+      for (var i = 0; i < 4; i++) {
+        xf(p, fc[i][0], fc[i][1], fc[i][2], s1, 1, 0, cy_, sy_, t);
+        xfN(n, fc[4][0], fc[4][1], fc[4][2], 1, 0, cy_, sy_);
+        this._v(p, n, uvs[i], c);
+      }
+      this.I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return this;
+  };
   // vertical cylinder (base at cy, height h)
   Builder.prototype.cyl = function (cx, cy, cz, r, h, seg, c, taper) {
     seg = seg || 12; taper = taper == null ? 1 : taper;
@@ -132,8 +168,8 @@
   var F_MAIN = `#version 300 es
   precision highp float;
   in vec3 vN; in vec3 vW; in vec2 vUV; in vec4 vLP; in vec3 vCol;
-  uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin;
-  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo;
+  uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin, uShadowTint;
+  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo, uShadowK;
   uniform sampler2D uShadow; uniform sampler2D uTex;
   out vec4 frag;
   float shadow(vec4 lp){
@@ -145,6 +181,7 @@
     return s/9.0;
   }
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
+  float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){
     vec3 N=normalize(vN);
     vec3 base = uVCol>0.5 ? vCol : uBase;
@@ -163,7 +200,11 @@
     float specK = (uToon>0.5?0.22:0.5)*(1.0-uRough);
     float spec=pow(max(dot(N,H),0.0), mix(8.0,80.0,1.0-uRough))*specK*sh*ndl;
     vec3 amb=mix(uAmbBot,uAmbTop,N.y*0.5+0.5);
-    vec3 col = base*(amb + uSunCol*diff) + uSunCol*spec + uSunCol*rim;
+    // warm-key / cool-shadow chromatic ramp: as the banded diffuse falls, shift the surface
+    // toward the biome's cool shadow tint (shadow bands cool, sun-lit bands stay warm).
+    float lit = clamp(diff*1.7, 0.0, 1.0);
+    vec3 ramp = mix(uShadowTint, vec3(1.0), mix(1.0, lit, uShadowK));
+    vec3 col = base*ramp*(amb + uSunCol*diff) + uSunCol*spec + uSunCol*rim;
     // soft dark silhouette edge for a hand-drawn / animated-cartoon outline feel
     float edge = uToon>0.5 ? pow(1.0-max(dot(N,V),0.0),3.5) : 0.0;
     col *= 1.0 - edge*0.30;
@@ -173,6 +214,7 @@
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     col*=uExposure;
     float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
+    col += (dth(gl_FragCoord.xy)-0.5)/255.0;   // hash dither kills mobile gradient banding
     frag=vec4(aces(col),1.0);
   }`;
 
@@ -185,10 +227,23 @@
   var V_SKY = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.999,1.0); }`;
   var F_SKY = `#version 300 es
-  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol; uniform vec2 uSun; out vec4 frag;
+  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun; uniform float uNight,uTime,uHorizonY; out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
+    // 3rd stop: a soft authored horizon band anchored to the projected sea horizon (uHorizonY) — a glow, not a stripe
+    float hb=exp(-pow(max(vUv.y-uHorizonY,0.0)*4.2,1.5));
+    c=mix(c,uHorizon,hb*0.60);
     float d=distance(vUv,uSun); c+=uSunCol*smoothstep(0.05,0.0,d)*1.5; c+=uSunCol*smoothstep(0.3,0.02,d)*0.16;
+    if(uNight>0.01){
+      vec2 grid=vec2(140.0,90.0); vec2 cell=floor(vUv*grid); float h=hash(cell);
+      vec2 f=fract(vUv*grid)-0.5+(vec2(hash(cell+1.7),hash(cell+4.2))-0.5)*0.6;
+      float pt=smoothstep(0.15,0.0,length(f));
+      float tw=0.55+0.45*sin(uTime*2.0+h*30.0);
+      float star=step(0.965,h)*pt*tw*smoothstep(0.20,0.62,vUv.y);
+      c+=vec3(0.92,0.95,1.0)*star*uNight*1.25;
+    }
+    c += (hash(gl_FragCoord.xy)-0.5)/255.0;   // dither the big gradient
     frag=vec4(aces(c*1.05),1.0); }`;
 
   var V_WATER = `#version 300 es
@@ -199,19 +254,71 @@
     float dz=cos(p.z*0.23-t*0.9)*0.021+cos((p.x+p.z)*0.4+t*1.7)*0.016;
     vN=normalize(vec3(-dx,1.0,-dz)); vW=p; gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
-  precision highp float; in vec3 vW; in vec3 vN; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uFog; uniform float uFogD,uExposure,uSat;
+  precision highp float; in vec3 vW; in vec3 vN; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uSparkle;
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
+  float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){ vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
     float fres=pow(1.0-max(dot(N,V),0.0),3.0); fres=floor(fres*3.0+0.2)/3.0;   // banded reflection
     float depthMix=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;             // banded shallow/deep
     vec3 water=mix(uDeep,uShallow,clamp(depthMix,0.0,1.0));
-    vec3 col=mix(water,uSky,clamp(fres*0.78,0.0,1.0));
+    // mirror the sky GRADIENT: steep reflected rays see the zenith, grazing rays the horizon
+    vec3 R=reflect(-V,N); vec3 sky=mix(uSky,uSkyTop,pow(clamp(R.y,0.0,1.0),0.6));
+    vec3 col=mix(water,sky,clamp(fres*0.78,0.0,1.0));
     vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),140.0); col+=uSunCol*smoothstep(0.35,0.75,gl)*0.85; // soft toon glint
     float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
+    // animated toon sparkle: hashed world-XZ grid of crisp glints popping in/out with uTime,
+    // denser along the sun lane, brightness authored per ToD via uSparkle (faint moon-glints at night)
+    if(uSparkle>0.003){
+      vec2 gid=floor(vW.xz*0.85); float h1=dth(gid), h2=dth(gid+7.31);
+      vec2 gp=fract(vW.xz*0.85)-0.5+(vec2(h1,h2)-0.5)*0.62;
+      float tw=0.5+0.5*sin(uTime*(1.4+h1*2.6)+h2*40.0);
+      float spot=smoothstep(0.12+h2*0.05,0.03,length(gp));
+      vec2 vd=normalize(vW.xz-uCam.xz+vec2(1e-4,0.0));
+      float lane=0.35+0.65*smoothstep(0.15,0.9,dot(vd,normalize(uSunDir.xz+vec2(1e-4,0.0))));
+      float sp=step(0.70,h1)*spot*smoothstep(0.58,0.95,tw)*lane*exp(-dist*0.006);
+      col+=uSunCol*sp*uSparkle;
+    }
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
+    col += (dth(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(col),1.0); }`;
+
+  // Phase 10c post pass: tilt-shift "miniature diorama" DoF + bloom-lite in ONE kernel.
+  // The scene is rendered into an offscreen RT, then this fullscreen composite runs a single
+  // 12-tap 2-ring poisson blur whose radius grows with vertical distance from a focus band
+  // (crisp port, dreamy top/bottom = miniature look). The SAME taps feed a bloom-lite term:
+  // luma above uBloomThresh accumulates and is added back slightly warm — no ping-pong,
+  // no second target, so night windows / sun glints get a gentle halo for one texture fetch set.
+  var V_POST = `#version 300 es
+  layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.0,1.0); }`;
+  var F_POST = `#version 300 es
+  precision highp float; in vec2 vUv;
+  uniform sampler2D uTex; uniform vec2 uTexel;
+  uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
+  out vec4 frag;
+  void main(){
+    // blur strength: 0 inside the focus band, easing to 1 at the screen edges (quadratic onset keeps the band edge creamy)
+    float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b;
+    vec3 sharp = texture(uTex, vUv).rgb;
+    // 12 taps: centre + 4 inner ring (r=0.45) + 7 outer ring (r=1.0), rotated so no axis lines up
+    vec2 T[12];
+    T[0]=vec2(0.0,0.0);
+    T[1]=vec2( 0.318, 0.318); T[2]=vec2(-0.318, 0.318); T[3]=vec2(-0.318,-0.318); T[4]=vec2( 0.318,-0.318);
+    T[5]=vec2( 1.000, 0.000); T[6]=vec2( 0.623, 0.782); T[7]=vec2(-0.223, 0.975); T[8]=vec2(-0.901, 0.434);
+    T[9]=vec2(-0.901,-0.434); T[10]=vec2(-0.223,-0.975); T[11]=vec2( 0.623,-0.782);
+    vec2 rad = uTexel * (b * 11.0);                  // up to ~11px blur radius at full strength
+    vec3 acc = vec3(0.0); float bloom = 0.0;
+    for (int i = 0; i < 12; i++) {
+      vec3 c = texture(uTex, vUv + T[i] * rad).rgb;
+      acc += c;
+      bloom += max(dot(c, vec3(0.299, 0.587, 0.114)) - uBloomThresh, 0.0);
+    }
+    acc /= 12.0; bloom /= 12.0;
+    vec3 col = mix(sharp, acc, min(b * 1.15, 1.0));  // crisp in the band, dreamy top/bottom
+    col += bloom * uBloomAmt * vec3(1.0, 0.92, 0.78); // bloom-lite, tinted slightly warm
+    frag = vec4(col, 1.0);
+  }`;
 
   // soft contact-shadow blob: a flat ground decal with radial alpha (no shadow map → no "cloud shadows")
   var V_BLOB = `#version 300 es
@@ -233,7 +340,9 @@
       gl.bindVertexArray(null);
       return { vao: vao, count: d.indices.length, itype: (d.indices instanceof Uint32Array) ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
     }
-    function texture(canvas) { var t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas); gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); return t; }
+    var aniso = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic') || gl.getExtension('MOZ_EXT_texture_filter_anisotropic');
+    var anisoMax = aniso ? Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1) : 0;
+    function texture(canvas) { var t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas); gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); if (aniso && anisoMax > 1) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, anisoMax); return t; }
 
     var SH = 2048, shadowTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, shadowTex);
@@ -244,8 +353,38 @@
 
     var quad = mesh({ positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), indices: new Uint16Array([0, 1, 2, 0, 2, 3]) });
     var blobQuad = mesh(plane(2, 1)); // unit XZ plane (-1..1), uvs 0..1 — for ground shadow decals
-    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex,
-      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), quad: quad, blobQuad: blobQuad };
+    // offscreen render target for the Phase 10c post pass: RGBA8 colour + depth renderbuffer.
+    // Returns null on any failure so callers can fall back to direct-to-screen rendering.
+    function createRT(w, h) {
+      try {
+        var tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        var rb = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+        var fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+        var complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindRenderbuffer(gl.RENDERBUFFER, null); gl.bindTexture(gl.TEXTURE_2D, null);
+        if (!complete) { gl.deleteFramebuffer(fb); gl.deleteRenderbuffer(rb); gl.deleteTexture(tex); return null; }
+        var rt = { fb: fb, tex: tex, rb: rb, w: w, h: h };
+        rt.resize = function (nw, nh) {
+          if (nw === rt.w && nh === rt.h) return true;
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, nw, nh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, nw, nh); gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+            rt.w = nw; rt.h = nh; return true;
+          } catch (e) { return false; }
+        };
+        return rt;
+      } catch (e) { return null; }
+    }
+    return { gl: gl, mat4: mat4, mesh: mesh, texture: texture, plane: plane, SH: SH, shadowFB: shadowFB, shadowTex: shadowTex, createRT: createRT,
+      P_main: prog(V_MAIN, F_MAIN), P_depth: prog(V_DEPTH, F_DEPTH), P_sky: prog(V_SKY, F_SKY), P_water: prog(V_WATER, F_WATER), P_blob: prog(V_BLOB, F_BLOB), P_post: prog(V_POST, F_POST), quad: quad, blobQuad: blobQuad };
   }
 
   global.HGL = { mat4: mat4, Builder: Builder, geom: { plane: plane }, createEngine: createEngine };

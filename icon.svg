@@ -1,21 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Background -->
-  <rect width="512" height="512" rx="96" fill="#080d1e"/>
-  <!-- Radial glow -->
-  <radialGradient id="g" cx="50%" cy="38%" r="55%">
-    <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.35"/>
-    <stop offset="100%" stop-color="#080d1e" stop-opacity="0"/>
-  </radialGradient>
-  <rect width="512" height="512" rx="96" fill="url(#g)"/>
-  <!-- Prism triangle -->
-  <polygon points="256,108 392,332 120,332" fill="none" stroke="#5b8cff" stroke-width="18" stroke-linejoin="round"/>
-  <!-- Refracted light rays -->
-  <line x1="120" y1="332" x2="64"  y2="388" stroke="#ff6b9d" stroke-width="12" stroke-linecap="round"/>
-  <line x1="120" y1="332" x2="88"  y2="410" stroke="#ffb347" stroke-width="10" stroke-linecap="round"/>
-  <line x1="120" y1="332" x2="116" y2="420" stroke="#7af0d0" stroke-width="8"  stroke-linecap="round"/>
-  <line x1="120" y1="332" x2="148" y2="416" stroke="#5b8cff" stroke-width="10" stroke-linecap="round"/>
-  <!-- Inner glow dot at apex -->
-  <circle cx="256" cy="108" r="8" fill="#5b8cff" opacity="0.9"/>
-  <!-- P P letters (subtle) -->
-  <text x="256" y="290" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="900" font-size="72" letter-spacing="8" fill="#eef2ff" opacity="0.88">PP</text>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d6f8c"/>
+      <stop offset="0.55" stop-color="#114b63"/>
+      <stop offset="1" stop-color="#0a3346"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#3fb0c9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3fb0c9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#sea)"/>
+  <circle cx="256" cy="212" r="180" fill="url(#glow)"/>
+  <g stroke="#7fe0d6" stroke-width="11" stroke-linecap="round" fill="none" opacity="0.85">
+    <path d="M104 432 q40 -26 80 0 t80 0 t80 0 t64 0"/>
+  </g>
+  <g stroke="#bfeee8" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.6">
+    <path d="M128 462 q36 -22 72 0 t72 0 t72 0"/>
+  </g>
+  <g fill="none" stroke="#f6e7bd" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="256" cy="104" r="30" stroke-width="24"/>
+    <line x1="256" y1="128" x2="256" y2="392"/>
+    <line x1="182" y1="180" x2="330" y2="180" stroke-width="26"/>
+    <path d="M140 312 Q140 396 256 396 Q372 396 372 312"/>
+  </g>
+  <g fill="#f6e7bd">
+    <polygon points="140,300 108,320 150,344"/>
+    <polygon points="372,300 404,320 362,344"/>
+  </g>
+  <circle cx="256" cy="104" r="9" fill="#0a3346"/>
 </svg>
