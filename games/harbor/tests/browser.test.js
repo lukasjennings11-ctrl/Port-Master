@@ -578,6 +578,86 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     afterReload.sessions === beforeReload.sessions + 1 &&
     typeof afterReload.firstBuild === 'number' && afterReload.firstBuild === beforeReload.firstBuild);
 
+  // Phase 15b: pace toggle + avert hazards.
+  // Pace: Relaxed is the default for everyone (sim gap rolls ×1.6, 256s day), Lively restores the
+  // pre-15b feel; the choice lives in Retention ('pace') and must survive a reload. Avert: during a
+  // hazard's warn phase the storm banner grows an "Avert £X" (storm) / "Stabilise £X" (crash)
+  // button — ghosted "Need £X" when unaffordable — that charges once, cancels the pending strike
+  // and latches the Storm Whisperer achievement. All driven via __harbor.forceWarn (no sleeps
+  // racing the 6s telegraph: the sim is paused so only our explicit calls move state).
+  const errsBefore15b = errs.length;
+  await page.evaluate(() => { if (!document.querySelector('#settingspanel.show')) document.getElementById('setbtn').click(); });
+  await sleep(120);
+  const pace0 = await page.evaluate(() => ({
+    hook: window.__harbor.pace(),
+    relaxedOn: !!document.querySelector('[data-set="pace-relaxed"].on'),
+    livelyOff: !!document.querySelector('[data-set="pace-lively"]') && !document.querySelector('[data-set="pace-lively"].on'),
+    help: Array.from(document.querySelectorAll('#settingspanel .set-help')).some(e => /spreads out storms and events/i.test(e.textContent))
+  }));
+  ok('pace: settings renders Relaxed/Lively with Relaxed ON by default (sim 1.6×, 256s day) + explainer',
+    pace0.relaxedOn && pace0.livelyOff && pace0.hook.mode === 'relaxed' && pace0.hook.mul === 1.6 && pace0.hook.day === 256 && pace0.help);
+
+  await page.evaluate(() => document.querySelector('[data-set="pace-lively"]').click());
+  await sleep(80);
+  const pace1 = await page.evaluate(() => ({ hook: window.__harbor.pace(), saved: window.Retention.get('harbor', 'pace', null), livelyOn: !!document.querySelector('[data-set="pace-lively"].on') }));
+  ok('pace: Lively selected → sim pace 1×, 160s day, persisted to Retention', pace1.hook.mul === 1 && pace1.hook.day === 160 && pace1.saved === 'lively' && pace1.livelyOn);
+
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  const pace2 = await page.evaluate(() => window.__harbor.pace());
+  ok('pace: Lively survives reload (applied on boot before the first tick)', pace2.mode === 'lively' && pace2.mul === 1 && pace2.day === 160);
+  await page.evaluate(() => window.__harbor.setPace('relaxed'));   // back to the shipping default
+
+  // avert: pause the sim so the 6s telegraph can't tick down under the assertions
+  await page.evaluate(() => window.__harbor.pause(true));
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.forceWarn('green', false); });
+  await sleep(80);
+  const av0 = await page.evaluate(() => {
+    var el = document.getElementById('stormalert'), b = el && el.querySelector('.sa-avert');
+    return { shown: el && el.classList.contains('show'), btn: !!(b && b.style.display !== 'none'), label: b ? b.textContent : '', ghosted: !!(b && b.classList.contains('ghosted')) };
+  });
+  ok('avert: storm warn banner shows an affordable "Avert £X" button', av0.shown && av0.btn && /^Avert £/.test(av0.label) && !av0.ghosted);
+
+  // unaffordable → ghosted "Need £X"; the disabled click must not charge or clear the warn
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1; window.__harbor.forceHUD(); });
+  await sleep(80);
+  const av1 = await page.evaluate(() => {
+    var b = document.querySelector('#stormalert .sa-avert');
+    b.click();
+    return { label: b.textContent, ghosted: b.classList.contains('ghosted'), disabled: b.disabled, phase: window.HARBOR_SIM.raw().hazard.phase, money: window.HARBOR_SIM.raw().money };
+  });
+  ok('avert: unaffordable → ghosted "Need £X", click is inert (no charge, warn still pending)',
+    /^Need £/.test(av1.label) && av1.ghosted && av1.disabled && av1.phase === 'warn' && av1.money === 1);
+
+  // affordable click: charges exactly avertCost, cancels the strike, dismisses the banner,
+  // bumps stats.averted and latches the Storm Whisperer achievement
+  const av2 = await page.evaluate(() => {
+    var S = window.HARBOR_SIM, cost = S.avertCost();
+    S.raw().money = cost + 500; window.__harbor.forceHUD();
+    document.querySelector('#stormalert .sa-avert').click();
+    return { phase: S.raw().hazard.phase, money: S.raw().money, averted: S.raw().stats.averted,
+             shown: document.getElementById('stormalert').classList.contains('show'),
+             ach: (window.Retention.get('harbor', 'ach', {}) || {}).avert1 === 1 };
+  });
+  ok('avert: click charges avertCost, clears the pending strike, dismisses the banner, bumps stats.averted, latches Storm Whisperer',
+    av2.phase === 'idle' && av2.money === 500 && av2.averted >= 1 && av2.shown === false && av2.ach === true);
+
+  // market-crash warn: same flow, "Stabilise £X" wording on the crash-styled banner
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.forceWarn('green', true); });
+  await sleep(80);
+  const av3 = await page.evaluate(() => {
+    var el = document.getElementById('stormalert'), b = el.querySelector('.sa-avert');
+    var out = { shown: el.classList.contains('show'), crash: el.classList.contains('crash'), label: b.textContent };
+    b.click();
+    out.phase = window.HARBOR_SIM.raw().hazard.phase; out.crashActive = window.HARBOR_SIM.raw().crash;
+    return out;
+  });
+  ok('avert: crash warn shows "Stabilise £X" on the crash-styled banner, and averting keeps the crash from ever activating',
+    av3.shown && av3.crash && /^Stabilise £/.test(av3.label) && av3.phase === 'idle' && av3.crashActive === null);
+  ok('15b: pace + avert flows produced zero new console/page errors', errs.length === errsBefore15b);
+  await page.evaluate(() => window.__harbor.pause(false));
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

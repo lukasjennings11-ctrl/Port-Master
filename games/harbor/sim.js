@@ -17,6 +17,15 @@
   var _rng = Math.random;
   function setRng(fn) { _rng = (typeof fn === 'function') ? fn : Math.random; }
 
+  // Phase 15b: PACE — a player-facing multiplier on how often storms/events roll around. Lives on
+  // the module (NOT the save blob — it's a device preference, same as sound/haptics) so it never
+  // needs a save-format migration and applies identically whether you're mid-game or freshly booted.
+  // Scales ONLY the gap rolls between hazards/events (hzRand/evRand) — production, sales, voyage
+  // timers and every other economy rate are untouched, so Relaxed truly just spaces out the scary
+  // stuff rather than slowing the whole game down (that's what playtesters actually asked for).
+  var PACE = 1;
+  function setPace(m) { PACE = (typeof m === 'number' && m > 0) ? m : 1; }
+
   // ---- era ladder (empire rank) ----
   var ERAS = ['Fishing Village', 'Trading Post', 'Industrial Port', 'Metropolis', 'Megaport', 'Global Hub'];
 
@@ -156,7 +165,7 @@
       hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null,
       evt: { t: 0, next: evRand(60, 130), active: null, lastId: '', seq: 0 },
       voyages: [], voyageSeq: 0,
-      stats: { storms: 0, shipped: 0 }
+      stats: { storms: 0, shipped: 0, averted: 0 }
     };
   }
   function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
@@ -199,6 +208,7 @@
     if (typeof S.crash === 'undefined') S.crash = null;
     if (!S.stats) S.stats = { storms: 0 };
     if (typeof S.stats.shipped !== 'number') S.stats.shipped = 0;
+    if (typeof S.stats.averted !== 'number') S.stats.averted = 0;   // Phase 15b: additive backfill — old saves load fine
     setActive(S.active);
   }
 
@@ -317,7 +327,7 @@
   // ---- hazards: storms damage a port's buildings + sink route cargo; market crashes floor a price.
   // Meaningful but never wipes money/era — you pay to repair and invest in defenses to weather them.
   var HAZARD = { green: 'Squall', mountain: 'Rockslide', desert: 'Sandstorm', tropical: 'Hurricane', nordic: 'Ice Storm' };
-  function hzRand(a, b) { return a + _rng() * (b - a); }
+  function hzRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between hazards, not their telegraph/strike
   function bhp(b) { return b.hp == null ? 100 : b.hp; }
   function portDef(p) { var w = 0, l = 0, B = p.buildings; for (var i = 0; i < B.length; i++) { if (B[i].type === 'seawall') w += B[i].level; else if (B[i].type === 'lighthouse') l += B[i].level; } return { wall: w, light: l }; }
   function strike(portId) {
@@ -363,6 +373,46 @@
   }
   function crashMul(res) { return (S.crash && S.crash.res === res) ? 0.45 : 1; }
 
+  // ---- avert (Phase 15b): pay to cancel a telegraphed hazard/crash outright, during its warn
+  // phase only — the "stop it before it happens" ask from playtesters, sitting alongside (not
+  // replacing) the existing repair/rebuild comeback path. Cost is a flat, era-scaled sum (not
+  // tied to what would actually get hit) so it's a predictable insurance premium, not a gamble.
+  // Tuning: 60×2^era. At era0 a single storm-hit building (e.g. a Jetty, cost 60) repairs for
+  // ~£12-30 depending on how hard it got hit, and a strike can clip 1-2 buildings — so 60 sits at
+  // roughly 1.5-2x a typical FULL repair bill for that era, comfortably below "just repair whatever
+  // breaks" while still being a real spend. Doubling per era tracks how repair bills grow with
+  // building cost/level without chasing the much steeper (5-7x) era-to-era jump in ERA_REQ money
+  // gates, so averting stays a live option (not priced out) as the empire grows.
+  function avertCost() { return Math.round(60 * Math.pow(2, S.era || 0)); }
+  function avertHazard() {
+    if (!S || !S.hazard || S.hazard.phase !== 'warn' || S.hazard.crash) return false;   // storm-only; crash uses avertCrash
+    var cost = avertCost(); if (S.money < cost) return false;
+    S.money -= cost;
+    S.hazard.phase = 'idle'; S.hazard.t = 0; S.hazard.next = hzRand(110, 230); S.hazard.port = null; S.hazard.kind = null;
+    S.stats.averted = (S.stats.averted || 0) + 1;
+    save(); return true;
+  }
+  function avertCrash() {
+    if (!S || !S.hazard || S.hazard.phase !== 'warn' || !S.hazard.crash) return false;   // crash-only; storm uses avertHazard
+    var cost = avertCost(); if (S.money < cost) return false;
+    S.money -= cost;
+    S.hazard.phase = 'idle'; S.hazard.t = 0; S.hazard.next = hzRand(110, 230); S.hazard.port = null; S.hazard.kind = null;
+    S.stats.averted = (S.stats.averted || 0) + 1;
+    save(); return true;
+  }
+  // test/debug: force the hazard scheduler straight into its warn (telegraph) phase, skipping the
+  // random wait — lets tests (and any future "storm's coming" UI hook) reach the avert-able window
+  // deterministically instead of racing hzRand(). Mirrors the existing strikePort() debug hook.
+  function forceWarn(portId, crash) {
+    if (!S || !S.ports) return null;
+    var founded = Object.keys(S.ports); if (!founded.length) return null;
+    portId = (portId && S.ports[portId]) ? portId : founded[0];
+    S.hazard.port = portId; S.hazard.crash = !!crash;
+    S.hazard.kind = crash ? 'Market Crash' : (HAZARD[portId] || 'Storm');
+    S.hazard.phase = 'warn'; S.hazard.warn = 6; S.hazard.t = 0;
+    save(); return snapshot(S.active).hazard;
+  }
+
   // ---- dynamic events: a second scheduler (alongside hazards) that fires varied surprises and
   // player-choice decisions. Never wipes money/era; ignoring a choice resolves to a safe default. ----
   var EV_DEFS = [
@@ -374,7 +424,7 @@
     { id: 'commission', kind: 'choice', name: 'Royal Commission', minEra: 1, w: 2 },
     { id: 'smuggler', kind: 'choice', name: 'Smuggler’s Offer', minEra: 1, w: 2 }
   ];
-  function evRand(a, b) { return a + _rng() * (b - a); }
+  function evRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between events, not their resolve timer
   function evDef(id) { for (var i = 0; i < EV_DEFS.length; i++) if (EV_DEFS[i].id === id) return EV_DEFS[i]; return null; }
   function evPick() {
     var elig = EV_DEFS.filter(function (e) { return S.era >= e.minEra; });
@@ -634,11 +684,11 @@
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
       network: networkView(),
-      hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null } : { phase: 'idle', strikeId: 0, last: null },
+      hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null, avertCost: avertCost() } : { phase: 'idle', strikeId: 0, last: null, avertCost: avertCost() },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
       event: (S.evt && S.evt.active) ? { id: S.evt.active.id, name: S.evt.active.name, kind: S.evt.active.kind, seq: S.evt.active.seq, ttl: Math.max(0, Math.ceil(S.evt.active.ttl)), data: S.evt.active.data } : null,
       voyages: voyageState(),
-      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), ports: Object.keys(S.ports).length },
+      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, ports: Object.keys(S.ports).length },
       ports: portList()
     };
     if (port) {
@@ -668,12 +718,15 @@
     applyMeta: applyMeta, meta: function () { return META; }, setTide: setTide, setBoost: setBoost, boostT: function () { return BOOST.t; },
     boostMul: function () { return boostMul(); },   // Phase 12a: current effective boost multiplier (1 when inactive) — lets callers combine/stack sensibly
     __setRng: setRng,                                               // test-only: seed all gameplay RNG for deterministic tests
+    setPace: setPace, pace: function () { return PACE; },           // Phase 15b: gap-roll multiplier (device pref, not saved)
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },
     strikePort: function (id) { if (S) { strike(id || S.active); save(); } },   // debug/test: force a storm strike now
+    avertCost: function () { return S ? avertCost() : 0; }, avertHazard: avertHazard, avertCrash: avertCrash,
+    forceWarn: forceWarn,                                           // debug/test: jump straight to the warn (avert-able) phase
     fireEvent: fireEvent, resolveEvent: resolveEvent, event: function () { return S && S.evt ? S.evt.active : null; },
     startVoyage: startVoyage, collectVoyage: collectVoyage, canStartVoyage: canStartVoyage, voyages: voyageState,
     newGame: function () { S = fresh(); setActive('green'); save(); return snapshot(); },

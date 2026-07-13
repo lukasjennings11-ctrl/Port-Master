@@ -156,17 +156,30 @@ html, body {
 /* storm warning banner (telegraphs an incoming hazard) */
 #stormalert {
   position: absolute; left: 50%; top: calc(150px + env(safe-area-inset-top)); transform: translateX(-50%);
-  display: none; align-items: center; gap: 8px; z-index: 8; padding: 7px 14px; border-radius: 999px;
-  background: rgba(40,12,8,.82); border: 1px solid rgba(255,120,80,.6); backdrop-filter: blur(4px);
-  font-family: 'Fredoka', sans-serif; box-shadow: 0 4px 18px rgba(0,0,0,.4); animation: saPulse 1s ease-in-out infinite;
+  display: none; flex-direction: column; align-items: center; gap: 5px; z-index: 8; padding: 7px 14px;
+  border-radius: 16px; max-width: min(90vw, 380px); background: rgba(40,12,8,.82); border: 1px solid rgba(255,120,80,.6);
+  backdrop-filter: blur(4px); font-family: 'Fredoka', sans-serif; box-shadow: 0 4px 18px rgba(0,0,0,.4);
+  animation: saPulse 1s ease-in-out infinite;
 }
 #stormalert.show { display: flex; }
 #stormalert.crash { background: rgba(40,30,8,.82); border-color: rgba(255,200,80,.6); }
+#stormalert .sa-row { display: flex; align-items: center; gap: 8px; }
 #stormalert .sa-ic { font-size: 14px; }
-#stormalert .sa-txt { font-size: 11.5px; font-weight: 700; color: #ffd9cf; }
+#stormalert .sa-txt { font-size: 11.5px; font-weight: 700; color: #ffd9cf; text-align: center; }
 #stormalert .sa-cd { font-size: 11px; font-weight: 800; color: #ff9a7a; }
 #stormalert.crash .sa-cd { color: #ffce6a; }
 @keyframes saPulse { 0%,100% { box-shadow: 0 4px 18px rgba(0,0,0,.4); } 50% { box-shadow: 0 0 16px 2px rgba(255,120,80,.5); } }
+/* Phase 15b: avert — a pill button under the telegraph text; ghosted (15a pattern) when unaffordable */
+#stormalert .sa-avert {
+  padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.4); background: rgba(255,255,255,.16);
+  color: #fff; font-family: 'Fredoka', sans-serif; font-size: 10.5px; font-weight: 800; cursor: pointer;
+}
+#stormalert .sa-avert:active { transform: scale(.94); }
+#stormalert.crash .sa-avert { border-color: rgba(255,206,106,.6); }
+#stormalert .sa-avert.ghosted {
+  background: rgba(255,255,255,.04) !important; border: 1.5px dashed rgba(255,255,255,.28) !important;
+  color: rgba(255,255,255,.55) !important; cursor: default;
+}
 /* repair items + damage badge in the manage panel */
 .mp-item.repair { grid-column: 1 / -1; flex-direction: row; align-items: center; background: rgba(220,120,80,.12); border-color: rgba(220,120,80,.4); }
 .mp-item.repair .mi-n { flex: 1; }
