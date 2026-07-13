@@ -45,7 +45,14 @@
   // "distant" massif skyline sits at only ~60–100 VIEW units in the default framing (camera
   // orbits at ~110), inside the playable port's own depth range — so terrain cleanliness comes
   // from F_POST's Laplacian slope-rejection + distance-scaled threshold, not from these fades.
-  var OUTLINE_DEPTH_T = 0.03, OUTLINE_NORM_T = 0.70, OUTLINE_FADE = 0.003, OUTLINE_MAXDIST = 300;
+  // Phase 16b: thresholds trimmed and a tap-radius WIDTH multiplier added — bolder, more
+  // confident ink at gameplay zoom for the "vibrant storybook" pass (still gated by the same
+  // Laplacian slope-rejection + sky mask in F_POST, so terrain/sky cleanliness is unaffected).
+  var OUTLINE_DEPTH_T = 0.024, OUTLINE_NORM_T = 0.62, OUTLINE_FADE = 0.003, OUTLINE_MAXDIST = 300, OUTLINE_WIDTH = 1.6;
+  // Phase 16b: two-tone postcard water — F_WATER (gl.js) quantizes the vLandH shore-distance
+  // signal into this many toon bands (rich deep teal far offshore -> bright turquoise shallows
+  // right at the coast). Documented here for __harbor.water()'s test/debug hook below.
+  var WATER_SHORE_BANDS = 4;
   // camera projection constants shared by the main perspective matrix AND the post pass's
   // depth-linearisation math (single source of truth so the outline reconstruction can never drift)
   var CAM_FOVY = 0.82, CAM_NEAR = 0.5, CAM_FAR = 1600;
@@ -247,14 +254,22 @@
   // from the biome palette so every world keeps its identity across the whole cycle.
   function m3(c, m) { return [c[0] * m[0], c[1] * m[1], c[2] * m[2]]; }
   function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  // Phase 16b: VIBRANT STORYBOOK mood pass — dusk pushed warmer (deeper orange-pink, not just
+  // gold-rose), night pushed inkier (darker + more saturated blue-violet for a stronger
+  // light/dark contrast against the window-glow + starfield), noon left crisp/bright (the
+  // biome's own punched-up palette from biomes.js already carries the "vivid" read at noon —
+  // ambient here is nudged for a touch more contrast/confidence, not repainted).
   function todKeys() {
     var b = biome;
-    var night = { // cool blue-violet, moonlit; stars + window glow carry the magic
-      top: m3(b.skyTop, [0.10, 0.14, 0.34]), bot: m3(b.skyBot, [0.09, 0.13, 0.30]),
+    var night = { // inkier blue-violet, moonlit; stars + window glow carry the magic — pushed
+      // notably darker than 14a (the ACES filmic curve lifts shadows more than raw values
+      // suggest, so getting a truly "ink" night needs a bigger cut at the source) for real
+      // light/dark contrast against the window-glow + starfield.
+      top: m3(b.skyTop, [0.045, 0.06, 0.16]), bot: m3(b.skyBot, [0.025, 0.035, 0.10]),
       sun: [0.16, 0.22, 0.38],
-      ambTop: [0.16, 0.21, 0.38], ambBot: [0.09, 0.11, 0.22],
-      fog: m3(b.fog, [0.09, 0.12, 0.26]), fogD: 0.0011, shadowK: 0.40, water: [0.11, 0.15, 0.42],
-      horizon: [0.05, 0.07, 0.16], sparkle: 0.16                 // near-black blue rim; faint moon-glints
+      ambTop: [0.09, 0.12, 0.30], ambBot: [0.035, 0.045, 0.13],
+      fog: m3(b.fog, [0.05, 0.06, 0.16]), fogD: 0.0011, shadowK: 0.40, water: [0.08, 0.10, 0.34],
+      horizon: [0.02, 0.03, 0.10], sparkle: 0.16                 // near-black blue rim; faint moon-glints
     };
     var dawn = { // golden-pink sunrise: violet zenith, peach horizon, long warm light
       top: lerp3(m3(b.skyTop, [0.52, 0.48, 0.80]), [0.46, 0.36, 0.66], 0.35),
@@ -264,19 +279,19 @@
       fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68],
       horizon: [1.28, 0.74, 0.50], sparkle: 0.62                 // warm peach sunrise glow
     };
-    var day = { // bright, clean, cheerful — the biome palette as painted
+    var day = { // bright, clean, cheerful — the biome palette as painted, crisp noon confidence
       top: b.skyTop.slice(), bot: b.skyBot.slice(), sun: b.sun.slice(),
-      ambTop: [0.50, 0.56, 0.70], ambBot: [0.27, 0.245, 0.225],
+      ambTop: [0.54, 0.60, 0.76], ambBot: [0.25, 0.225, 0.20],
       fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1],
       horizon: lerp3(b.skyBot, [1.0, 0.99, 0.94], 0.55), sparkle: 0.55   // soft bright haze
     };
-    var dusk = { // molten gold-rose sunset, a touch redder than dawn
-      top: lerp3(m3(b.skyTop, [0.46, 0.40, 0.74]), [0.42, 0.30, 0.60], 0.4),
-      bot: lerp3(m3(b.skyBot, [1.05, 0.66, 0.52]), [1.15, 0.55, 0.36], 0.55),
-      sun: [1.48, 0.86, 0.44],
-      ambTop: [0.42, 0.33, 0.50], ambBot: [0.33, 0.21, 0.25],
-      fog: lerp3(m3(b.fog, [1.02, 0.66, 0.54]), [1.05, 0.55, 0.42], 0.45), fogD: 0.0009, shadowK: 0.78, water: [0.76, 0.60, 0.64],
-      horizon: [1.42, 0.68, 0.38], sparkle: 0.70                 // molten peach-gold band low over the sea
+    var dusk = { // deep orange-pink molten sunset — warmer + more saturated than dawn, long warm light
+      top: lerp3(m3(b.skyTop, [0.46, 0.34, 0.72]), [0.44, 0.22, 0.52], 0.46),
+      bot: lerp3(m3(b.skyBot, [1.10, 0.58, 0.42]), [1.22, 0.42, 0.26], 0.62),
+      sun: [1.55, 0.78, 0.36],
+      ambTop: [0.46, 0.30, 0.46], ambBot: [0.36, 0.19, 0.22],
+      fog: lerp3(m3(b.fog, [1.06, 0.58, 0.44]), [1.12, 0.44, 0.30], 0.52), fogD: 0.0009, shadowK: 0.80, water: [0.80, 0.54, 0.56],
+      horizon: [1.55, 0.58, 0.28], sparkle: 0.72                 // molten peach-gold band low over the sea
     };
     // sun crosses the horizon at tod≈0.23 / 0.77 (see sunDir) — keys straddle those moments
     return [[0.00, night], [0.185, night], [0.25, dawn], [0.34, day], [0.66, day], [0.755, dusk], [0.84, night], [1.00, night]];
@@ -667,8 +682,10 @@
     // Phase 14a palette pop: punchier, more confident colour at noon; slightly desaturated +
     // deeper-crushed mid-shadows after dark for mood (never blown highlights, never grey shadows —
     // uCrush's m*(1-m) factor in F_MAIN protects both ends of the range).
-    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.30 + 0.14 * en.day - 0.10 * en.night);
-    gl.uniform1f(M.u.uCrush, 0.07 + 0.10 * en.night);
+    // Phase 16b: crisper noon (uSat day term bumped) + inkier night (uCrush night term bumped)
+    // for the storybook light/dark mood swing.
+    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.32 + 0.16 * en.day - 0.10 * en.night);
+    gl.uniform1f(M.u.uCrush, 0.06 + 0.15 * en.night);
     // Phase 14a: revived PCF soft shadows — same directional light, recentred ortho frustum from
     // renderShadowMap() above, gated behind the same quality flag as the post pass. Strength
     // fades with sun height (see shadow() in gl.js): full at noon, gone by dusk — grazing light
@@ -747,6 +764,7 @@
       gl.uniform1f(PP.u.uOutlineOn, quality ? 1 : 0);
       gl.uniform1f(PP.u.uOutlineDepthT, OUTLINE_DEPTH_T); gl.uniform1f(PP.u.uOutlineNormT, OUTLINE_NORM_T);
       gl.uniform1f(PP.u.uOutlineFade, OUTLINE_FADE); gl.uniform1f(PP.u.uOutlineMaxDist, OUTLINE_MAXDIST);
+      gl.uniform1f(PP.u.uOutlineWidth, OUTLINE_WIDTH);
       gl.uniform3fv(PP.u.uOutlineTint, outlineTint(en));
       drawMesh(PP, E.quad);
       // CRITICAL (doubled for Phase 14a): unbind BOTH rt.tex (unit 0) and rt.depthTex (unit 1) —
@@ -3410,6 +3428,11 @@
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
     post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail, outlines: postEnabled(), shadow: postEnabled() }; },   // Phase 14a: outlines + soft shadows ride the same quality gate — see render()
+    // Phase 16b: vibrant-storybook debug hook — the live ToD-lit deep/shallow water colours + the
+    // shore-band count F_WATER's gradient quantizes into, and the tuned outline width/threshold
+    // (see OUTLINE_* above / F_POST in gl.js) so tests can assert the new look is actually wired.
+    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true }; },
+    outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH }; },
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
     shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)

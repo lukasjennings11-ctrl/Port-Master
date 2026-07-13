@@ -273,8 +273,19 @@
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   void main(){ vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
     float fres=pow(1.0-max(dot(N,V),0.0),3.0); fres=floor(fres*3.0+0.2)/3.0;   // banded reflection
-    float depthMix=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;             // banded shallow/deep
-    vec3 water=mix(uDeep,uShallow,clamp(depthMix,0.0,1.0));
+    // Phase 16b: POSTCARD two-tone depth gradient — vLandH (the terrain heightfield baked per-
+    // vertex at mesh-build time, Phase 14a) IS the shore-distance/depth signal: near 0 right at
+    // the coastline, increasingly negative in open water. Reuse it here (not just for the narrow
+    // foam fringe below) so the whole sea reads as rich teal far/deep fading UP into bright
+    // turquoise shallows near shore — quantized into 4 toon bands (matches F_MAIN's n=4 diffuse
+    // banding) for the storybook contour-map look rather than a smooth photo gradient. A touch of
+    // the old wave-normal banding is kept blended in so wave crests still catch a little extra
+    // shimmer variation on top of the shore gradient.
+    float shoreT=smoothstep(-9.0,-0.35,vLandH);
+    float shoreDepthBand=floor(shoreT*4.0+0.001)/4.0;
+    float waveBand=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;
+    float depthMix=clamp(shoreDepthBand*0.82+waveBand*0.18,0.0,1.0);
+    vec3 water=mix(uDeep,uShallow,depthMix);
     // mirror the sky GRADIENT: steep reflected rays see the zenith, grazing rays the horizon
     vec3 R=reflect(-V,N); vec3 sky=mix(uSky,uSkyTop,pow(clamp(R.y,0.0,1.0),0.6));
     vec3 col=mix(water,sky,clamp(fres*0.78,0.0,1.0));
@@ -326,7 +337,7 @@
   uniform sampler2D uTex; uniform sampler2D uDepth; uniform vec2 uTexel;
   uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
   uniform float uNear, uFar, uFovY, uAspect;
-  uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist;
+  uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist, uOutlineWidth;
   uniform vec3 uOutlineTint;
   out vec4 frag;
   float linZ(float d){ float z=d*2.0-1.0; return (2.0*uNear*uFar)/(uFar+uNear-z*(uFar-uNear)); }
@@ -355,10 +366,15 @@
       float lz = linZ(d);
       // explicit cross taps, NOT fwidth: screen derivatives are 2x2-quad granular, which broke
       // mid-distance lines into dash/dot speckle. Four extra depth fetches buy per-pixel ink.
-      float zL = linZ(texture(uDepth, vUv - vec2(uTexel.x, 0.0)).r);
-      float zR = linZ(texture(uDepth, vUv + vec2(uTexel.x, 0.0)).r);
-      float zD = linZ(texture(uDepth, vUv - vec2(0.0, uTexel.y)).r);
-      float zU = linZ(texture(uDepth, vUv + vec2(0.0, uTexel.y)).r);
+      // Phase 16b: uOutlineWidth widens the tap radius (clamped >=1 so a stray zero uniform never
+      // collapses the cross to zero width) for a bolder, more confident storybook line at
+      // gameplay zoom — same slope-rejecting Laplacian gate below, just a fatter search radius.
+      float ow = max(uOutlineWidth, 1.0);
+      vec2 ot = uTexel * ow;
+      float zL = linZ(texture(uDepth, vUv - vec2(ot.x, 0.0)).r);
+      float zR = linZ(texture(uDepth, vUv + vec2(ot.x, 0.0)).r);
+      float zD = linZ(texture(uDepth, vUv - vec2(0.0, ot.y)).r);
+      float zU = linZ(texture(uDepth, vUv + vec2(0.0, ot.y)).r);
       // positive gap = neighbour is FARTHER: the ink hugs the near object, never halos onto the
       // background. Gap alone still fires on steep terrain seen at grazing angles (a slope IS a
       // big per-pixel depth ramp), so gate it with the Laplacian: on any smooth surface the
