@@ -226,8 +226,26 @@
   // jobs scale with level (bigger buildings need more crew) — keeps housing meaningful late game
   function jobs() { var j = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.jobs) j += t.jobs * (1 + 0.5 * ((b.level || 1) - 1)); } return j; }
   function lvlMul(t, lvl) { return Math.pow(t.lvlGain, (lvl || 1) - 1); }
-  // economic buildings are effectively uncapped (geometric cost self-limits); defenses keep tight caps
+  // economic buildings are effectively uncapped PER TYPE (geometric cost self-limits, and upgrade
+  // levels reuse this same ceiling so it must stay permissive); defenses keep tight per-type caps.
   function bmax(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : Math.max(t.max, 999); }
+  // Phase 15c: total non-defense building SLOTS per port — replaces "ports grow forever" with a
+  // real, era-scaled ceiling. Deliberately independent of bmax(): bmax also gates upgrade LEVELS
+  // (canUpgrade below), and per-type build counts still self-limit on cost, so touching it would
+  // accidentally cap upgrades too. This is a second, additive gate — only non-defense buildings
+  // (defenses keep their own tight bmax caps and don't compete with them for room) count against it.
+  // Tuning: 8 + 4×era. At era0 that covers a full starter loop (a few huts/cottages + a jetty) with
+  // room to spare; +4/era roughly tracks the 2-4 new building types each era unlocks, so there's
+  // always headroom for one of everything plus some duplicates. See tests/sim.test.js + the Phase 15c
+  // commit body for the autoplay numbers this was checked against.
+  var SLOT_BASE = 8, SLOT_PER_ERA = 4;
+  function slotCap() { return SLOT_BASE + SLOT_PER_ERA * (S.era || 0); }
+  function slotsUsed(port) {
+    port = port || CUR; if (!port) return 0;
+    var n = 0, B = port.buildings;
+    for (var i = 0; i < B.length; i++) if (BT[B[i].type].cat !== 'defense') n++;
+    return n;
+  }
   function buildCost(type) { var t = BT[type]; return Math.round(t.cost * Math.pow(t.costMul, countOf(type)) * (META.costMul || 1)); }
   function upCost(b) { var t = BT[b.type]; return Math.round(t.cost * 0.6 * Math.pow(t.lvlCost, b.level) * (META.costMul || 1)); }
   // a building is blocked on this world if every resource it produces has a 0 specialisation
@@ -528,7 +546,13 @@
   function collectVoyage(seq) {
     if (!S || !S.voyages) return null;
     var idx = -1; for (var i = 0; i < S.voyages.length; i++) if (S.voyages[i].seq === seq) idx = i;
-    if (idx < 0) return null; var v = S.voyages[idx], d = destDef(v.id); if (!d || !voyageReady(v)) return null;
+    if (idx < 0) return null;
+    var v = S.voyages[idx]; if (!voyageReady(v)) return null;
+    if (v.id === UNCHARTED_ID) {           // Phase 15c: discovery voyage — no cash/res roll, just unlocks
+      S.voyages.splice(idx, 1); save();
+      return { id: UNCHARTED_ID, name: 'Uncharted Waters', discover: true, unlockEra: v.unlockEra, cash: 0, res: null, crate: 0, relic: 0 };
+    }
+    var d = destDef(v.id); if (!d) return null;
     var out = rollVoyage(d); out.id = v.id; out.name = d.name; out.tier = d.tier;
     S.money += out.cash; S.lifetimeMoney = (S.lifetimeMoney || 0) + out.cash;
     if (out.res) { var p = S.ports[S.active]; if (p) for (var k in out.res) p.res[k] = (p.res[k] || 0) + out.res[k]; }
@@ -536,14 +560,39 @@
   }
   function voyageState() {
     var active = (S.voyages || []).map(function (v) {
-      var d = destDef(v.id), rem = Math.max(0, Math.ceil((v.endsAt - now()) / 1000));
-      return { seq: v.seq, id: v.id, name: d ? d.name : v.id, tier: d ? d.tier : 1, total: d ? d.secs : 1, remaining: rem, ready: rem <= 0 };
+      var d = destDef(v.id), rem = Math.max(0, Math.ceil((v.endsAt - now()) / 1000)), isU = v.id === UNCHARTED_ID;
+      return { seq: v.seq, id: v.id, name: d ? d.name : (isU ? 'Uncharted Waters' : v.id), tier: d ? d.tier : 0, uncharted: isU, total: d ? d.secs : (v.secs || 1), remaining: rem, ready: rem <= 0 };
     });
     return {
       slots: voyageSlots(), used: active.length, ready: active.filter(function (a) { return a.ready; }).length,
       active: active,
       dests: DESTINATIONS.map(function (d) { return { id: d.id, name: d.name, tier: d.tier, secs: d.secs, cost: voyageCost(d), can: canStartVoyage(d.id) }; })
     };
+  }
+
+  // ---- Phase 15c: Uncharted Waters — a special, distinguishable voyage (dest kind 'uncharted')
+  // that discovers the next locked world instead of paying out cash/res. Uses the exact same
+  // wall-clock endsAt + startVoyage/collectVoyage plumbing as normal expeditions (survives reload
+  // and offline), so nothing new needed for persistence. sim.js stays biome-agnostic: game.js
+  // decides WHICH world is next (walking HARBOR_BIOME_ORDER against its own `unlocked` list) and
+  // passes that world's unlockEra in for the cost roll; sim only tracks the generic voyage.
+  // Tuning: cost 400×3^(unlockEra-1) — steep and era-scaled, the real "go discover a new coast"
+  // decision (vs. the much smaller 150×2^era colony-founding fee once you get there); duration is
+  // 1.75× the longest ordinary voyage (The Deep Trench, 2400s) ≈ 70 real minutes, so it reads as a
+  // genuine expedition into the unknown rather than a quick errand. See the Phase 15c commit body.
+  var UNCHARTED_ID = 'uncharted', UNCHARTED_DUR_MUL = 1.75;
+  function unchartedSecs() {
+    var maxSecs = 0; for (var i = 0; i < DESTINATIONS.length; i++) if (DESTINATIONS[i].secs > maxSecs) maxSecs = DESTINATIONS[i].secs;
+    return Math.round(maxSecs * UNCHARTED_DUR_MUL);
+  }
+  function unchartedCost(unlockEra) { return Math.round(400 * Math.pow(3, Math.max(0, (unlockEra || 1) - 1))); }
+  function canStartUncharted(unlockEra) { return !!S && S.money >= unchartedCost(unlockEra) && (S.voyages || []).length < voyageSlots(); }
+  function startUncharted(unlockEra) {
+    if (!canStartUncharted(unlockEra)) return false;
+    var cost = unchartedCost(unlockEra), secs = unchartedSecs();
+    S.money -= cost; S.voyages = S.voyages || [];
+    S.voyages.push({ id: UNCHARTED_ID, startedAt: now(), endsAt: now() + secs * 1000 / (META.voyageSpeed || 1), seq: (S.voyageSeq = (S.voyageSeq || 0) + 1), secs: secs, unlockEra: unlockEra });
+    save(); return true;
   }
 
   // ---- repair / rebuild (the comeback money sink; salvage-discounted vs a fresh build) ----
@@ -607,7 +656,11 @@
   }
 
   // ---- actions (operate on the active port) ----
-  function canBuild(type) { var t = BT[type]; return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < bmax(type) && S.money >= buildCost(type); }
+  function canBuild(type) {
+    var t = BT[type];
+    return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < bmax(type) &&
+      (t.cat === 'defense' || slotsUsed(CUR) < slotCap()) && S.money >= buildCost(type);
+  }
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
   function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < bmax(b.type) && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
@@ -629,10 +682,30 @@
   function advanceEra() { if (!canAdvance()) return false; S.era++; save(); return true; }
 
   // ---- found a world's port ----
-  function foundPort(id) {
+  // Phase 15c: the FIRST port an empire ever founds is free (the starting village); every colony
+  // after that charges a real, era-scaled fee — "founding a new colony" is now a deliberate spend,
+  // not a free byproduct of unlocking a world. Tuning: 150×2^era — deliberately modest next to the
+  // Uncharted Waters discovery cost (400×3^(unlockEra-1)): discovery is the steep, rare gate;
+  // founding is a smaller "commit to developing this coast" toll you can pay every run. See the
+  // Phase 15c commit body for the numbers this was checked against.
+  function isFirstPort() { return !S || !S.ports || Object.keys(S.ports).length === 0; }
+  function colonyCost() { return Math.round(150 * Math.pow(2, S.era || 0)); }
+  function foundCost() { return isFirstPort() ? 0 : colonyCost(); }
+  function canFoundPort() { return isFirstPort() || (S && S.money >= colonyCost()); }
+  // free: internal reconciliation (e.g. re-founding a colony you already discovered, after a
+  // prestige reset wipes ports) bypasses the fee — it's restoring state you already earned, not a
+  // new founding decision. Only the explicit "Found colony" UI action omits `free`.
+  function foundPort(id, free) {
     if (!S) S = fresh();
     id = id || S.active || 'green';
-    if (!S.ports[id]) { S.ports[id] = freshPort(id); CUR = S.ports[id]; ensureContracts(); }
+    if (!S.ports[id]) {
+      if (!free && !isFirstPort()) {
+        var cost = colonyCost();
+        if (S.money < cost) return null;
+        S.money -= cost;
+      }
+      S.ports[id] = freshPort(id); CUR = S.ports[id]; ensureContracts();
+    }
     S.founded = true; setActive(id); save();
     return snapshot(id);
   }
@@ -680,6 +753,7 @@
       era: S.era, eraName: eraName(S.era), money: Math.floor(S.money),
       world: pid, worldHint: spec(pid).hint, spec: spec(pid),
       founded: S.founded, portFounded: !!port,
+      foundCost: foundCost(), canFoundPort: canFoundPort(),           // Phase 15c: colony founding fee (0 for the empire's first port)
       canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
@@ -699,10 +773,12 @@
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
       v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
       v.synergies = synergyList(port); v.focus = port.focus || 'none';   // Phase 9a: composition bonuses + specialisation
+      v.slotCap = slotCap(); v.slotsUsed = slotsUsed(port);          // Phase 15c: per-port building-slot ceiling (defenses exempt)
     } else {
       v.res = { fish: 0, timber: 0, goods: 0 }; v.caps = { fish: BASE_CAP.fish, timber: BASE_CAP.timber, goods: BASE_CAP.goods };
       v.pop = 0; v.jobs = 0; v.buildings = []; v.counts = {}; v.demand = { fish: 1, timber: 1, goods: 1 }; v.contracts = [];
       v.synergies = SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: false }; }); v.focus = 'none';
+      v.slotCap = slotCap(); v.slotsUsed = 0;
     }
     CUR = prev;
     return v;
@@ -729,15 +805,19 @@
     forceWarn: forceWarn,                                           // debug/test: jump straight to the warn (avert-able) phase
     fireEvent: fireEvent, resolveEvent: resolveEvent, event: function () { return S && S.evt ? S.evt.active : null; },
     startVoyage: startVoyage, collectVoyage: collectVoyage, canStartVoyage: canStartVoyage, voyages: voyageState,
+    unchartedCost: function (era) { return unchartedCost(era); }, unchartedSecs: unchartedSecs,           // Phase 15c: discovery expedition
+    canStartUncharted: function (era) { return S ? canStartUncharted(era) : false; }, startUncharted: startUncharted,
     newGame: function () { S = fresh(); setActive('green'); save(); return snapshot(); },
     load: function () { load(); return snapshot(); },
     state: function (id) { return S ? snapshot(id) : null; },
     raw: function () { return S; },
     port: function (id) { return S && S.ports ? (S.ports[id || S.active] || null) : null; },
     setActive: function (id) { if (S) { setActive(id); save(); } },
-    foundPort: foundPort,
+    foundPort: foundPort, foundCost: function () { return S ? foundCost() : 0; }, canFoundPort: function () { return S ? canFoundPort() : true; },
     tick: function (dt) { tick(dt); },
     build: build, canBuild: canBuild, buildCost: buildCost, blocked: blocked,
+    slotCap: function () { return S ? slotCap() : 0; },                // Phase 15c: per-port building-slot ceiling + usage
+    slotsUsed: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return p ? slotsUsed(p) : 0; },
     upgrade: upgrade, canUpgrade: canUpgrade, upCost: function (i) { return CUR && CUR.buildings[i] ? upCost(CUR.buildings[i]) : 0; },
     canAdvance: canAdvance, advanceEra: advanceEra,
     setFounded: function (v) { if (S) { S.founded = !!v; save(); } },
