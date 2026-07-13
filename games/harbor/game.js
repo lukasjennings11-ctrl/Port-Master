@@ -1330,6 +1330,24 @@
   var expBtn = null, expPanel = null, expOpen = false;
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
+
+  // ---- Phase 15b: pace — playtest feedback ("feels quite fast / stressful") asked for a slower
+  // default without touching the economy itself, so this only scales two things: the day/night
+  // cycle length (todSpeed, purely cosmetic pacing) and SIM's hazard/event gap rolls (setPace,
+  // sim.js-side — production/sales/voyages are untouched there, see sim.js for the full rationale).
+  // Relaxed is the default for everyone (new AND existing players — no prior Retention key existed
+  // before this phase, so this reads the same 'relaxed' default for both); Lively restores the
+  // pre-15b feel for anyone who preferred it. A device preference, not a save-blob field.
+  var PACE_OPTIONS = { relaxed: { mul: 1.6, day: 256 }, lively: { mul: 1, day: 160 } };
+  var paceMode = (window.Retention && PACE_OPTIONS[Retention.get(GAME, 'pace', 'relaxed')]) ? Retention.get(GAME, 'pace', 'relaxed') : 'relaxed';
+  todSpeed = 1 / PACE_OPTIONS[paceMode].day;   // cosmetic day-length applied immediately; SIM.setPace() happens in boot() once SIM exists
+  function applyPace(mode) {
+    if (!PACE_OPTIONS[mode] || mode === paceMode) return;
+    paceMode = mode; todSpeed = 1 / PACE_OPTIONS[mode].day;
+    if (SIM && SIM.setPace) SIM.setPace(PACE_OPTIONS[mode].mul);
+    if (window.Retention) Retention.set(GAME, 'pace', paceMode);
+    if (settingsOpen) renderSettings();
+  }
   // idle number notation: 1.2k, 3.40M, 5.7B … Td, then scientific. Stays readable as numbers explode.
   var NUM_SUF = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc', 'Ud', 'Dd', 'Td'];
   function fmt(n) {
@@ -1413,28 +1431,50 @@
   function ensureStormAlert() {
     if (stormAlert) return;
     stormAlert = document.createElement('div'); stormAlert.id = 'stormalert';
-    stormAlert.innerHTML = '<span class="sa-ic">⚠</span><span class="sa-txt"></span><span class="sa-cd"></span>';
+    stormAlert.innerHTML = '<div class="sa-row"><span class="sa-ic">⚠</span><span class="sa-txt"></span><span class="sa-cd"></span></div><button class="sa-avert" style="display:none"></button>';
     wrap.appendChild(stormAlert);
+    // Phase 15b: avert — pay to cancel the telegraphed hazard/crash outright, while it's still
+    // warning (never once it's struck — repair/rebuild stays the only path after the fact).
+    stormAlert.querySelector('.sa-avert').addEventListener('click', function (e) {
+      e.stopPropagation();
+      var isCrash = this.getAttribute('data-crash') === '1';
+      var ok = isCrash ? SIM.avertCrash() : SIM.avertHazard();
+      if (!ok) { sfx('tap'); haptic(6); return; }
+      sfx('score'); haptic(16); shakeFX(2, 0.15);
+      var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 16, colors: ['#bfe9ff', '#9ef0b0', '#fff3c4'], speed: 160, life: 0.9 });
+      showHint(isCrash ? '⚓ Markets steadied — crash averted' : '⚓ The fleet shelters — storm averted');
+      if (achUnlock('avert1')) popAch('Storm Whisperer!', true);
+      stormAlert.classList.remove('show');
+      updateHUD();
+    });
   }
   function handleHazard(s) {
     var hz = s.hazard || { phase: 'idle', strikeId: 0 };
     ensureStormAlert();
+    var abtn = stormAlert.querySelector('.sa-avert');
     // Phase 11c: weather audio layer follows the warn/idle lifecycle — howl up on warn, back
     // down once it clears; also ducks the music bed to ~30% for the duration.
     var warnNow = hz.phase === 'warn' && !!hz.port;
     if (warnNow !== stormActive) { stormActive = warnNow; applyWeatherGain(warnNow); applyMusicGain(); }
     if (hz.phase === 'warn' && hz.port) {
-      stormAlert.classList.remove('crash');
+      var isCrash = hz.kind === 'Market Crash';
+      stormAlert.classList.toggle('crash', isCrash);
       stormAlert.querySelector('.sa-txt').textContent = (hz.kind || 'Storm') + ' approaching ' + wname(hz.port);
       stormAlert.querySelector('.sa-cd').textContent = hz.in + 's';
       stormAlert.classList.add('show');
-      announceFeature('storm', '⚠️', 'Storm incoming!', 'Sea Walls and Lighthouses protect your port.');
+      // Phase 15b: Avert £X / Stabilise £X — ghosted + "Need £X" when unaffordable (15a pattern)
+      var cost = hz.avertCost || 0, canPay = SIM.raw().money >= cost;
+      abtn.style.display = ''; abtn.setAttribute('data-crash', isCrash ? '1' : '0');
+      abtn.textContent = canPay ? (isCrash ? 'Stabilise £' : 'Avert £') + fmt(cost) : 'Need £' + fmt(cost);
+      abtn.classList.toggle('ghosted', !canPay); abtn.disabled = !canPay;
+      announceFeature('storm', '⚠️', 'Storm incoming!', 'Sea Walls and Lighthouses protect your port — or spend to avert it outright.');
     } else if (s.crash) {
       stormAlert.classList.add('crash');
       stormAlert.querySelector('.sa-txt').textContent = 'Market crash — ' + s.crash.res + ' prices slump';
       stormAlert.querySelector('.sa-cd').textContent = s.crash.t + 's';
       stormAlert.classList.add('show');
-    } else { stormAlert.classList.remove('show'); }
+      abtn.style.display = 'none';   // already struck — too late to avert, only warn-phase is avert-able
+    } else { stormAlert.classList.remove('show'); abtn.style.display = 'none'; }
     // a fresh strike fired in the sim — react with juice
     if (hz.strikeId && hz.strikeId !== lastStrikeId) {
       lastStrikeId = hz.strikeId; var last = hz.last;
@@ -1981,6 +2021,7 @@
       sCell('Lifetime earned', '£' + fmt(st.lifetimeMoney || 0)) + sCell('Charters signed', '' + pc) +
       sCell('Best empire', best > 0 ? '£' + fmt(best) : '—') + sCell('Ports founded', '' + stat.ports) +
       sCell('Storms survived', '' + (stat.storms || 0)) + sCell('Cargo shipped', fmt(stat.shipped || 0)) +
+      sCell('Hazards averted', '' + (stat.averted || 0)) +
       '</div>';
     var owned = ownedBlueprints().length;
     html += '<div class="lg-sec">Blueprints (' + owned + '/' + BLUEPRINTS.length + ')</div>';
@@ -2315,7 +2356,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v61';
+  var BUILD_TAG = 'v62';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2389,6 +2430,11 @@
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
+    // Phase 15b: pace — Relaxed (default) spaces storms/events further apart; Lively is the original feel.
+    h += '<div class="mp-sec">Pace</div><div class="mp-grid">';
+    h += '<button class="mp-item auto' + (paceMode === 'relaxed' ? ' on' : '') + '" data-set="pace-relaxed"><span class="mi-n">🌤 Relaxed</span><span class="mi-c">' + (paceMode === 'relaxed' ? 'ON' : 'Pick') + '</span></button>';
+    h += '<button class="mp-item auto' + (paceMode === 'lively' ? ' on' : '') + '" data-set="pace-lively"><span class="mi-n">⚡ Lively</span><span class="mi-c">' + (paceMode === 'lively' ? 'ON' : 'Pick') + '</span></button>';
+    h += '</div><div class="set-help">Relaxed spreads out storms and events. Economy speed is unchanged.</div>';
     h += '<div class="mp-sec">How to play</div>';
     h += '<div class="set-help">⚓ Tap the glowing harbour, then <b>Found village</b>.<br>' +
          '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
@@ -2436,6 +2482,8 @@
         else if (a === 'music') { applyMusicOff(!musicOff); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
+        else if (a === 'pace-relaxed') { applyPace('relaxed'); sfx('tap'); haptic(8); }
+        else if (a === 'pace-lively') { applyPace('lively'); sfx('tap'); haptic(8); }
         else if (a === 'install') { promptInstall(); }
         else if (a === 'errlog') { copyAndClearErrLog(); sfx('tap'); haptic(8); }
         else if (a === 'reset') {
@@ -2732,7 +2780,8 @@
     { id: 's1', name: 'First Storm Survived' }, { id: 's10', name: 'Storm-Hardened' },
     { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' },
     { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
-    { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' }
+    { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' },
+    { id: 'avert1', name: 'Storm Whisperer' }
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -2791,6 +2840,7 @@
     waterMesh = E.mesh(E.plane(2900, 300)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture());
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
+    if (SIM && SIM.setPace) SIM.setPace(PACE_OPTIONS[paceMode].mul);  // Phase 15b: apply saved/default pace BEFORE any tick (incl. offline catch-up below)
     if (SIM) { computeMeta(); applyTide(); }                          // Legacy multipliers + today's market tide before offline accrual
     dailyList();                                                     // materialise today's missions so event hooks can bump them
     var offGain = 0, offSec = 0;
@@ -2901,6 +2951,12 @@
       else { stormActive = false; applyWeatherGain(false); applyMusicGain(); }
       return amb ? { weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3) } : null;
     },
+    // Phase 15b: pace + avert (test/debug hooks)
+    pace: function () { return { mode: paceMode, mul: SIM ? SIM.pace() : 1, day: Math.round(1 / todSpeed) }; },
+    setPace: function (mode) { applyPace(mode); return paceMode; },
+    forceWarn: function (portId, crash) { var hz = SIM ? SIM.forceWarn(portId, crash) : null; updateHUD(); return hz; },   // test-only: skip the random wait, land straight in the avert-able warn phase
+    avertHazard: function () { var ok = SIM ? SIM.avertHazard() : false; if (ok) updateHUD(); return ok; },
+    avertCrash: function () { var ok = SIM ? SIM.avertCrash() : false; if (ok) updateHUD(); return ok; },
     fireEvent: function (id) { var ev = SIM.fireEvent(id); if (ev) { updateHUD(); } return ev; },
     chooseEvent: function (i) { return onEventChoice(i); },
     event: function () { return SIM.event(); },
