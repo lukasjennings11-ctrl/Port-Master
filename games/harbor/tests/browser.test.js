@@ -781,6 +781,100 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('15b: pace + avert flows produced zero new console/page errors', errs.length === errsBefore15b);
   await page.evaluate(() => window.__harbor.pause(false));
 
+  // Phase 15d: Harbourmaster's Tips — the contextual hint engine. Driven entirely through
+  // __harbor.forceTipCheck() (runs one tickTips() pass synchronously, bypassing the wall-clock
+  // frame accumulator) so nothing races the real 4s cadence or the 45s global rate limit.
+  const errsBefore15d = errs.length;
+  await page.evaluate(() => {
+    window.__harbor.pause(true);
+    window.Retention.set('harbor', 'tipsSeen', {});
+    window.Retention.set('harbor', 'tips', true);
+    window.__harbor.resetTipRateLimit();
+    // the era driven earlier in this suite keeps re-triggering Baron Krall's challenge modal
+    // (era >= rivalThreshold) — tips correctly refuse to fire over ANY open modal, so clear the
+    // screen first (same pattern as the crate-modal cleanup earlier in the file)
+    var rm = document.querySelector('#rivalmodal.show'); if (rm) rm.classList.remove('show');
+  });
+  const tip0 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: once-tip "intro" fires on the first-ever forced check (port already founded)',
+    tip0.lastId === 'intro' && tip0.showing === true && /Harbourmaster/i.test(tip0.text));
+  ok('tips: intro recorded in Retention tipsSeen', await page.evaluate(() => window.Retention.get('harbor', 'tipsSeen', {}).intro === 1));
+
+  // global rate limit: a second forced check inside the 45s window must be a total no-op — same
+  // id, same shownAt timestamp, still showing (never re-fires, never stacks a second toast).
+  const tip0b = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: global rate limit — forceTipCheck again within 45s shows nothing new',
+    tip0b.lastId === tip0.lastId && tip0b.shownAt === tip0.shownAt && tip0b.showing === true);
+
+  // forced hazard-warn + affordable avert cost → the hazardAvert rule (next in priority after the
+  // now-consumed once-only intro) must be the one that fires.
+  await page.evaluate(() => {
+    window.__harbor.dismissTip();
+    window.__harbor.resetTipRateLimit();
+    window.HARBOR_SIM.raw().money = 1e6;
+    window.__harbor.forceWarn('green', false);
+  });
+  const tip1 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: forced hazard-warn + affordable avert cost → "hazardAvert" rule fires',
+    tip1.lastId === 'hazardAvert' && /avert this storm/i.test(tip1.text));
+  await page.evaluate(() => { window.__harbor.avertHazard(); window.__harbor.dismissTip(); });
+
+  // once-tip persistence: after a reload, "intro" must never fire again (Retention 'tipsSeen'
+  // survives; no save-format change — this all lives outside the sim save blob).
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  await page.evaluate(() => {
+    window.__harbor.pause(true); window.__harbor.resetTipRateLimit();
+    // rivalPending resets on reload, so boot's first updateHUD re-opens the challenge — clear it again
+    var rm = document.querySelector('#rivalmodal.show'); if (rm) rm.classList.remove('show');
+  });
+  const tip2 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: once-tip "intro" does not re-fire after reload', tip2.lastId !== 'intro');
+
+  // Settings toggle OFF makes tickTips a hard no-op — nothing changes from whatever fired last.
+  await page.evaluate(() => { window.__harbor.setTipsEnabled(false); window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit(); });
+  const tip3 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: Settings toggle OFF suppresses tickTips (no new tip, nothing showing)',
+    tip3.enabled === false && tip3.showing === false && tip3.lastId === tip2.lastId);
+
+  // Settings panel renders the Tips ON/OFF row (15b Pace-section pattern) and re-enabling flips it back on
+  await page.evaluate(() => document.getElementById('setbtn').click());
+  const tipsRow = await page.evaluate(() => {
+    var el = document.querySelector('[data-set="tips"]');
+    return { exists: !!el, off: el ? el.textContent.indexOf('OFF') >= 0 : false };
+  });
+  ok('tips: Settings panel shows the Tips toggle row, currently OFF', tipsRow.exists && tipsRow.off);
+  await page.evaluate(() => { document.querySelector('[data-set="tips"]').click(); document.getElementById('setbtn').click(); });
+  ok('tips: Settings toggle flips back ON + persists to Retention',
+    await page.evaluate(() => window.__harbor.tips().enabled === true && window.Retention.get('harbor', 'tips', null) === true));
+
+  // toast element: distinct from #stormalert/#announcecard, forced via the same deterministic
+  // hazardAvert state used above (post-reload game state has too many rules simultaneously true —
+  // huge money, many buildings, era climbed — to safely predict which lower-priority rule would
+  // win a fresh race; hazardAvert is rule #2, right after the now-consumed once-only intro, so it
+  // reliably wins regardless of what else is true), then taps anywhere on it to dismiss immediately.
+  await page.evaluate(() => {
+    window.__harbor.setTipsEnabled(true); window.__harbor.resetTipRateLimit();
+    window.HARBOR_SIM.raw().money = 1e6; window.__harbor.forceWarn('green', false);
+  });
+  const tip4 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('tips: hazardAvert rule fires again post-reload with a forced warn state', tip4.lastId === 'hazardAvert');
+  const toastEl = await page.evaluate(() => {
+    var el = document.getElementById('tiptoast');
+    return { exists: !!el, showing: !!(el && el.classList.contains('show')), distinct: !!el && el.id !== 'stormalert' && el.id !== 'announcecard' };
+  });
+  ok('tips: toast is a distinct #tiptoast element (separate from #stormalert/#announcecard), currently showing',
+    toastEl.exists && toastEl.showing && toastEl.distinct);
+  await page.evaluate(() => document.getElementById('tiptoast').click());
+  await sleep(80);
+  ok('tips: tap anywhere on the toast dismisses it immediately',
+    await page.evaluate(() => !document.getElementById('tiptoast').classList.contains('show')));
+  await page.evaluate(() => window.__harbor.avertHazard());
+
+  ok('15d: tips flows produced zero new console/page errors', errs.length === errsBefore15d);
+  await page.evaluate(() => window.__harbor.pause(false));
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
