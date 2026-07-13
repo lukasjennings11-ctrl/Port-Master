@@ -300,6 +300,38 @@
     grit.box(x, 22.5, z, 3.4, 2.8, 3.4, [0.15, 0.16, 0.18]); flat.box(x, 23, z, 1.8, 1.8, 1.8, [1.5, 1.3, 0.6]);
   }
 
+  // ---------------- Phase 17a: technology-age silhouettes (Automated Harbour / Neon Horizon) ----
+  // Same shared-kit approach as the rest of the port (chamfered boxes + cylinders, no new asset
+  // pipeline) but a deliberately different palette — glassy blues + steel instead of wood/brick —
+  // so era6/7 read as a distinct skyline the moment the outline pass (14a) picks out their silhouette.
+  var GLASS_STEEL = [0.72, 0.75, 0.80], GLASS_PANE = [0.55, 0.78, 0.92], SOLAR_BLUE = [0.20, 0.55, 0.85];
+  var NEON_HUES = [[0.35, 0.85, 0.95], [0.95, 0.45, 0.85], [0.55, 0.95, 0.65]];
+  // Automated Harbour: a slim steel-framed tower with a stack of glass curtain-wall bands and a
+  // tilted rooftop solar array — the age's signature silhouette (also SIM.BT's Solar Spire flavour).
+  function solarSpire(grit, flat, x, z, rng) {
+    var h = 24 + rng() * 8;
+    grit.bbox(x, h / 2, z, 5.0, h, 5.0, GLASS_STEEL, 0, 0.55, 3);
+    for (var f = 3.2; f < h - 2; f += 3.6) flat.box(x, f, z + 2.6, 4.4, 1.5, 0.18, GLASS_PANE, 0, 0, 0.2);
+    flat.box(x, h + 1.3, z, 7.2, 0.3, 3.8, SOLAR_BLUE, 0.05, 0.3);   // tilted rooftop solar array
+    flat.cyl(x, h + 0.1, z, 0.55, 0.9, 6, GLASS_STEEL, 0.7);
+  }
+  // Neon Horizon: a stepped glass skyscraper ringed in a glowing accent colour + rooftop beacon —
+  // three tints rotate through a port so a Neon Horizon skyline never reads as one repeated block.
+  function neonTower(grit, flat, x, z, rng) {
+    var h = 32 + rng() * 16, accent = pick(NEON_HUES, rng), glass = [0.28, 0.34, 0.48];
+    grit.bbox(x, h * 0.42, z, 7.6, h * 0.84, 7.6, glass, 0, 0.5, 3);
+    grit.bbox(x, h * 0.94, z, 5.2, h * 0.20, 5.2, mul(glass, 1.15), 0, 0.5, 2);
+    for (var b = 0; b < 3; b++) flat.box(x, h * (0.24 + b * 0.28), z, 7.9, 0.28, 7.9, accent, 0, 0, 0.5);
+    flat.box(x, h + 1.1, z, 0.35, 2.2, 0.35, accent, 0);   // antenna beacon
+  }
+  // Automated Harbour: a drone landing pad (Drone Bay) — a low glowing disc with a few parked
+  // delivery drones, ringing the crane/quay rather than joining the tower skyline.
+  function droneBayPad(grit, flat, x, z, rng) {
+    grit.cyl(x, 0.28, z, 6.2, 0.55, 10, [0.66, 0.68, 0.72], 0.85);
+    flat.cyl(x, 0.60, z, 5.3, 0.1, 10, SOLAR_BLUE, 0.9);
+    for (var i = 0; i < 3; i++) { var a = i * 2.15 + rng() * 0.4, dx = x + Math.cos(a) * 3.2, dz = z + Math.sin(a) * 3.2; flat.bbox(dx, 0.95, dz, 0.85, 0.4, 0.85, [0.86, 0.87, 0.9], a, 0.2); }
+  }
+
   // ---------------- SHIPYARD (Phase 16a): real ship classes, not a hull-box + triangle ----------
   // Local ship space: +Z is the BOW (forward/heading — matches composeRYS's rotateY convention
   // used for every moving hull in game.js: at yaw=0 a ship's local +Z axis maps to world +Z, the
@@ -533,6 +565,20 @@
       sc.blobs.push({ x: 0, z: -6, r: 22 });
       if (era >= 2) { craneStatic(L.grit, 0, -6); sc.blobs.push({ x: 0, z: -6, r: 14 }); }
       props(L.grit, L.flat, rng, era);
+      // Phase 17a: Automated Harbour (era6) / Neon Horizon (era7) get their OWN skyline — a small
+      // cluster of tech-age towers east of the warehouse row (solarSpire's steel/glass silhouette at
+      // era6, swapping to neonTower's glowing accent rings at era7) plus a drone landing pad by the
+      // quay — distinct from the generic glTF city-block fill above, so the outline pass (14a) picks
+      // out a genuinely different age instead of "more of the same skyline".
+      if (era >= 6) {
+        var spireN = era >= 7 ? 3 : 2;
+        for (var sp = 0; sp < spireN; sp++) {
+          var spx = 70 + sp * 26, spz = 30 + rng() * 10;
+          if (era >= 7) neonTower(L.grit, L.flat, spx, spz, rng); else solarSpire(L.grit, L.flat, spx, spz, rng);
+          sc.blobs.push({ x: spx, z: spz, r: 8 });
+        }
+        droneBayPad(L.grit, L.flat, -92, 38, rng); sc.blobs.push({ x: -92, z: 38, r: 8 });
+      }
     }
     return sc;
   }
