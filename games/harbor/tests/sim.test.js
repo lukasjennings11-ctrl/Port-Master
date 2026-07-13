@@ -151,6 +151,7 @@ var S = SIM.raw();
 
 // ---------------------------------------------------------------- balance bounds (accelerated auto-play)
 (function balance() {
+  SIM.setPace(1);                                                    // Phase 15b: balance floors are measured at Lively — explicit so a future default change can't silently drift them
   SIM.__setRng(mulberry32(999)); SIM.newGame(); SIM.foundPort('green'); var b = SIM.raw();
   var order = ['fishing_hut', 'cottage', 'jetty', 'warehouse', 'market', 'sawmill', 'factory', 'dock', 'seawall', 'lighthouse'];
   var lastLifetime = 0, monotonic = true, everReachable = false;
@@ -269,6 +270,7 @@ function metaWith(over) { var m = {}, k; for (k in FULL_META) m[k] = FULL_META[k
 
 function autoplay(cfg) {
   var steps = cfg.steps || 180;                                     // 180 × 30s = 90 sim-minutes
+  SIM.setPace(1);                                                    // Phase 15b: the 11a baselines below are measured at Lively — pin it explicitly
   SIM.newGame(); SIM.foundPort('green');
   SIM.applyMeta(metaWith(cfg.meta));                                // FULL reset + this run's META
   SIM.setTide({ prod: 1, sell: { fish: 1, timber: 1, goods: 1 } }); // neutral tide (module-global)
@@ -404,6 +406,76 @@ function autoplay(cfg) {
   ok('big#: raid tribute finite at 1e30', ev && isFinite(ev.data.tribute) && ev.data.tribute > 0);
   SIM.resolveEvent(0);
   ok('big#: money finite after raid tribute', isFinite(st.money) && st.money >= 0);
+})();
+
+// ---------------------------------------------------------------- Phase 15b: pace (gap-roll scaling only)
+(function paceScaling() {
+  // Relaxed smoke test: same seed, two pace settings — the hazard AND event scheduler's first gap
+  // roll (hzRand/evRand, both consumed once inside newGame()->fresh()) must scale by exactly the
+  // pace multiplier. This is deterministic (seeded RNG, no other draws happen before the roll).
+  SIM.setPace(1); SIM.__setRng(mulberry32(555)); SIM.newGame(); SIM.foundPort('green');
+  var livelyHz = SIM.raw().hazard.next, livelyEv = SIM.raw().evt.next;
+
+  SIM.setPace(1.6); SIM.__setRng(mulberry32(555)); SIM.newGame(); SIM.foundPort('green');
+  var relaxedHz = SIM.raw().hazard.next, relaxedEv = SIM.raw().evt.next;
+
+  ok('pace: relaxed (1.6x) hazard gap scales vs lively', near(relaxedHz / livelyHz, 1.6, 1e-9));
+  ok('pace: relaxed (1.6x) event gap scales vs lively', near(relaxedEv / livelyEv, 1.6, 1e-9));
+
+  // Pace must NOT touch production/sales: same seed, same buildings, same dt — money/res deltas
+  // should be bit-identical whether pace is 1 or 1.6 (hzRand/evRand aren't in tickPort's path).
+  function econRun(pace) {
+    SIM.setPace(pace); SIM.__setRng(mulberry32(777)); SIM.newGame(); SIM.foundPort('green'); SIM.setEra(2);
+    var st = SIM.raw(); st.money = 5000;
+    ['fishing_hut', 'jetty', 'cottage', 'warehouse', 'market'].forEach(function (t) { if (SIM.canBuild(t)) SIM.build(t); });
+    var m0 = st.money, p = SIM.port('green'); p.res.fish = 40; p.res.timber = 0; p.res.goods = 0;
+    SIM.tick(20);                                                    // dt<5 would also run the scheduler — use a big dt so only the economy moves
+    return { money: st.money - m0, fish: p.res.fish, timber: p.res.timber, goods: p.res.goods };
+  }
+  var econLively = econRun(1), econRelaxed = econRun(1.6);
+  ok('pace: production/sales identical at pace 1 vs 1.6 (money)', econLively.money === econRelaxed.money);
+  ok('pace: production/sales identical at pace 1 vs 1.6 (resources)',
+    econLively.fish === econRelaxed.fish && econLively.timber === econRelaxed.timber && econLively.goods === econRelaxed.goods);
+  SIM.setPace(1);                                                    // leave the module back at Lively for anything that runs after
+})();
+
+// ---------------------------------------------------------------- Phase 15b: avert hazards
+(function avertHazards() {
+  SIM.setPace(1); SIM.__setRng(mulberry32(2468)); SIM.newGame(); SIM.foundPort('green'); SIM.setEra(1);
+  var S15 = SIM.raw();
+
+  // outside warn: fails cleanly, no charge
+  S15.money = 1000;
+  ok('avert: avertHazard outside warn returns false', SIM.avertHazard() === false);
+  ok('avert: avertHazard outside warn does not charge', SIM.raw().money === 1000);
+
+  // insufficient money during warn: fails without charging
+  var w1 = SIM.forceWarn('green', false);
+  ok('avert: forceWarn lands in warn phase with an avertCost', w1.phase === 'warn' && w1.avertCost > 0);
+  S15.money = 0;
+  ok('avert: avertHazard with insufficient money returns false', SIM.avertHazard() === false);
+  ok('avert: insufficient-money attempt does not charge', SIM.raw().money === 0);
+  ok('avert: insufficient-money attempt leaves the warn pending', SIM.raw().hazard.phase === 'warn');
+
+  // during warn with money: charges once, clears the pending strike, bumps stats.averted
+  var cost = SIM.avertCost();
+  S15.money = cost + 500;
+  var avertedBefore = S15.stats.averted || 0;
+  var okAvert = SIM.avertHazard();
+  ok('avert: avertHazard during warn succeeds', okAvert === true);
+  ok('avert: avertHazard charges exactly avertCost()', SIM.raw().money === 500);
+  ok('avert: avertHazard clears the warn phase', SIM.raw().hazard.phase === 'idle');
+  ok('avert: avertHazard increments stats.averted', SIM.raw().stats.averted === avertedBefore + 1);
+
+  // avertHazard must refuse a crash-warn (that's avertCrash's job) and vice versa
+  var w2 = SIM.forceWarn('green', true);
+  ok('avert: forceWarn(crash) reports Market Crash kind', w2.kind === 'Market Crash');
+  S15.money = SIM.avertCost() + 100;
+  ok('avert: avertHazard refuses a crash-warn', SIM.avertHazard() === false);
+  var avertedBefore2 = SIM.raw().stats.averted;
+  ok('avert: avertCrash succeeds on a crash-warn', SIM.avertCrash() === true);
+  ok('avert: avertCrash also increments stats.averted', SIM.raw().stats.averted === avertedBefore2 + 1);
+  ok('avert: market crash never activates (S.crash stays null)', SIM.raw().crash === null);
 })();
 
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
