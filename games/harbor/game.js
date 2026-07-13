@@ -25,15 +25,37 @@
   var PANX = 1140, PANZ0 = -90, PANZ1 = 280;   // pan clamp over the long coast
   var biomeId = 'green', biome = null, unlocked = ['green'];
 
-  // ---- Phase 10c: quality-gated post pass (tilt-shift miniature DoF + bloom-lite) ----
+  // ---- Phase 10c/14a: quality-gated post pass (tilt-shift miniature DoF + bloom-lite +,
+  // as of 14a, ink outlines) — and the same postEnabled() gate now also arms the revived PCF
+  // soft-shadow pass (see renderShadowMap/uShadowOn below). One boolean, four cartoon-ification
+  // features, one weak-device fallback: this is deliberately a single gate rather than four
+  // independent toggles — they're all "fancier rendering" in the same performance bucket, and a
+  // device too slow for one is too slow for all of them (the frame-time probe already measures
+  // the combined cost since it samples real frames with everything on).
   // ONE optional render-to-texture composite: scene → offscreen RT → fullscreen quad that
-  // blurs away from a horizontal focus band (diorama look) and adds a warm bloom-lite halo
-  // from the same taps. Default ON; a first-boot frame-time probe auto-disables it on weak
-  // devices (persisted via 'postAuto' so they don't re-probe every boot). The Settings
-  // toggle re-arms the probe once when forced back on. Deterministic escape hatches for
-  // headless swiftshader tests/screenshots: a '?nopost-probe' query flag disarms the probe,
-  // and __harbor.setPost() disarms it too (forced state). Any FBO failure → direct path.
+  // blurs away from a horizontal focus band (diorama look), adds a warm bloom-lite halo from the
+  // same taps, and (14a) reads the RT's depth back to draw screen-space ink outlines. Default ON;
+  // a first-boot frame-time probe auto-disables it on weak devices (persisted via 'postAuto' so
+  // they don't re-probe every boot). The Settings toggle re-arms the probe once when forced back
+  // on. Deterministic escape hatches for headless swiftshader tests/screenshots: a
+  // '?nopost-probe' query flag disarms the probe, and __harbor.setPost() disarms it too (forced
+  // state). Any FBO failure → direct path (legacy look: no DoF/bloom/outlines/shadows).
   var POST_FOCUS_Y = 0.44, POST_FOCUS_W = 0.17, POST_BLOOM_T = 0.78, POST_BLOOM_A = 0.35;
+  // ink-outline tuning (Phase 14a) — see F_POST in gl.js for how these are used. NOTE: the
+  // "distant" massif skyline sits at only ~60–100 VIEW units in the default framing (camera
+  // orbits at ~110), inside the playable port's own depth range — so terrain cleanliness comes
+  // from F_POST's Laplacian slope-rejection + distance-scaled threshold, not from these fades.
+  // Phase 16b: thresholds trimmed and a tap-radius WIDTH multiplier added — bolder, more
+  // confident ink at gameplay zoom for the "vibrant storybook" pass (still gated by the same
+  // Laplacian slope-rejection + sky mask in F_POST, so terrain/sky cleanliness is unaffected).
+  var OUTLINE_DEPTH_T = 0.024, OUTLINE_NORM_T = 0.62, OUTLINE_FADE = 0.003, OUTLINE_MAXDIST = 300, OUTLINE_WIDTH = 1.6;
+  // Phase 16b: two-tone postcard water — F_WATER (gl.js) quantizes the vLandH shore-distance
+  // signal into this many toon bands (rich deep teal far offshore -> bright turquoise shallows
+  // right at the coast). Documented here for __harbor.water()'s test/debug hook below.
+  var WATER_SHORE_BANDS = 4;
+  // camera projection constants shared by the main perspective matrix AND the post pass's
+  // depth-linearisation math (single source of truth so the outline reconstruction can never drift)
+  var CAM_FOVY = 0.82, CAM_NEAR = 0.5, CAM_FAR = 1600;
   var postUserOn = window.Retention ? !!Retention.get(GAME, 'post', true) : true;
   var postAutoOff = window.Retention ? !!Retention.get(GAME, 'postAuto', false) : false;
   var postFail = false, postRT = null;
@@ -106,15 +128,46 @@
     gr.addColorStop(0, 'rgba(0,0,0,0.85)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
     x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return c;
   }
+  // Phase 14a: scalloped white V-wake decal (alpha falloff), oriented bow(y=0)->tail(y=1). Drawn
+  // as a stretched alpha quad trailing each moving hull via the existing P_blob decal pipeline
+  // (see drawWakes) — cheaper and far more robust in this hand-rolled engine than a shader-driven
+  // per-ship uniform array plumbed into F_WATER: boat counts are tiny (a dozen-ish), the decal
+  // path is already battle-tested (soft contact shadows use it), and it composites correctly
+  // over the wavy water surface with zero extra shader plumbing.
+  function wakeTexture() {
+    var c = document.createElement('canvas'); c.width = 48; c.height = 96; var x = c.getContext('2d');
+    var img = x.createImageData(48, 96), D = img.data;
+    for (var y = 0; y < 96; y++) {
+      var ny = y / 95;                                     // 0 at the boat, 1 at the fading tail
+      var spread = 0.12 + ny * 0.78;                        // the V widens behind the boat
+      var wob = Math.sin(ny * 22) * 0.045;                  // gentle scalloped wobble along each arm
+      for (var px = 0; px < 48; px++) {
+        var nx = px / 47 * 2 - 1;                           // -1..1 lateral
+        var dL = Math.abs(nx + spread + wob), dR = Math.abs(nx - spread - wob);
+        var arm = Math.max(0, 1 - Math.min(dL, dR) / 0.16);      // bright core of each wake arm
+        var centre = Math.max(0, 1 - Math.abs(nx) / 0.05) * 0.35; // faint straight prop-wash line
+        var a = Math.max(arm, centre) * Math.pow(1 - ny, 0.65);
+        var i = (y * 48 + px) * 4;
+        D[i] = D[i + 1] = D[i + 2] = 255; D[i + 3] = Math.round(a * 235);
+      }
+    }
+    x.putImageData(img, 0, 0); return c;
+  }
 
   // ---- rng ----
   function hash(s) { var h = 2166136261 >>> 0; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   function mulberry(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
   // ---- scene ----
-  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, hullMesh, sailMesh, gullMesh;
+  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, gullMesh;
+  // Phase 16a: SHIPYARD — six real ship-class meshes (models.js HARBOR_MODELS.SHIPYARD), built
+  // once in boot() and reused every frame via compose transforms — replaces the old single
+  // hull-box + triangle-sail (hullMesh/sailMesh) that read as floating triangles at gameplay zoom.
+  // SHIP[cls] = { hull: mesh (tint-ready), trim: mesh (baked real colours, drawn uVCol=1),
+  //               sails: [{mesh, phase}], meta: {len,beam,funnel} }.
+  var SHIP = {}, shipStats = null, DEBUG_SHIP = null;   // DEBUG_SHIP: test-only forced close-up ship (see __harbor.debugShip)
   var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
-  var cityModels = null, atlasTex = null, blobTex = null;   // glTF buildings (async) + shared atlas + shadow decal
+  var cityModels = null, atlasTex = null, blobTex = null, wakeTex = null;   // glTF buildings (async) + shared atlas + shadow decal + wake decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
   var sites = [], selSite = -1;                              // curated harbour candidates + selected index
   var ambient = null;                                        // living port: sailing boats + wheeling gulls
@@ -137,10 +190,21 @@
     geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3,
       verts: (fac.P.length + grit.P.length + flat.P.length) / 3, indices: fac.I.length + grit.I.length + flat.I.length };   // vertex-budget guard (Phase 10b)
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
+    buildWaterMesh();                                          // Phase 14a: rebake shore-foam heights for THIS biome's terrain
     sites = port ? [] : HARBOR_MODELS.sites(); selSite = -1;  // curated candidates only when wild
     if (window.Retention) Retention.set(GAME, 'biome', id);
     if (typeof buildSiteChips === 'function') buildSiteChips();
     if (typeof updateFoundUI === 'function') updateFoundUI();
+  }
+  // Phase 14a: build the sea-plane mesh with the terrain heightfield baked into its (otherwise
+  // unused) vertex colour R channel — F_WATER reads it back as vLandH to band a scalloped foam
+  // fringe right at the coastline. HARBOR_MODELS.buildStatic() (just above) already regenerated
+  // the heightfield for THIS biome, so heightAt() is valid here. A one-time ~90k-vertex CPU bake
+  // per biome switch (not per frame) — trivial next to the noise-heightfield generation it reads.
+  function buildWaterMesh() {
+    var wd = HGL.geom.plane(2900, 300);
+    for (var i = 0; i < wd.positions.length; i += 3) wd.colors[i] = HARBOR_MODELS.heightAt(wd.positions[i], wd.positions[i + 2]);
+    waterMesh = E.mesh(wd);
   }
   function loadFounded() { var f = window.Retention && Retention.get(GAME, 'founded', null); if (f && typeof f === 'object') founded = f; }
   function saveFounded() { if (window.Retention) Retention.set(GAME, 'founded', founded); }
@@ -190,14 +254,22 @@
   // from the biome palette so every world keeps its identity across the whole cycle.
   function m3(c, m) { return [c[0] * m[0], c[1] * m[1], c[2] * m[2]]; }
   function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  // Phase 16b: VIBRANT STORYBOOK mood pass — dusk pushed warmer (deeper orange-pink, not just
+  // gold-rose), night pushed inkier (darker + more saturated blue-violet for a stronger
+  // light/dark contrast against the window-glow + starfield), noon left crisp/bright (the
+  // biome's own punched-up palette from biomes.js already carries the "vivid" read at noon —
+  // ambient here is nudged for a touch more contrast/confidence, not repainted).
   function todKeys() {
     var b = biome;
-    var night = { // cool blue-violet, moonlit; stars + window glow carry the magic
-      top: m3(b.skyTop, [0.10, 0.14, 0.34]), bot: m3(b.skyBot, [0.09, 0.13, 0.30]),
+    var night = { // inkier blue-violet, moonlit; stars + window glow carry the magic — pushed
+      // notably darker than 14a (the ACES filmic curve lifts shadows more than raw values
+      // suggest, so getting a truly "ink" night needs a bigger cut at the source) for real
+      // light/dark contrast against the window-glow + starfield.
+      top: m3(b.skyTop, [0.045, 0.06, 0.16]), bot: m3(b.skyBot, [0.025, 0.035, 0.10]),
       sun: [0.16, 0.22, 0.38],
-      ambTop: [0.16, 0.21, 0.38], ambBot: [0.09, 0.11, 0.22],
-      fog: m3(b.fog, [0.09, 0.12, 0.26]), fogD: 0.0011, shadowK: 0.40, water: [0.11, 0.15, 0.42],
-      horizon: [0.05, 0.07, 0.16], sparkle: 0.16                 // near-black blue rim; faint moon-glints
+      ambTop: [0.09, 0.12, 0.30], ambBot: [0.035, 0.045, 0.13],
+      fog: m3(b.fog, [0.05, 0.06, 0.16]), fogD: 0.0011, shadowK: 0.40, water: [0.08, 0.10, 0.34],
+      horizon: [0.02, 0.03, 0.10], sparkle: 0.16                 // near-black blue rim; faint moon-glints
     };
     var dawn = { // golden-pink sunrise: violet zenith, peach horizon, long warm light
       top: lerp3(m3(b.skyTop, [0.52, 0.48, 0.80]), [0.46, 0.36, 0.66], 0.35),
@@ -207,19 +279,19 @@
       fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68],
       horizon: [1.28, 0.74, 0.50], sparkle: 0.62                 // warm peach sunrise glow
     };
-    var day = { // bright, clean, cheerful — the biome palette as painted
+    var day = { // bright, clean, cheerful — the biome palette as painted, crisp noon confidence
       top: b.skyTop.slice(), bot: b.skyBot.slice(), sun: b.sun.slice(),
-      ambTop: [0.50, 0.56, 0.70], ambBot: [0.27, 0.245, 0.225],
+      ambTop: [0.54, 0.60, 0.76], ambBot: [0.25, 0.225, 0.20],
       fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1],
       horizon: lerp3(b.skyBot, [1.0, 0.99, 0.94], 0.55), sparkle: 0.55   // soft bright haze
     };
-    var dusk = { // molten gold-rose sunset, a touch redder than dawn
-      top: lerp3(m3(b.skyTop, [0.46, 0.40, 0.74]), [0.42, 0.30, 0.60], 0.4),
-      bot: lerp3(m3(b.skyBot, [1.05, 0.66, 0.52]), [1.15, 0.55, 0.36], 0.55),
-      sun: [1.48, 0.86, 0.44],
-      ambTop: [0.42, 0.33, 0.50], ambBot: [0.33, 0.21, 0.25],
-      fog: lerp3(m3(b.fog, [1.02, 0.66, 0.54]), [1.05, 0.55, 0.42], 0.45), fogD: 0.0009, shadowK: 0.78, water: [0.76, 0.60, 0.64],
-      horizon: [1.42, 0.68, 0.38], sparkle: 0.70                 // molten peach-gold band low over the sea
+    var dusk = { // deep orange-pink molten sunset — warmer + more saturated than dawn, long warm light
+      top: lerp3(m3(b.skyTop, [0.46, 0.34, 0.72]), [0.44, 0.22, 0.52], 0.46),
+      bot: lerp3(m3(b.skyBot, [1.10, 0.58, 0.42]), [1.22, 0.42, 0.26], 0.62),
+      sun: [1.55, 0.78, 0.36],
+      ambTop: [0.46, 0.30, 0.46], ambBot: [0.36, 0.19, 0.22],
+      fog: lerp3(m3(b.fog, [1.06, 0.58, 0.44]), [1.12, 0.44, 0.30], 0.52), fogD: 0.0009, shadowK: 0.80, water: [0.80, 0.54, 0.56],
+      horizon: [1.55, 0.58, 0.28], sparkle: 0.72                 // molten peach-gold band low over the sea
     };
     // sun crosses the horizon at tod≈0.23 / 0.77 (see sunDir) — keys straddle those moments
     return [[0.00, night], [0.185, night], [0.25, dawn], [0.34, day], [0.66, day], [0.755, dusk], [0.84, night], [1.00, night]];
@@ -245,6 +317,11 @@
   function sunDir() { var ang = (tod - 0.25) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
   function norm(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function smoothstep01(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
+  // Phase 14a: ink-outline colour — a warm storybook line, never pure black (a comic-noir black
+  // outline would fight the chromatic shadow ramp); drifts from warm umber by day to a warm
+  // plum-grey by night so it still reads against the darker night grade instead of vanishing.
+  function outlineTint(en) { return lerp3([0.20, 0.12, 0.08], [0.16, 0.11, 0.15], en.night); }
 
   // ---- matrices ----
   var mView = mat4 && mat4.create(), mProj = mat4 && mat4.create(), mVP = mat4 && mat4.create(),
@@ -283,6 +360,7 @@
     var hh = Math.hypot(sd[0], sd[2]) || 1, ox = -sd[0] / hh, oz = -sd[2] / hh;
     var Bp = E.P_blob; gl.useProgram(Bp.p); gl.uniformMatrix4fv(Bp.u.uVP, false, mVP);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blobTex); gl.uniform1i(Bp.u.uTex, 1); gl.uniform1f(Bp.u.uStr, str);
+    gl.uniform3fv(Bp.u.uTint, [0, 0, 0]);   // black contact shadow (uTint is shared program state with drawWakes — always set it explicitly)
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
     for (var i = 0; i < scene.blobs.length; i++) {
       var b = scene.blobs[i], y = HARBOR_MODELS.heightAt(b.x, b.z) + 0.06, sh = (stretch - 1) * b.r * 0.4;
@@ -325,7 +403,12 @@
     var rng = mulberry(hash('amb:' + biomeId + ':' + Math.round(cx) + ':' + era));
     var nBoats = 2 + Math.min(9, era * 2 + (dev / 5 | 0)), nGulls = 4 + Math.min(12, era * 2 + (dev / 4 | 0)), boats = [], gulls = [], i;
     for (i = 0; i < nBoats; i++) {
-      boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20, hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: rng() < 0.4 });
+      // Phase 16a: ambient traffic is a SHIPYARD mix — small one-mast dinghies filling most of the
+      // bay, with the occasional bigger one-mast-plus-jib sloop (the old 'big' scale flag now picks
+      // the class outright instead of just stretching the same triangle).
+      var big = rng() < 0.4;
+      boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20,
+        hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: big, cls: big ? 'sloop' : 'dinghy', sc: 0.92 + rng() * 0.22 });
     }
     for (i = 0; i < nGulls; i++) {
       gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
@@ -336,6 +419,24 @@
   // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
   function sailSway(ph) { return Math.sin(clock * 1.7 + ph) * 0.07 + Math.sin(clock * 0.53 + ph * 0.7) * 0.025; }   // ±~5.5°
   function sailBillow(ph) { return 1 + Math.sin(clock * 2.4 + ph * 1.9) * 0.045; }                                  // ±4.5% width
+  // Phase 16a: draw one SHIPYARD ship — hull (tint-ready, uBase = hullC), trim (baked real
+  // colours: keel/planks/gunwale/rudder/bowsprit/masts/rigging/cabin/pennant/props — one call
+  // with uVCol toggled to 1 so its own vertex colours win over uBase), then each sail as its own
+  // mesh billowing/swaying on phase (sd.phase + phaseBase) so a two-masted ship's sails never move
+  // in lockstep. sailC may be a single colour (every sail) or an array indexed per sail.
+  function drawShip(M, cls, x, y, z, yaw, scale, hullC, sailC, phaseBase) {
+    var S = SHIP[cls]; if (!S) return;
+    y -= S.meta.draft * scale;                    // ride IN the water: waterline ~1/3 up the hull
+    gl.uniform3fv(M.u.uBase, hullC);
+    composeRYS(mModel, x, y, z, scale, scale, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
+    gl.uniform1f(M.u.uVCol, 1); drawMesh(M, S.trim); gl.uniform1f(M.u.uVCol, 0);
+    for (var i = 0; i < S.sails.length; i++) {
+      var sm = S.sails[i], ph = sm.phase + (phaseBase || 0), billow = scale * sailBillow(ph);
+      gl.uniform3fv(M.u.uBase, Array.isArray(sailC[0]) ? (sailC[i] || sailC[0]) : sailC);   // nested array = per-sail colours; flat [r,g,b] = every sail
+      composeRYS(mModel, x, y, z, billow, scale, scale, yaw + sailSway(ph));
+      gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sm.mesh);
+    }
+  }
   // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
   function drawAmbient(M) {
     if (!ambient) return;
@@ -346,16 +447,8 @@
       // heading = tangent of the ellipse
       nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1); nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
       yaw = Math.atan2(nx, nz);
-      var sc = b.big ? 1.5 : 1, bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
-      // rounded wooden hull (flattened 12-gon, long & narrow), riding the water
-      gl.uniform3fv(M.u.uBase, b.hull);
-      composeRYS(mModel, x, 0.55 + bob, z, 3.6 * sc, 1.0, 1.5 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // little deck cabin
-      gl.uniform3fv(M.u.uBase, [b.hull[0] * 0.8, b.hull[1] * 0.8, b.hull[2] * 0.78]);
-      composeRYS(mModel, x, 1.2 + bob, z, 1.5 * sc, 1.0, 1.2 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // tall triangular sail — swaying + billowing in the shared breeze
-      gl.uniform3fv(M.u.uBase, [0.96, 0.95, 0.92]);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc * sailBillow(b.a0), 4.6 * sc, 0.5, yaw + sailSway(b.a0)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      var bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
+      drawShip(M, b.cls, x, bob, z, yaw, b.sc, b.hull, [0.94, 0.93, 0.90], b.a0);
     }
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
@@ -376,8 +469,14 @@
   var fleet = { exp: [], routes: [], rival: null, at: -1e9 };
   var FLEET_SAIL = [[0.78, 0.9, 1.0], [0.55, 0.95, 0.72], [1.0, 0.82, 0.34], [0.85, 0.5, 1.0]];       // sail tint per destination tier 1..4
   var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
-  var EXP_HULL = [0.38, 0.26, 0.17], EXP_CABIN = [0.3, 0.21, 0.14], RTE_SAIL = [0.93, 0.91, 0.87],
-      RVL_HULL = [0.15, 0.13, 0.18], RVL_CABIN = [0.1, 0.09, 0.13], RVL_SAIL = [0.06, 0.05, 0.08];
+  var EXP_HULL = [0.38, 0.26, 0.17], RTE_SAIL = [0.93, 0.91, 0.87],
+      RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08];
+  // Phase 16a: era gate for the route freighter's SHIPYARD class — 'Industrial Port' (era 2, see
+  // sim.js ERAS) is when the world plausibly has steam power, so route ships upgrade from sail
+  // (brig) to stack/funnel (steamer) right when the static port scene itself starts getting a
+  // crane + container ship (models.js assemblePort's own era>=2 gate) — the fleet and the harbour
+  // read as the same era together.
+  function routeShipClass() { return era >= 2 ? 'steamer' : 'brig'; }
   function refreshFleet() {
     fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null;
     var p = scene.port; if (!p || !simReady()) return;
@@ -396,63 +495,147 @@
         sail: FLEET_SAIL[clamp((a.tier || 1) - 1, 0, 3)]
       });
     }
-    var net = SIM.network();
+    var net = SIM.network(), rCls = routeShipClass();
     for (i = 0, k = 0; i < net.routes.length && k < 4; i++) {
       var rt = net.routes[i]; if (rt.a !== biomeId && rt.b !== biomeId) continue;
       var h = hash('rt:' + rt.id), roff = ((h % 1000) / 1000 - 0.5) * 1.7;   // stable heading per route id
       ca = Math.cos(roff); sa = Math.sin(roff); dx = ox * ca + oz * sa; dz = oz * ca - ox * sa;
       var hull = FLEET_HULL[rt.res] || FLEET_HULL.goods;
-      fleet.routes.push({ dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), sp: 0.09 + (h % 7) * 0.008, ph: (h % 200) / 100, hull: hull, cargo: [hull[0] * 0.8, hull[1] * 0.8, hull[2] * 0.8] });
+      fleet.routes.push({ dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), sp: 0.09 + (h % 7) * 0.008, ph: (h % 200) / 100, hull: hull, cargo: [hull[0] * 0.8, hull[1] * 0.8, hull[2] * 0.8], cls: rCls });
       k++;
     }
     var rr = rivalGet();
     if (rr && rr.race) fleet.rival = { cx: p.x + ox * 96, cz: p.z + oz * 96, px: oz, pz: -ox };   // patrol line runs along the coast
   }
-  // draw the meta fleet; assumes the same flat-colour program state as drawAmbient
+  // draw the meta fleet; assumes the same flat-colour program state as drawAmbient. Each kind maps
+  // to a SHIPYARD class: expedition → schooner (tier-tinted sails, kept), route → brig (resource-
+  // tinted hull + kept deck cargo) or steamer once the port's era is industrial+, rival → corsair.
   function drawFleet(M) {
     var p = scene.port; if (!p) return;
     if (clock - fleet.at > 1) refreshFleet();
     var i, x, z, yaw, bob, e, r;
-    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships (1.3x, tier-tinted sail)
+    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships: schooner, tier-tinted sails
       e = fleet.exp[i];
       var f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2;        // out for the first half, home for the second
       var d = 28 + f * 132;                                        // ready ships wait just off the harbour
       x = p.x + e.dx * d; z = p.z + e.dz * d;
       yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
-      gl.uniform3fv(M.u.uBase, EXP_HULL);
-      composeRYS(mModel, x, 0.55 + bob, z, 4.68, 1.0, 1.95, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, EXP_CABIN);
-      composeRYS(mModel, x, 1.2 + bob, z, 1.95, 1.0, 1.56, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, e.sail);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.86 * sailBillow(e.ph), 5.98, 0.5, yaw + sailSway(e.ph)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, 'schooner', x, bob, z, yaw, 1.0, EXP_HULL, e.sail, e.ph);
     }
-    for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters (resource-tinted hull + deck cargo)
+    for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters: brig (+ kept deck cargo) or late-era steamer
       r = fleet.routes[i];
       var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph;
       var dd = 24 + ff * 92;
       x = p.x + r.dx * dd; z = p.z + r.dz * dd;
       yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + r.ph * 3) * 0.3;
-      gl.uniform3fv(M.u.uBase, r.hull);
-      composeRYS(mModel, x, 0.55 + bob, z, 3.6, 1.0, 1.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, r.cargo);
-      composeRYS(mModel, x, 1.35 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
-      gl.uniform3fv(M.u.uBase, RTE_SAIL);
-      composeRYS(mModel, x, 1.4 + bob, z, 1.9 * sailBillow(r.ph * 3), 3.7, 0.5, yaw + sailSway(r.ph * 3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, r.cls, x, bob, z, yaw, 1.0, r.hull, RTE_SAIL, r.ph * 3);
+      if (r.cls === 'brig') {                                      // kept: a tinted cargo crate riding the deck (steamer bakes its own containers)
+        gl.uniform3fv(M.u.uBase, r.cargo);
+        composeRYS(mModel, x, 2.2 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);   // brig deck y ≈ H*0.99 - draft + crate half-height
+      }
     }
-    if (fleet.rival) {                                             // Baron Krall patrols while the race is on
+    if (fleet.rival) {                                             // Baron Krall's corsair patrols while the race is on
       var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
       x = rv.cx + rv.px * Math.sin(pa) * 46; z = rv.cz + rv.pz * Math.sin(pa) * 46;
       yaw = Math.atan2(rv.px * dir, rv.pz * dir);
       bob = Math.sin(clock * 1.3) * 0.3;
-      gl.uniform3fv(M.u.uBase, RVL_HULL);
-      composeRYS(mModel, x, 0.55 + bob, z, 5.76, 1.1, 2.4, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, RVL_CABIN);
-      composeRYS(mModel, x, 1.3 + bob, z, 2.4, 1.1, 1.9, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, RVL_SAIL);
-      composeRYS(mModel, x, 1.5 + bob, z, 3.5 * sailBillow(1.3), 7.4, 0.5, yaw + sailSway(1.3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, 'corsair', x, bob, z, yaw, 1.0, RVL_HULL, RVL_SAIL, 1.3);
     }
+  }
+  // Phase 16a: test-only forced close-up ship (see __harbor.debugShip) — parked AT the camera
+  // target in a 3/4 view regardless of founded/fleet state, so a screenshot can isolate one class
+  // (camera dist frames it directly). Colours match each class's real in-game tints.
+  var DEBUG_LOOK = { dinghy: [[0.5, 0.4, 0.28], [0.94, 0.93, 0.90]], sloop: [[0.45, 0.22, 0.14], [0.94, 0.93, 0.90]],
+    brig: [[0.9, 0.52, 0.2], [0.93, 0.91, 0.87]], schooner: [[0.38, 0.26, 0.17], [1.0, 0.82, 0.34]],
+    steamer: [[0.30, 0.34, 0.42], [0.9, 0.9, 0.9]], corsair: [[0.15, 0.13, 0.18], [0.06, 0.05, 0.08]] };
+  function drawDebugShip(M) {
+    var look = DEBUG_LOOK[DEBUG_SHIP] || DEBUG_LOOK.dinghy;
+    drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
+  }
+
+  // Phase 14a: revive the dormant PCF shadow path. A small directional-light ortho frustum,
+  // RECENTRED ON THE CAMERA TARGET every frame (no cascades needed for a human-scale stylized
+  // port — the target is always roughly where the player is looking), rendered into the
+  // pre-existing shadowFB/shadowTex from gl.js. Only static building geometry + the modern
+  // glTF skyline cast (cheap, and the soft contact-shadow blobs already cover boats/crane/gulls);
+  // everything still RECEIVES shadows via vLP in V_MAIN regardless. Gated behind postEnabled().
+  var SHADOW_R = 130, SHADOW_D = 220, SHADOW_NEAR = 1, SHADOW_FAR = 560;
+  function renderShadowMap(target, sd) {
+    // sd (sunDir) points FROM the surface TOWARD the sun — the light camera sits sunward of the target
+    var lightEye = [target[0] + sd[0] * SHADOW_D, target[1] + sd[1] * SHADOW_D, target[2] + sd[2] * SHADOW_D];
+    mat4.lookAt(mLV, lightEye, target, [0, 1, 0]);
+    mat4.ortho(mLP, -SHADOW_R, SHADOW_R, -SHADOW_R, SHADOW_R, SHADOW_NEAR, SHADOW_FAR);
+    mat4.mul(mLVP, mLP, mLV);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, E.shadowFB); gl.viewport(0, 0, E.SH, E.SH);
+    gl.clear(gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+    var Dp = E.P_depth; gl.useProgram(Dp.p); gl.uniformMatrix4fv(Dp.u.uLightVP, false, mLVP);
+    gl.uniformMatrix4fv(Dp.u.uModel, false, mI);
+    drawMesh(Dp, meshFlat); drawMesh(Dp, meshGrit); drawMesh(Dp, meshFac);
+    if (atlasTex && cityModels && scene.city.length) {
+      for (var i = 0; i < scene.city.length; i++) {
+        var c = scene.city[i], cm = cityModels[c.bi]; if (!cm) continue;
+        composeRY(mModel, c.x, HARBOR_MODELS.heightAt(c.x, c.z) - 0.3, c.z, c.s, c.rot); gl.uniformMatrix4fv(Dp.u.uModel, false, mModel);
+        for (var pi = 0; pi < cm.prims.length; pi++) drawMesh(Dp, cm.prims[pi].mesh);
+      }
+    }
+  }
+
+  // Phase 14a: cheap wake trails — alpha-quad decals (reusing the existing P_blob contact-shadow
+  // pipeline, see wakeTexture() above) trailing every moving hull. Recomputing each vessel's
+  // world position here (same formulas as drawAmbient/drawFleet) is far cheaper and more robust
+  // in this hand-rolled engine than adding a second shader + a ship-position uniform array
+  // plumbed into F_WATER — boat counts are tiny (a dozen-ish) and this reuses a battle-tested path.
+  function collectWakes() {
+    var out = [], i;
+    if (ambient) {
+      for (i = 0; i < ambient.boats.length; i++) {
+        var b = ambient.boats[i], ang = b.a0 + clock * b.sp;
+        var x = ambient.cx + Math.cos(ang) * b.rx, z = ambient.cz + Math.sin(ang) * b.rz;
+        var nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1), nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
+        // Phase 16a: wake width tracks the SHIPYARD class — a dinghy leaves a ripple, a sloop a real trail
+        out.push({ x: x, z: z, yaw: Math.atan2(nx, nz), sc: (b.cls === 'sloop' ? 1.0 : 0.55) * b.sc });
+      }
+    }
+    var p = scene.port;
+    if (p) {
+      if (clock - fleet.at > 1) refreshFleet();
+      var e, r, x2, z2, yaw2, f, d;
+      for (i = 0; i < fleet.exp.length; i++) {
+        e = fleet.exp[i]; f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2; d = 28 + f * 132;
+        x2 = p.x + e.dx * d; z2 = p.z + e.dz * d; yaw2 = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: 1.5 });                                   // schooner: long elegant hull, long wake
+      }
+      for (i = 0; i < fleet.routes.length; i++) {
+        r = fleet.routes[i]; var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph, dd = 24 + ff * 92;
+        x2 = p.x + r.dx * dd; z2 = p.z + r.dz * dd; yaw2 = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: r.cls === 'steamer' ? 1.7 : 1.3 });       // steamer churns harder than the brig
+      }
+      if (fleet.rival) {
+        var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
+        x2 = rv.cx + rv.px * Math.sin(pa) * 46; z2 = rv.cz + rv.pz * Math.sin(pa) * 46;
+        out.push({ x: x2, z: z2, yaw: Math.atan2(rv.px * dir, rv.pz * dir), sc: 1.4 });   // corsair
+      }
+    }
+    return out;
+  }
+  function drawWakes(en) {
+    var list = collectWakes(); if (!list.length || !wakeTex) return;
+    var Bp = E.P_blob; gl.useProgram(Bp.p); gl.uniformMatrix4fv(Bp.u.uVP, false, mVP);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, wakeTex); gl.uniform1i(Bp.u.uTex, 1);
+    gl.uniform3fv(Bp.u.uTint, [0.93, 0.97, 1.0]);   // white foam (P_blob's uTint is shared with drawBlobs' black shadows — always set explicitly)
+    gl.uniform1f(Bp.u.uStr, 0.5 * (0.30 + 0.70 * en.day));   // matches the shoreline foam's ToD fade — no glowing wakes at night
+    // depth-tested (no write) so hulls/land occlude wakes correctly; the quad floats just above
+    // the wave crests (water surface tops out ~+0.015) so it never z-fights the animated sea.
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i], dx = Math.sin(s.yaw), dz = Math.cos(s.yaw), half = 7.5 * s.sc;
+      var cx = s.x - dx * (half + 1.2 * s.sc), cz = s.z - dz * (half + 1.2 * s.sc);   // trail starts at the stern
+      composeRYS(mModel, cx, 0.08, cz, 2.4 * s.sc, 1, half, s.yaw + Math.PI); gl.uniformMatrix4fv(Bp.u.uModel, false, mModel);
+      drawMesh(Bp, E.blobQuad);
+    }
+    gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
   }
 
   function render() {
@@ -460,13 +643,17 @@
     if (scene.port && !ambient) buildAmbient();
     var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
     var parts = scene.crane ? craneParts() : [];
+    var quality = postEnabled();   // Phase 14a: single quality gate drives DoF/bloom + ink outlines + soft shadows
+    // sun-height shadow strength (see uShadowOn note below); skip the whole depth pass when it can't bite
+    var shadowStr = quality ? smoothstep01((sd[1] - 0.10) / 0.22) : 0;
+    if (shadowStr > 0.01) renderShadowMap(target, sd);
 
-    // main (shadows removed — cleaner cartoon look). Phase 10c: when the miniature look is on,
-    // the whole scene renders into an offscreen RT and composites to screen at the end.
-    var rt = postEnabled() ? ensurePostRT() : null;
+    // main. Phase 10c/14a: when quality is on, the whole scene renders into an offscreen RT and
+    // composites to screen at the end (tilt-shift DoF + bloom-lite + ink outlines, all one pass).
+    var rt = quality ? ensurePostRT() : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fb : null); gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(en.bot[0], en.bot[1], en.bot[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    mat4.perspective(mProj, 0.82, canvas.width / canvas.height, 0.5, 1600); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
+    mat4.perspective(mProj, CAM_FOVY, canvas.width / canvas.height, CAM_NEAR, CAM_FAR); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
     var i;
 
     // sky
@@ -489,10 +676,24 @@
     gl.uniform3fv(M.u.uSunDir, sd); gl.uniform3fv(M.u.uSunCol, en.sun);
     gl.uniform3fv(M.u.uAmbTop, en.ambTop);                      // authored ToD ambient (sky bounce)
     gl.uniform3fv(M.u.uAmbBot, en.ambBot);                      // authored ToD ambient (ground bounce)
-    gl.uniform3fv(M.u.uShadowTint, biome.shadowTint || [0.68, 0.72, 1.06]); gl.uniform1f(M.u.uShadowK, en.shadowK);
+    gl.uniform3fv(M.u.uShadowTint, biome.shadowTint || [0.58, 0.64, 1.08]); gl.uniform1f(M.u.uShadowK, en.shadowK);
     gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.fog); gl.uniform1f(M.u.uFogD, en.fogD);  // gentle authored distance fog
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
-    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.36); gl.uniform1f(M.u.uShadowOn, 0);
+    // Phase 14a palette pop: punchier, more confident colour at noon; slightly desaturated +
+    // deeper-crushed mid-shadows after dark for mood (never blown highlights, never grey shadows —
+    // uCrush's m*(1-m) factor in F_MAIN protects both ends of the range).
+    // Phase 16b: crisper noon (uSat day term bumped) + inkier night (uCrush night term bumped)
+    // for the storybook light/dark mood swing.
+    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.32 + 0.16 * en.day - 0.10 * en.night);
+    gl.uniform1f(M.u.uCrush, 0.06 + 0.15 * en.night);
+    // Phase 14a: revived PCF soft shadows — same directional light, recentred ortho frustum from
+    // renderShadowMap() above, gated behind the same quality flag as the post pass. Strength
+    // fades with sun height (see shadow() in gl.js): full at noon, gone by dusk — grazing light
+    // over the coarse 5-unit terrain grid would mottle with self-shadow acne, and the blob
+    // decals already stretch long/soft for the low-sun look.
+    gl.uniformMatrix4fv(M.u.uLightVP, false, mLVP);
+    gl.uniform1f(M.u.uShadowOn, shadowStr);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, shadowStr > 0.01 ? E.shadowTex : null); gl.uniform1i(M.u.uShadow, 2);
     gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uVCol, 1); gl.uniform1f(M.u.uAlbedo, 0);
     gl.uniformMatrix4fv(M.u.uModel, false, mI);
     gl.activeTexture(gl.TEXTURE1); gl.uniform1i(M.u.uTex, 1);
@@ -512,6 +713,7 @@
     }
     // living port: sailing boats + wheeling gulls (flat-colour, same program state as crane parts)
     if (scene.port) { drawAmbient(M); drawFleet(M); }
+    if (DEBUG_SHIP) drawDebugShip(M);   // Phase 16a test-only: forced close-up ship (works founded or wild)
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
     if (foundMode() && sites.length) {
@@ -523,6 +725,13 @@
       }
     }
 
+    // CRITICAL (RTT feedback trap, doubled for Phase 14a — see gl.js createRT comment): shadowTex
+    // is about to become shadowFB's attachment again at the TOP of next frame's render() (via
+    // renderShadowMap). Unbind it from unit 2 now, while shadowFB is not the draw target, so it's
+    // never simultaneously bound-as-sampler + bound-as-attachment (that's a silent feedback loop —
+    // a GL warning, and the browser test suite fails on that warning).
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE1);
+
     // soft contact shadows
     drawBlobs(sd);
 
@@ -533,21 +742,36 @@
     gl.uniform3fv(W.u.uSky, lerp3(en.bot, en.horizon, 0.4)); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient incl. the horizon glow
     gl.uniform3fv(W.u.uFog, en.fog); gl.uniform1f(W.u.uFogD, en.fogD);
     gl.uniform1f(W.u.uSparkle, en.sparkle);   // ToD-authored sparkle: strong day/dusk, faint moon-glints at night
+    gl.uniform1f(W.u.uFoam, 0.12 + 0.88 * en.day);   // Phase 14a: shoreline foam full by day, faint by night (never a glowing coast)
     gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
 
-    // Phase 10c composite: tilt-shift miniature DoF + bloom-lite, one fullscreen kernel.
+    // Phase 14a: wake trails, composited over the water (alpha decals — see drawWakes above)
+    drawWakes(en);
+
+    // Phase 10c/14a composite: tilt-shift miniature DoF + bloom-lite + ink outlines, one fullscreen kernel.
     // (The 2D cinematic/FX layers are DOM canvases ABOVE the WebGL canvas — untouched.)
     if (rt) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
       gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.CULL_FACE);
       var PP = E.P_post; gl.useProgram(PP.p);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rt.tex); gl.uniform1i(PP.u.uTex, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rt.depthTex); gl.uniform1i(PP.u.uDepth, 1);
       gl.uniform2fv(PP.u.uTexel, [1 / rt.w, 1 / rt.h]);
       gl.uniform1f(PP.u.uFocusY, POST_FOCUS_Y); gl.uniform1f(PP.u.uFocusW, POST_FOCUS_W);
       gl.uniform1f(PP.u.uBloomThresh, POST_BLOOM_T); gl.uniform1f(PP.u.uBloomAmt, POST_BLOOM_A);
+      gl.uniform1f(PP.u.uNear, CAM_NEAR); gl.uniform1f(PP.u.uFar, CAM_FAR); gl.uniform1f(PP.u.uFovY, CAM_FOVY); gl.uniform1f(PP.u.uAspect, canvas.width / canvas.height);
+      gl.uniform1f(PP.u.uOutlineOn, quality ? 1 : 0);
+      gl.uniform1f(PP.u.uOutlineDepthT, OUTLINE_DEPTH_T); gl.uniform1f(PP.u.uOutlineNormT, OUTLINE_NORM_T);
+      gl.uniform1f(PP.u.uOutlineFade, OUTLINE_FADE); gl.uniform1f(PP.u.uOutlineMaxDist, OUTLINE_MAXDIST);
+      gl.uniform1f(PP.u.uOutlineWidth, OUTLINE_WIDTH);
+      gl.uniform3fv(PP.u.uOutlineTint, outlineTint(en));
       drawMesh(PP, E.quad);
-      gl.bindTexture(gl.TEXTURE_2D, null);   // CRITICAL: unbind rt.tex from unit 0 — P_main's uShadow sampler defaults to 0, so leaving it bound = feedback loop next frame (P_main draws dropped)
+      // CRITICAL (doubled for Phase 14a): unbind BOTH rt.tex (unit 0) and rt.depthTex (unit 1) —
+      // they're about to become this same FBO's attachments again next frame; leaving either
+      // bound as a sampler while its own FBO is the draw target is the feedback-loop trap.
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, null);
       gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.enable(gl.CULL_FACE);
       gl.activeTexture(gl.TEXTURE1);   // scene passes bind their textures on unit 1 — restore
     }
@@ -931,6 +1155,27 @@
       FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
     }
   }
+  // Phase 16a: steamer funnel smoke — the same soft grey puffs as the factory chimneys (above),
+  // emitted from each SHIPYARD steamer's funnel top (meta.funnel local offset rotated by the
+  // ship's current yaw, same position math as drawFleet). Gentle: one puff/sec per steamer.
+  var funnelT = 0;
+  function emitFunnelSmoke(dt) {
+    if (!FX || cine || tradeOpen) return;
+    var p = scene.port; if (!p || !fleet.routes.length) return;
+    funnelT += dt; if (funnelT < 1.0) return;
+    funnelT -= 1.0;
+    var fun = SHIP.steamer && SHIP.steamer.meta.funnel; if (!fun) return;
+    for (var i = 0; i < fleet.routes.length; i++) {
+      var r = fleet.routes[i]; if (r.cls !== 'steamer') continue;
+      var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph, dd = 24 + ff * 92;
+      var x = p.x + r.dx * dd, z = p.z + r.dz * dd, yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
+      var c = Math.cos(yaw), s = Math.sin(yaw);
+      var sc = worldToScreen(x + fun[0] * c + fun[2] * s, fun[1], z - fun[0] * s + fun[2] * c);
+      if (!sc) continue;
+      var g = 0.60 + Math.random() * 0.2, wind = 8 + Math.sin(clock * 0.53) * 4;   // same shared breeze as chimneys/sails
+      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 4, vy: -16 - Math.random() * 10, life: 1.4 + Math.random() * 0.8, max: 2.2, size: 4 + Math.random() * 4, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.45)', gravity: -5, shape: 'circle' });
+    }
+  }
 
   // ---- Era Ascension cinematic ----
   // Phase 12b: the one natural pause where a portal SDK gets to show a commercial break. It fires
@@ -1023,6 +1268,7 @@
     }
     render();
     emitSmoke(dt);                                               // industry breathes: chimney smoke once you manufacture
+    emitFunnelSmoke(dt);                                         // Phase 16a: steamers puff too
     if (FX && fxCtx) {                                            // draw the 2D juice overlay (with screenshake)
       FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
       fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
@@ -2599,7 +2845,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v64';
+  var BUILD_TAG = 'v65';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2671,7 +2917,7 @@
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!musicOff ? ' on' : '') + '" data-set="music"><span class="mi-n">Music</span><span class="mi-c">' + (musicOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
-    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Miniature look</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
+    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Cartoon FX</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
     // Phase 15b: pace — Relaxed (default) spaces storms/events further apart; Lively is the original feel.
     h += '<div class="mp-sec">Pace</div><div class="mp-grid">';
@@ -3098,11 +3344,21 @@
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
-    // cartoon ambient shapes: a rounded hull (flat 12-gon), a triangular sail, a small gull triangle
-    hullMesh = E.mesh(new HGL.Builder().cyl(0, -0.5, 0, 1, 1, 12, [1, 1, 1], 1).data());
-    sailMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 1, 3, [1, 1, 1], 0.05).data());
     gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
-    waterMesh = E.mesh(E.plane(2900, 300)); facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture());
+    // Phase 16a: SHIPYARD — build all six real ship-class meshes once (hull/trim/sails); see
+    // HARBOR_MODELS.SHIPYARD (models.js) for the shared part-builder kit + per-class spec table.
+    var shipVertTotal = 0, shipStatsByClass = {};
+    HARBOR_MODELS.SHIPYARD.CLASSES.forEach(function (cls) {
+      var s = HARBOR_MODELS.SHIPYARD.build(cls);
+      var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
+      var sailMeshes = s.sails.map(function (sd) { return { mesh: E.mesh(sd.data), phase: sd.phase, verts: sd.data.positions.length / 3 }; });
+      var sailV = sailMeshes.reduce(function (a, sm) { return a + sm.verts; }, 0);
+      SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, meta: s.meta };
+      shipStatsByClass[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV };
+      shipVertTotal += hullV + trimV + sailV;
+    });
+    shipStats = { classes: shipStatsByClass, total: shipVertTotal, oldShipBaseline: 78 };   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives
+    facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture()); wakeTex = E.texture(wakeTexture());   // waterMesh is (re)built per-biome in buildBiome() → buildWaterMesh() (Phase 14a: bakes shore-foam heights)
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
     if (SIM && SIM.setPace) SIM.setPace(PACE_OPTIONS[paceMode].mul);  // Phase 15b: apply saved/default pace BEFORE any tick (incl. offline catch-up below)
@@ -3171,9 +3427,16 @@
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
-    post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail }; },
+    post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail, outlines: postEnabled(), shadow: postEnabled() }; },   // Phase 14a: outlines + soft shadows ride the same quality gate — see render()
+    // Phase 16b: vibrant-storybook debug hook — the live ToD-lit deep/shallow water colours + the
+    // shore-band count F_WATER's gradient quantizes into, and the tuned outline width/threshold
+    // (see OUTLINE_* above / F_POST in gl.js) so tests can assert the new look is actually wired.
+    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true }; },
+    outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH }; },
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
+    shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
+    debugShip: function (cls) { DEBUG_SHIP = (cls && SHIP[cls]) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears)
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
     setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },
@@ -3186,7 +3449,7 @@
     goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; },
     goalOkAt: function (i) { return !!(i < GOALS.length ? GOALS[i] : genGoal(i)).ok(SIM.state()); },   // test hook: evaluate any ladder goal's ok() without needing goalIdx to be there yet
     tickAuto: function () { autoT = 10; tickAutomation(2); },
-    lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
+    lookAt: function (x, z, dist, el, az, ty) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } if (ty != null) { C.ty = ty; } },   // Phase 16a: optional ty for debug-ship close-up framing
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, msg: tradeAct ? tradeAct.textContent : '' }; },
@@ -3244,7 +3507,8 @@
     rival: function () { return rivalGet(); },
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
-    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0 }; },
+    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0,
+      expClass: fleet.exp.length ? 'schooner' : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null }; },   // Phase 16a: kind→SHIPYARD class mapping
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
     season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
     fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); },

@@ -155,11 +155,27 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('fleet: empty baseline', await page.evaluate(() => { var f = window.__harbor.fleet(); return f.expedition === 0 && f.route === 0 && f.rival === 0; }));
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.startVoyage('reef'); });
   ok('fleet: expedition ship at sea while voyage active', await page.evaluate(() => window.__harbor.fleet().expedition === 1));
+  // Phase 16a SHIPYARD: expedition kind maps to the schooner class while the voyage is at sea
+  ok('16a fleet: expedition ships map to the schooner class', await page.evaluate(() => window.__harbor.fleet().expClass === 'schooner'));
   await page.evaluate(() => { window.HARBOR_SIM.raw().voyages[0].endsAt = Date.now() - 1; var v = window.__harbor.voyages().active[0]; window.__harbor.collectVoyage(v.seq); });
   ok('fleet: expedition ship gone after collect', await page.evaluate(() => window.__harbor.fleet().expedition === 0));
   // living fleet: a route touching the active port spawns a shuttling cargo ship
   await page.evaluate(() => { var S = window.HARBOR_SIM; S.foundPort('tropical'); S.setActive('green'); S.raw().money = 1e6; S.addRoute('green', 'tropical', 'fish'); });
   ok('fleet: cargo ship shuttles the active-port route', await page.evaluate(() => window.__harbor.fleet().route === 1));
+  // Phase 16a SHIPYARD: the route freighter's class is era-gated — sail (brig) before the
+  // Industrial Port era, funnel (steamer) from era 2 on. Era is captured from the SIM (the
+  // authority — an earlier block set it via SIM.setEra, which game.js's own era var hasn't
+  // synced yet) and restored through __harbor.setEra so both stay consistent for the 15c
+  // assertions that follow (they rely on era 4 keeping Mountain Fjord's unlockEra(1) cleared).
+  const f16 = await page.evaluate(() => {
+    var H = window.__harbor, out = { era0: window.HARBOR_SIM.raw().era };
+    H.setEra(1); out.pre = H.fleet().routeClass;
+    H.setEra(2); out.post = H.fleet().routeClass;
+    H.setEra(out.era0);
+    return out;
+  });
+  ok('16a fleet: route ships sail as brigs pre-industrial and steamers from era 2 (era restored)',
+    f16.pre === 'brig' && f16.post === 'steamer' && await page.evaluate(() => window.HARBOR_SIM.raw().era) === f16.era0);
 
   // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
   await page.evaluate(() => window.__harbor.openTrade());
@@ -288,6 +304,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.triggerRival()); await sleep(120);
   await page.evaluate(() => { var bs = document.querySelectorAll('#rivalmodal .ev-btn'); if (bs.length) bs[bs.length - 1].click(); }); await sleep(120);
   ok('fleet: rival ship patrols during the race', await page.evaluate(() => window.__harbor.fleet().rival === 1));
+  ok('16a fleet: the rival patrols as the corsair class', await page.evaluate(() => window.__harbor.fleet().rivalClass === 'corsair'));
   await page.evaluate(() => { var r = window.__harbor.rival().race; if (r) window.HARBOR_SIM.raw().lifetimeMoney += r.target + 10; window.__harbor.forceHUD(); }); await sleep(150);
   await page.evaluate(() => { var b = document.querySelector('#rivalmodal.show .ev-btn'); if (b) b.click(); });
   ok('rival: race won recorded', await page.evaluate(() => window.__harbor.rival().wins >= 1));
@@ -392,6 +409,106 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('10c: resize (FBO recreate both ways) renders zero errors, post still on', errs.length === errsBefore10c &&
     await page.evaluate(() => window.__harbor.post().on === true));
   await page.evaluate(() => window.__harbor.setTod(0.5));
+
+  // Phase 14a: proper-cartoon pass — ink outlines + revived PCF shadows ride the SAME quality
+  // gate as the post pass (one flag, one weak-device fallback), so the assertions here pivot on
+  // post()'s new outlines/shadow fields and on multi-frame soaks with BOTH RTT passes live
+  // (shadow depth pass + scene RT with a samplable depth texture — the two feedback-loop traps).
+  const errsBefore14a = errs.length;
+  const q14 = await page.evaluate(() => window.__harbor.post());
+  ok('14a: post() exposes outline + shadow flags, ON under forced quality', q14.on === true && q14.outlines === true && q14.shadow === true);
+  await page.evaluate(() => window.__harbor.setTod(0.5));   // noon: sun-height shadow strength ~1 → depth pass definitely rendering
+  await sleep(3000);   // multi-second render soak with shadow map + post RT + depth-texture reads all live
+  ok('14a: 3s noon soak with both RTT passes live → zero GL warnings/errors', errs.length === errsBefore14a);
+  for (const t of [0.34, 0.755, 0.0]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(200); }
+  ok('14a: morning/dusk/night sweep (sun-height shadow fade path) renders zero errors', errs.length === errsBefore14a);
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  await page.setViewportSize({ width: 700, height: 500 }); await sleep(300);
+  await page.setViewportSize({ width: 414, height: 820 }); await sleep(300);
+  ok('14a: resize with shadows live (colour + depth texture recreate) renders zero errors', errs.length === errsBefore14a);
+  const q14off = await page.evaluate(() => { window.__harbor.setPost(false); return window.__harbor.post(); });
+  ok('14a: quality off → outlines + shadow flags fall back with it (legacy path)', q14off.on === false && q14off.outlines === false && q14off.shadow === false);
+  await sleep(500);   // several legacy-path frames: uShadowOn 0, no RTT, no outline pass
+  ok('14a: legacy path (quality off) renders several frames with zero errors', errs.length === errsBefore14a);
+  const q14on = await page.evaluate(() => { window.__harbor.setPost(true); return window.__harbor.post(); });
+  ok('14a: quality back on → cartoon flags return and persist', q14on.on === true && q14on.outlines === true && q14on.shadow === true &&
+    await page.evaluate(() => window.Retention.get('harbor', 'post', null) === true));
+  const gs14 = await page.evaluate(() => window.__harbor.geomStats());
+  ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 250000);
+
+  // Phase 16a: SHIPYARD — six real ship classes (models.js HARBOR_MODELS.SHIPYARD), each a
+  // static hull/trim/sails mesh set built once at boot. Budget: every class must beat the old
+  // single-primitive ship (78 verts: 12-gon hull 61 + tri sail 17) yet stay under a deliberate
+  // 4000-vert class ceiling (actual max is corsair ~1302 — headroom is for the planned future
+  // class ladders, not slack for this six). Render soak drives every class through the
+  // test-only debugShip hook so each hull+trim+sails set actually hits the GPU.
+  const errsBefore16a = errs.length;
+  const ss16 = await page.evaluate(() => window.__harbor.shipStats());
+  ok('16a shipyard: all six classes build bigger than the old ship and under the 4000-vert class budget',
+    ss16 && ss16.oldShipBaseline === 78 && ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'].every(c => {
+      var s = ss16.classes[c]; return s && s.total > ss16.oldShipBaseline && s.total < 4000;
+    }));
+  ok('16a shipyard: sails are separate animatable meshes per class, none on the steamer',
+    await page.evaluate(() => {
+      var SY = window.HARBOR_MODELS.SHIPYARD, n = {};
+      SY.CLASSES.forEach(c => { n[c] = SY.build(c).sails.length; });
+      return n.dinghy === 1 && n.sloop === 2 && n.brig === 2 && n.schooner === 3 && n.steamer === 0 && n.corsair === 2;
+    }));
+  for (const c of ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair']) {
+    await page.evaluate(cc => window.__harbor.debugShip(cc), c); await sleep(180);
+  }
+  await page.evaluate(() => window.__harbor.debugShip(null));
+  ok('16a shipyard: all six classes render several frames with zero GL warnings/errors', errs.length === errsBefore16a);
+  await page.evaluate(() => { window.__harbor.debugShip('brig'); window.__harbor.setPost(false); }); await sleep(350);
+  ok('16a shipyard: legacy quality path (post off) renders the new fleet clean', errs.length === errsBefore16a);
+  await page.evaluate(() => { window.__harbor.debugShip(null); window.__harbor.setPost(true); });
+  ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
+    await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
+
+  // Phase 16b: VIBRANT STORYBOOK world pass — bolder saturated palette, a two-tone postcard water
+  // gradient (rich teal deep -> bright turquoise shallow, quantized into toon bands), a wider/
+  // bolder ink outline, and cheap static lushness (bigger canopy trees + bushes/flowers near a
+  // founded port). Assertions pivot on the __harbor.water()/outlineTuning() debug hooks added for
+  // this phase, sentinel colour comparisons against the pre-16b (14a-era) biome palette constants,
+  // and the same zero-GL-warning render-soak pattern 14a used to prove the outline/shadow RTT
+  // passes (now carrying the new shaders) stay feedback-loop-free.
+  const errsBefore16b = errs.length;
+  const water0 = await page.evaluate(() => window.__harbor.water());
+  ok('16b: water() exposes the two-tone shore-gradient hook — 4 toon bands, shallow brighter/more turquoise than deep',
+    water0 && water0.gradientOn === true && water0.shoreBands === 4 &&
+    Array.isArray(water0.deep) && Array.isArray(water0.shallow) &&
+    (water0.shallow[0] + water0.shallow[1] + water0.shallow[2]) > (water0.deep[0] + water0.deep[1] + water0.deep[2]));
+  const outlineT = await page.evaluate(() => window.__harbor.outlineTuning());
+  ok('16b: ink outline tuned bolder than 14a — narrower depth threshold (fires more readily) + a >1x tap-width multiplier',
+    outlineT && outlineT.depthT < 0.03 && outlineT.width > 1.0);
+  // sentinel palette check: the pre-16b (14a-era) green-isles colour constants, hardcoded here —
+  // biomes.js's ground/shallow-water/roof values must have moved (bolder + more saturated), not
+  // just been left byte-identical under a new comment.
+  const OLD_GREEN = { ground: [0.21, 0.38, 0.14], shallow: [0.12, 0.46, 0.52], roof: [0.58, 0.22, 0.18] };
+  const green16b = await page.evaluate(() => { var b = window.HARBOR_BIOMES.green; return { ground: b.ground.slice(), shallow: b.shallow.slice(), roof: b.build.roof.slice() }; });
+  function luma(c) { return c[0] + c[1] + c[2]; }
+  ok('16b: green-isles palette sentinels changed from the pre-16b constants — lusher ground, brighter shallow turquoise, punchier roof red',
+    JSON.stringify(green16b.ground) !== JSON.stringify(OLD_GREEN.ground) &&
+    JSON.stringify(green16b.shallow) !== JSON.stringify(OLD_GREEN.shallow) &&
+    luma(green16b.shallow) > luma(OLD_GREEN.shallow) &&
+    green16b.roof[0] > OLD_GREEN.roof[0]);
+  // outline/water/palette soak: sweep ToD with quality (outlines+shadows) ON — proves the retuned
+  // F_POST edge detector stays sky-masked + slope-rejecting (a regression there is a hard fail)
+  // and the new F_WATER gradient math never trips the RTT feedback-loop trap.
+  for (const t of [0.0, 0.34, 0.5, 0.755]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(220); }
+  ok('16b: ToD soak with the retuned outline + two-tone water live → zero GL warnings/errors (outline stays sky-masked)', errs.length === errsBefore16b);
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  // legacy (quality off) path: palette/water/tree changes ride the same base shaders regardless of
+  // the post quality gate, so the no-outline/no-shadow fallback must stay just as clean.
+  await page.evaluate(() => window.__harbor.setPost(false)); await sleep(400);
+  ok('16b: legacy quality-off path renders the new palette/water/props clean', errs.length === errsBefore16b);
+  await page.evaluate(() => window.__harbor.setPost(true));
+  // geomStats: the bigger canopy trees + near-port bush/flower scatter raise the static-scene
+  // vertex floor a little over 14a/16a's baseline (~60k on green isles) while staying nowhere near
+  // the existing 250k ceiling — budget-aware lushness, not a poly explosion.
+  const gs16b = await page.evaluate(() => window.__harbor.geomStats());
+  ok('16b: geomStats reflects the added lushness (raised floor) and stays within the existing 250k ceiling',
+    gs16b && gs16b.verts > 60000 && gs16b.verts < 250000);
 
   // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
   // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
