@@ -992,6 +992,82 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('15d: tips flows produced zero new console/page errors', errs.length === errsBefore15d);
   await page.evaluate(() => window.__harbor.pause(false));
 
+  // Phase 17a: technology ages — Automated Harbour (era6) + Neon Horizon (era7) + the Empire
+  // Timeline strip. Tap the real era pill (not a debug shortcut) so the click-wiring itself is
+  // exercised, not just the underlying render function.
+  const errsBefore17a = errs.length;
+  await page.evaluate(() => window.__harbor.setEra(0));
+  await page.evaluate(() => window.__harbor.tapEraPill());
+  await sleep(150);
+  const tl0 = await page.evaluate(() => window.__harbor.timelineState());
+  ok('17a timeline: tapping the era pill opens the strip with one node per age + an endless tail node',
+    tl0.open === true && tl0.shown === true && tl0.nodes === 9);
+  ok('17a timeline: current-age node reflects the real era (Fishing Village at era0)', tl0.currentName === 'Fishing Village');
+  await page.evaluate(() => document.querySelector('#timelinepanel .tl-close').click());
+  await sleep(80);
+  const tl1 = await page.evaluate(() => window.__harbor.timelineState());
+  ok('17a timeline: ✕ closes the strip', tl1.open === false && tl1.shown === false);
+  // reopen, advance era in-place, confirm the current node updates; then close via tap-out (a click
+  // that lands on the backdrop itself, not the card, mirrors a real off-card tap)
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(6); window.__harbor.tapEraPill(); });
+  await sleep(120);
+  const tl2 = await page.evaluate(() => window.__harbor.timelineState());
+  ok('17a timeline: current-age node updates once the empire reaches Automated Harbour (era6)', tl2.currentName === 'Automated Harbour');
+  const reachedCount = await page.evaluate(() => document.querySelectorAll('#timelinepanel .tl-node.reached').length);
+  ok('17a timeline: earlier ages show as reached (6 ages before Automated Harbour)', reachedCount === 6);
+  await page.evaluate(() => document.getElementById('timelinepanel').click());   // tap-out (backdrop, not the card)
+  await sleep(80);
+  ok('17a timeline: tap-out (off the card) closes the strip too', await page.evaluate(() => !window.__harbor.timelineState().open));
+  ok('17a timeline: opening/closing the strip produced zero new console/GL errors', errs.length === errsBefore17a);
+
+  // era-up celebration copy names the age ("Welcome to the <Age> age!") — drive a real advance
+  // (not setEra, which bypasses doAdvance/startAscension) from era5->era6, then wait out the
+  // ascension cinematic (banner shows at t>=2.35s of a 4.2s cinematic) to read the live DOM text.
+  await page.evaluate(() => {
+    // push the required buildings straight onto the port (this run has accumulated a lot of state
+    // by this point in the suite — the per-port slot cap could otherwise block a fresh dock/factory
+    // build) so the era5->6 gate's `need` is satisfied deterministically, same as the direct-state
+    // patterns sim.test.js's grandfathering test uses.
+    var S = window.HARBOR_SIM;
+    window.__harbor.setEra(5); S.raw().money = 1e7;
+    var B = S.port('green').buildings, have = t => B.filter(b => b.type === t).length;
+    while (have('dock') < 3) B.push({ type: 'dock', level: 1, hp: 100 });
+    while (have('factory') < 2) B.push({ type: 'factory', level: 1, hp: 100 });
+  });
+  await page.evaluate(() => window.__harbor.advance());
+  // the ascension cinematic runs on the RENDER LOOP's own dt (capped at 50ms/frame — see frame() in
+  // game.js), not wall-clock time, and headless/unfocused swiftshader frame pacing can be far slower
+  // than 60fps — poll rather than guess a fixed sleep (observed up to ~10s in this environment).
+  const bannerUp = await page.waitForFunction(() => { var el = document.getElementById('ascendbanner'); return !!el && el.classList.contains('show'); }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+  ok('17a celebration: ascension cinematic reaches the banner beat', bannerUp);
+  const abName = await page.evaluate(() => { var el = document.querySelector('#ascendbanner .ab-name'); return el ? el.textContent : ''; });
+  ok('17a celebration: ascension banner welcomes the player to the new age by name', /Welcome to the Automated Harbour age!/.test(abName));
+  await sleep(2500);   // let the 4.2s cinematic fully finish before moving on
+
+  // era7 (Neon Horizon) buildings + port panorama: force the era, build a few of the new age6/7
+  // types directly (same debug path a screenshot pass would drive), rebuild the scene, and confirm
+  // the static-scene vertex budget still holds (same 10k-250k ceiling every earlier phase checked).
+  await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    S.raw().money = 1e8;
+    ['container_terminal', 'drone_bay', 'robo_crane', 'logistics_hub'].forEach(t => { if (S.canBuild(t)) S.build(t); });
+  });
+  await page.evaluate(() => window.__harbor.setEra(7));
+  await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    S.raw().money = 1e8;
+    ['solar_spire', 'holo_market', 'fusion_dock', 'sky_beacon'].forEach(t => { if (S.canBuild(t)) S.build(t); });
+  });
+  await sleep(300);
+  const gs17a = await page.evaluate(() => window.__harbor.geomStats());
+  ok('17a era7: Neon Horizon skyline (solarSpire/neonTower/droneBayPad) stays within the existing 250k vertex budget',
+    gs17a && gs17a.verts > 10000 && gs17a.verts < 250000);
+  ok('17a era7: all 8 new-age buildings buildable and recorded on the port', await page.evaluate(() => {
+    var c = window.HARBOR_SIM.state().counts;
+    return ['container_terminal', 'drone_bay', 'robo_crane', 'logistics_hub', 'solar_spire', 'holo_market', 'fusion_dock', 'sky_beacon'].every(t => (c[t] || 0) >= 1);
+  }));
+  ok('17a era7: rendering the Neon Horizon panorama produced zero new console/GL errors', errs.length === errsBefore17a);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
