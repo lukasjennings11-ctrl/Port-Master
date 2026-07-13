@@ -52,6 +52,17 @@
 
     // Detect + initialise. Safe to call once at boot. Always resolves.
     init: function () {
+      // Single-owner rule: when a games/harbor/ads.js provider adapter (crazygames.js) is in
+      // the build it claims the SDK by setting window.CG_SDK_INIT_OWNED before this runs.
+      // Calling SDK.init() twice makes the real v3 SDK reject and log — a console error portal
+      // QA will flag — and every Portal surface Harbor uses (loading bracket, gameplay
+      // bracket) is already covered by the ADS layer, so Portal stands down entirely: not
+      // available, all calls no-op. Games without the adapter (everything except the
+      // CrazyGames build of Harbor) are completely unaffected.
+      if (global.CG_SDK_INIT_OWNED) {
+        sdk = null; Portal.available = false; ready = true;
+        return Promise.resolve(false);
+      }
       sdk = findSdk();
       Portal.available = !!sdk;
       if (!sdk) { ready = true; return Promise.resolve(false); }

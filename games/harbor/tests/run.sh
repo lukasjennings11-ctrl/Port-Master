@@ -12,10 +12,13 @@ fail=0
 echo "== [1/3] sim + systems (Node, deterministic) =="
 "$NODE" "$HERE/sim.test.js" || fail=1
 
-echo "== [2/3] browser integration (headless swiftshader) =="
+echo "== [2/4] browser integration (headless swiftshader) =="
 "$NODE" "$HERE/browser.test.js" || fail=1
 
-echo "== [3/3] portal pre-flight (factory/playtest.py) =="
+echo "== [3/4] CrazyGames adapter contract (headless, mocked SDK) =="
+"$NODE" "$HERE/crazygames.test.js" || fail=1
+
+echo "== [4/4] portal pre-flight (factory/playtest.py) =="
 if command -v python3 >/dev/null 2>&1; then
   ( cd "$REPO" && python3 factory/playtest.py harbor 2>&1 | tail -1 ) || fail=1
 else
