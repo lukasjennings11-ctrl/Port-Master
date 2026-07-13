@@ -123,7 +123,10 @@
     if (!HARBOR_BIOMES[id]) id = 'green';
     biomeId = id; biome = HARBOR_BIOMES[id]; ambient = null;
     if (SIM && SIM.raw()) {
-      if (founded[id] && !SIM.port(id)) SIM.foundPort(id);         // reconcile legacy/missing port economy
+      // free=true: this reconciles a colony you already founded (e.g. after a prestige reset wipes
+      // ports but this device's `founded` site map survives) — not a new founding decision, so it
+      // never charges the Phase 15c colony fee.
+      if (founded[id] && !SIM.port(id)) SIM.foundPort(id, true);   // reconcile legacy/missing port economy
       SIM.setActive(id);                                          // HUD/manage now follow this port
     }
     if (simReady() && founded[id]) era = SIM.raw().era;            // sim is the authority on era when founded
@@ -143,8 +146,15 @@
   function saveFounded() { if (window.Retention) Retention.set(GAME, 'founded', founded); }
   function foundHere(x, z, yaw) {
     if (yaw == null) yaw = HARBOR_MODELS.portYaw(x, z);
+    // Phase 15c: founding any colony after the first charges a fee (SIM.foundPort refuses and
+    // returns null if unaffordable) — the UI already gates the button on canFoundPort(), but guard
+    // here too so a stale click can't desync the local `founded` site map from sim's actual ports.
+    if (SIM) {
+      var res = SIM.foundPort(biomeId);
+      if (!res) { sfx('lose'); return; }
+      era = SIM.raw().era; if (typeof bumpDaily === 'function') bumpDaily('found');
+    }
     founded[biomeId] = { x: x, z: z, yaw: yaw }; saveFounded();
-    if (SIM) { SIM.foundPort(biomeId); era = SIM.raw().era; if (typeof bumpDaily === 'function') bumpDaily('found'); }   // start this world's port economy
     buildBiome(biomeId);
     C.txT = x; C.tzT = z; C.distT = 130; C.elT = 0.5;        // frame the new harbour
     if (typeof updateHUD === 'function') updateHUD();
@@ -581,7 +591,14 @@
     if (foundMode()) {
       foundPanel.classList.add('show');
       if (sites.length === 1 && selSite < 0) selectSite(0, false);    // one obvious harbour — pre-select it
-      if (foundBtn) foundBtn.disabled = selSite < 0;
+      // Phase 15c: every colony after the first costs money — show it up front, ghosted when
+      // the player can't yet afford it (reuses the same "Need £" language as Manage/Expeditions).
+      var cost = SIM ? SIM.foundCost() : 0, can = SIM ? SIM.canFoundPort() : true;
+      if (foundBtn) {
+        foundBtn.textContent = cost > 0 ? (can ? 'Found colony — £' + fmt(cost) : 'Need £' + fmt(cost)) : 'Found village';
+        foundBtn.classList.toggle('ghosted', !can);
+        foundBtn.disabled = selSite < 0 || !can;
+      }
       if (selSite < 0 && foundLabel) foundLabel.textContent = 'Choose your harbour';
     } else { foundPanel.classList.remove('show'); }
   }
@@ -1044,9 +1061,17 @@
       // (site chips + "Found village") appears automatically once the world isn't founded yet.
       buildBiome(target); if (buildSelector._set) buildSelector._set(); defaultView();
       showHint('⚓ Tap the glowing harbour, then “Found village”');
+      return;
+    }
+    // Phase 15c: no unlocked-but-unfounded world — with era-unlock gone, the next best move is
+    // usually an Uncharted Waters expedition, so point straight at it when one's available.
+    var uTarget = unchartedTarget();
+    if (uTarget) {
+      if (!expOpen) toggleExp();
+      showHint('🧭 Send an expedition to Uncharted Waters to discover ' + wname(uTarget));
     } else {
-      // every unlocked world is already founded (or nothing new is unlocked yet) — nudge toward
-      // the era climb that unlocks the next coast, rather than promising a jump that isn't there.
+      // no world is even reachable yet — nudge toward the era climb, rather than promising a jump
+      // that isn't there.
       var bar = document.getElementById('biomebar');
       if (bar) { bar.classList.add('nudge'); setTimeout(function () { bar.classList.remove('nudge'); }, 1900); }
       showHint('Grow your port to unlock a new coast to found');
@@ -1220,6 +1245,29 @@
   }
   function saveUnlocked() { if (window.Retention) Retention.set(GAME, 'worlds', unlocked); }
   function unlockWorld(id) { if (HARBOR_BIOMES[id] && unlocked.indexOf(id) < 0) { unlocked.push(id); saveUnlocked(); if (buildSelector._set) buildSelector._set(); } }
+  // Phase 15c: discovery replaces era auto-unlock — worlds now open one at a time, strictly in
+  // HARBOR_BIOME_ORDER, via a paid Uncharted Waters expedition (see renderExp). Visible/startable
+  // only once the empire era has actually reached that world's unlockEra (so it still reads as
+  // "you've grown enough to reach this coast", just gated behind a deliberate expedition now
+  // instead of firing automatically the moment doAdvance() lands on that era).
+  function unchartedTarget() {
+    for (var i = 0; i < HARBOR_BIOME_ORDER.length; i++) {
+      var id = HARBOR_BIOME_ORDER[i];
+      if (!isUnlocked(id)) {
+        var b = HARBOR_BIOMES[id], eraNow = (SIM && SIM.raw()) ? SIM.raw().era : 0;
+        return (b && eraNow >= b.unlockEra) ? id : null;
+      }
+    }
+    return null;   // every world already discovered
+  }
+  // celebratory pulse on the newly-discovered world's biome-bar entry — same nudge language as the
+  // trade-map "Show me" fallback, just on the specific button instead of the whole bar.
+  function pulseDiscoveredBiome(id) {
+    var bar = document.getElementById('biomebar'); if (!bar) return;
+    var btn = bar.querySelector('[data-world="' + id + '"]'); if (!btn) return;
+    btn.classList.add('discover-pulse');
+    setTimeout(function () { btn.classList.remove('discover-pulse'); }, 2600);
+  }
   function showHint(msg) { if (!hintEl) return; hintEl.textContent = msg; hintEl.classList.remove('gone'); clearTimeout(showHint._t); showHint._t = setTimeout(function () { hintEl.classList.add('gone'); }, 1900); }
 
   // ---- Phase 11b: feature-unlock announcements — a one-time (ever, persisted) celebratory nudge
@@ -1570,11 +1618,26 @@
     if (!simReady()) { expPanel.classList.remove('show'); expOpen = false; return; }
     var v = SIM.voyages();
     var h = '<div class="mp-head">Expeditions <span class="ex-slots">' + v.used + '/' + v.slots + '</span><button id="ex-close">✕</button></div>';
+    // Phase 15c: Uncharted Waters — a pinned, visually distinct entry that discovers the next
+    // locked world (see unchartedTarget()). Hidden once a discovery voyage is already at sea (only
+    // one target at a time, so a second one would just double-book the same coast).
+    var uTarget = unchartedTarget();
+    var uActive = v.active.filter(function (a) { return a.uncharted; });
+    if (uTarget && !uActive.length) {
+      var ub = HARBOR_BIOMES[uTarget], uCost = SIM.unchartedCost(ub.unlockEra), uSecs = SIM.unchartedSecs(), uCan = SIM.canStartUncharted(ub.unlockEra);
+      h += '<div class="mp-sec">Chart a new coast</div><div class="mp-grid">';
+      h += '<button class="mp-item ex-uncharted' + (uCan ? '' : ' ghosted') + '" data-uncharted="1"' + (uCan ? '' : ' disabled') + '>' +
+        '<span class="mi-n">⛵ Uncharted Waters</span><span class="mi-d">' + mmss(uSecs) + ' voyage · discovers ' + ub.name + '</span>' +
+        '<span class="mi-c">' + (uCan ? '£' + fmt(uCost) : 'Need £' + fmt(uCost)) + '</span></button>';
+      h += '</div>';
+    }
     if (v.active.length) {
       h += '<div class="mp-sec">At sea</div><div class="mp-grid">';
       v.active.forEach(function (a) {
-        if (a.ready) h += '<button class="mp-item ex-go ready" data-collect="' + a.seq + '"><span class="mi-n">' + a.name + ' ' + tierStars(a.tier) + '</span><span class="mi-c">Collect 🎁</span></button>';
-        else { var pct = Math.round(100 * (1 - a.remaining / a.total)); h += '<div class="mp-item ex-go"><span class="mi-n">' + a.name + ' ' + tierStars(a.tier) + '</span><span class="mi-c">' + mmss(a.remaining) + '</span><div class="ex-bar"><i style="width:' + pct + '%"></i></div></div>'; }
+        var cls = 'mp-item ex-go' + (a.uncharted ? ' ex-uncharted' : '');
+        var label = a.uncharted ? '⛵ Uncharted Waters' : (a.name + ' ' + tierStars(a.tier));
+        if (a.ready) h += '<button class="' + cls + ' ready" data-collect="' + a.seq + '"><span class="mi-n">' + label + '</span><span class="mi-c">Collect 🎁</span></button>';
+        else { var pct = Math.round(100 * (1 - a.remaining / a.total)); h += '<div class="' + cls + '"><span class="mi-n">' + label + '</span><span class="mi-c">' + mmss(a.remaining) + '</span><div class="ex-bar"><i style="width:' + pct + '%"></i></div></div>'; }
       });
       h += '</div>';
     }
@@ -1587,10 +1650,31 @@
     expPanel.innerHTML = h;
     expPanel.querySelector('#ex-close').addEventListener('click', toggleExp);
     expPanel.querySelectorAll('[data-send]').forEach(function (el) { el.addEventListener('click', function () { if (SIM.startVoyage(el.getAttribute('data-send'))) { sfx('move'); haptic(14); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 14, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 150, life: 0.8, size: 4 }); renderExp(); updateHUD(); } else sfx('lose'); }); });
+    expPanel.querySelectorAll('[data-uncharted]').forEach(function (el) { el.addEventListener('click', function () {
+      var id = unchartedTarget(); if (!id) { sfx('lose'); return; }
+      var b = HARBOR_BIOMES[id];
+      if (SIM.startUncharted(b.unlockEra)) { sfx('move'); haptic(16); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 20, colors: ['#ffd56a', '#cfe8ff', '#7fe0d6'], speed: 170, life: 0.9, size: 5 }); renderExp(); updateHUD(); } else sfx('lose');
+    }); });
     expPanel.querySelectorAll('[data-collect]').forEach(function (el) { el.addEventListener('click', function () { collectVoyageUI(+el.getAttribute('data-collect')); }); });
   }
   function collectVoyageUI(seq) {
     var out = SIM.collectVoyage(seq); if (!out) return;
+    // Phase 15c: a discovery voyage doesn't pay cash/res — it unlocks the next coast. Handle it as
+    // its own celebration path rather than folding it into the normal reward-collect flow below.
+    if (out.discover) {
+      var id = unchartedTarget();   // still locked at this instant (collectVoyage hasn't unlocked it) — recompute the target it was chasing
+      if (id) {
+        unlockWorld(id);
+        pulseDiscoveredBiome(id);
+        if (achUnlock('discover1')) popAch('Pathfinder!', true);
+        announceFeature('discover_' + id, '🧭', 'New coast discovered!', wname(id) + ' — sail the world bar to found a colony');
+        showHint('🧭 Uncharted Waters returned — ' + wname(id) + ' discovered!');
+      } else showHint('🧭 Uncharted Waters returned!');
+      confettiBurst(); shakeFX(6, 0.4); sfx('win'); haptic([10, 40, 20, 40]);
+      var pwD = portWorld(); if (pwD) burstWorld(pwD.x, pwD.y, pwD.z, { count: 40, colors: ['#ffe08a', '#7fe0d6', '#fff3c4'], speed: 230, life: 1.3, size: 6 });
+      renderExp(); updateHUD();
+      return;
+    }
     metricsMilestone('firstVoyage');
     if (out.crate) grantCrate(out.crate);
     var rel = out.relic ? grantRandomRelic() : null;
@@ -2356,7 +2440,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v62';
+  var BUILD_TAG = 'v63';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2441,6 +2525,7 @@
          '📈 Fill the <b>era bar</b> (cash + required buildings) to <b>Advance</b> to bigger eras.<br>' +
          '🚢 <b>Trade network</b> links your ports into routes for passive income.<br>' +
          '⛵ <b>Expeditions</b> send ships on timed voyages — they pay out even while you’re away.<br>' +
+         '🧭 <b>Uncharted Waters</b> (in Expeditions) discovers new coasts to found — founding a colony after your first costs a fee.<br>' +
          '🏺 <b>Relics</b> drop from crates &amp; voyages — equip a <b>Loadout</b> in Legacy for permanent perks.<br>' +
          '🌊 Storms damage buildings — repair them in Manage.<br>' +
          '🏴‍☠️ <b>Baron Krall</b> challenges you to races — beat him for prizes &amp; bragging rights.<br>' +
@@ -2652,7 +2737,12 @@
   function toggleManage() { manageOpen = !manageOpen; if (manageOpen) { if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } } managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
   function renderManage() {
     if (!simReady()) { managePanel.classList.remove('show'); manageOpen = false; return; }
-    var s = SIM.state(), BT = SIM.BT, html = '<div class="mp-head">Build & upgrade<button id="mp-close">✕</button></div>';
+    var s = SIM.state(), BT = SIM.BT;
+    // Phase 15c: per-port building-slot ceiling (8 + 4×era, defenses exempt) — shown right in the
+    // header so "why can't I build more?" has an immediate, always-visible answer.
+    var atCap = s.portFounded && s.slotCap && s.slotsUsed >= s.slotCap;
+    var slotsTxt = s.portFounded ? '<span class="mp-slots' + (atCap ? ' full' : '') + '">Buildings ' + s.slotsUsed + '/' + s.slotCap + '</span>' : '';
+    var html = '<div class="mp-head">Build & upgrade' + slotsTxt + '<button id="mp-close">✕</button></div>';
     // daily missions — a "come back tomorrow" loop, rewarding Legacy; today's tide shown in the header
     var dl = dailyList();
     if (dl && dl.length) {
@@ -2693,12 +2783,18 @@
       });
       html += '</div>';
     }
-    html += '<div class="mp-sec">New buildings</div><div class="mp-grid">';
+    html += '<div class="mp-sec">New buildings</div>';
+    // Phase 15c: once the port's non-defense slots are full, explain why rather than just greying
+    // every row out — defenses (Sea Wall/Lighthouse) keep their own separate caps, so this only
+    // fires when the SHARED slot pool (not a per-type cap) is what's blocking new builds.
+    if (atCap) html += '<div class="mp-teaser mp-full">⛴ Port at capacity — advance the era for more ground</div>';
+    html += '<div class="mp-grid">';
     Object.keys(BT).forEach(function (id) {
       var t = BT[id]; if (s.era < t.era) return;                    // hide future-era types
       if (SIM.blocked && SIM.blocked(id)) return;                   // hide buildings this world can't run (e.g. desert sawmill)
       var cost = SIM.buildCost(id), can = SIM.canBuild(id);
-      html += '<button class="mp-item' + (can ? '' : ' ghosted') + '" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">' + (can ? '£' + fmt(cost) : 'Need £' + fmt(cost)) + '</span></button>';
+      var full = !can && t.cat !== 'defense' && atCap;               // slot-capped, not just unaffordable
+      html += '<button class="mp-item' + (can ? '' : ' ghosted') + '" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">' + (can ? '£' + fmt(cost) : (full ? 'Full' : 'Need £' + fmt(cost))) + '</span></button>';
     });
     html += '</div>';
     // Phase 15a: buildings are correctly hidden until their era arrives (keeps the grid readable),
@@ -2781,7 +2877,7 @@
     { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' },
     { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
     { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' },
-    { id: 'avert1', name: 'Storm Whisperer' }
+    { id: 'avert1', name: 'Storm Whisperer' }, { id: 'discover1', name: 'Pathfinder' }
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -2815,10 +2911,14 @@
     metricsMilestone('firstEra');
     var req = SIM.eraReq(SIM.raw().era), bonus = req ? Math.round(req.money * 0.1) : 0;   // 10% era-threshold grant
     SIM.advanceEra(); var toEra = SIM.raw().era;
-    var newWorlds = []; HARBOR_BIOME_ORDER.forEach(function (id) { if (HARBOR_BIOMES[id].unlockEra <= toEra && !isUnlocked(id)) { newWorlds.push(HARBOR_BIOMES[id].name); unlockWorld(id); } });
+    // Phase 15c: worlds no longer auto-unlock on era-up — discovery now happens through a paid
+    // Uncharted Waters expedition (see unchartedTarget()/renderExp). If this era-up is what makes
+    // the next coast reachable, tease that instead of silently unlocking it for free.
     var name = SIM.eraName(toEra), newBuilds = [];
     for (var bk in SIM.BT) if (SIM.BT[bk].era === toEra) newBuilds.push(SIM.BT[bk].name);
-    var unlockTxt = newBuilds.concat(newWorlds).slice(0, 4).join(' · ');
+    var uReady = unchartedTarget();
+    if (uReady && HARBOR_BIOMES[uReady].unlockEra === toEra) newBuilds.push('⛵ Uncharted Waters expedition');
+    var unlockTxt = newBuilds.slice(0, 4).join(' · ');
     grantCrate(1);                                                  // every era-up drops a salvage crate
     seasonAdd(30);                                                  // era-ups award season points
     if (window.Juice) Juice.Audio.unlock();
@@ -2964,6 +3064,11 @@
     startVoyage: function (id) { var r = SIM.startVoyage(id); if (r) { updateHUD(); if (expOpen) renderExp(); } return r; },
     collectVoyage: function (seq) { return collectVoyageUI(seq); },
     openExp: function () { if (!expOpen) toggleExp(); },
+    // Phase 15c: Uncharted Waters discovery expeditions (test/debug hooks)
+    unchartedTarget: function () { return unchartedTarget(); },
+    startUncharted: function () { var id = unchartedTarget(); if (!id) return false; var r = SIM.startUncharted(HARBOR_BIOMES[id].unlockEra); if (r) { updateHUD(); if (expOpen) renderExp(); } return r; },
+    slots: function () { return { cap: SIM.slotCap(), used: SIM.slotsUsed() }; },
+    foundInfo: function () { return { cost: SIM.foundCost(), can: SIM.canFoundPort() }; },
     relics: function () { return { count: relicCount(), total: totalRelics(), owned: ownedRelics(), meta: SIM.meta() }; },
     doctrine: function () { var d = doctrineGet(); return { pick: d.pick, caps: d.caps, unlocked: doctrineUnlocked(), pickCost: doctrinePickCost(), meta: SIM.meta() }; },
     pickDoctrine: function (id) { var r = pickDoctrine(id); if (r && legacyOpen) renderLegacy(); return r; },

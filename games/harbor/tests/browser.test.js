@@ -166,7 +166,123 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(120);
   const tg3 = await page.evaluate(() => window.__harbor.tradeState());
   ok('trade guide: card hidden once 2+ harbours are founded', tg3.founded >= 2 && tg3.guide === false);
+
+  // ---- Phase 15c: building slots + expedition-based world discovery ----
+  // Guide-card retarget: green is the only game.js-UNLOCKED world here ('tropical' above was
+  // founded via a raw SIM.foundPort() bypass, never through unlockWorld — a real player can't
+  // reach it this way), so no unlocked-but-unfounded world exists. era is 4 (set earlier), which
+  // clears Mountain Fjord's unlockEra(1) — "Show me" should now open Expeditions and point at
+  // Uncharted Waters instead of promising a jump/nudge that isn't the real next step.
+  await page.evaluate(() => { var b = document.querySelector('#trademap #tmg-show'); if (b) b.click(); });
+  await sleep(150);
+  const guide15c = await page.evaluate(() => ({
+    expShown: document.getElementById('exppanel').classList.contains('show'),
+    hint: document.getElementById('hint') ? document.getElementById('hint').textContent : '',
+    target: window.__harbor.unchartedTarget()
+  }));
+  ok('15c guide: "Show me" opens Expeditions + hints at Uncharted Waters when no unfounded-unlocked world exists',
+    guide15c.target === 'mountain' && guide15c.expShown && /uncharted waters/i.test(guide15c.hint) && /mountain/i.test(guide15c.hint));
+  await page.evaluate(() => { var b = document.getElementById('ex-close'); if (b) b.click(); });
   await page.evaluate(() => window.__harbor.closeTrade());
+
+  // Uncharted Waters row: pinned in Expeditions, correctly priced/timed, targeting the next
+  // locked world (Mountain Fjord — era1, first in HARBOR_BIOME_ORDER after green).
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.openExp(); });
+  await sleep(100);
+  const uRow = await page.evaluate(() => {
+    var row = document.querySelector('#exppanel [data-uncharted]');
+    var S = window.HARBOR_SIM;
+    return { text: row ? row.textContent : null, cost: S.unchartedCost(1), secs: S.unchartedSecs() };
+  });
+  ok('15c uncharted: row renders in Expeditions, names Mountain Fjord + the £ cost',
+    !!uRow.text && /Uncharted Waters/.test(uRow.text) && /Mountain Fjord/.test(uRow.text) && new RegExp('£' + uRow.cost).test(uRow.text));
+
+  // start it → occupies a voyage slot, renders in "At sea"; before collect, Mountain stays locked
+  const preDiscover = await page.evaluate(() => ({
+    unlocked: window.__harbor.state().unlocked.slice(),
+    ach: (window.Retention.get('harbor', 'ach', {}) || {}).discover1
+  }));
+  ok('15c uncharted: Mountain Fjord locked before the voyage is collected', preDiscover.unlocked.indexOf('mountain') < 0 && !preDiscover.ach);
+  await page.evaluate(() => { var b = document.querySelector('#exppanel [data-uncharted]'); if (b) b.click(); });
+  await sleep(120);
+  const uAtSea = await page.evaluate(() => {
+    var v = window.HARBOR_SIM.voyages();
+    return { used: v.used, uncharted: v.active.some(a => a.uncharted), atSeaRow: !!document.querySelector('#exppanel .mp-item.ex-uncharted.ex-go') };
+  });
+  ok('15c uncharted: starting the voyage occupies a slot and renders in "At sea"', uAtSea.used === 1 && uAtSea.uncharted && uAtSea.atSeaRow);
+
+  // force it ready + collect through the real UI path → discovers Mountain Fjord, latches Pathfinder
+  await page.evaluate(() => { var S = window.HARBOR_SIM.raw(); S.voyages[0].endsAt = Date.now() - 1; var v = window.__harbor.voyages().active[0]; window.__harbor.collectVoyage(v.seq); });
+  await sleep(200);
+  const postDiscover = await page.evaluate(() => ({
+    unlocked: window.__harbor.state().unlocked.slice(),
+    ach: (window.Retention.get('harbor', 'ach', {}) || {}).discover1 === 1,
+    lockBadge: !!document.querySelector('#biomebar [data-world="mountain"] .lock'),
+    slotsFreed: window.HARBOR_SIM.voyages().used === 0
+  }));
+  ok('15c uncharted: collecting the discovery voyage unlocks Mountain Fjord, latches Pathfinder, frees the slot, drops the world-bar lock badge',
+    postDiscover.unlocked.indexOf('mountain') >= 0 && postDiscover.ach && postDiscover.slotsFreed && !postDiscover.lockBadge);
+  await page.evaluate(() => { var b = document.getElementById('ex-close'); if (b) b.click(); });
+
+  // Colony founding: Mountain Fjord is now unlocked-but-unfounded — the found button must show
+  // the £ cost, ghost when unaffordable, and charge exactly once when clicked.
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 0; window.__harbor.setBiome('mountain'); });
+  await sleep(120);
+  const foundGhost = await page.evaluate(() => {
+    var btn = document.getElementById('foundbtn');
+    return { text: btn.textContent, ghosted: btn.classList.contains('ghosted'), cost: window.HARBOR_SIM.foundCost() };
+  });
+  // (fmt() abbreviates large amounts — £2400 renders "£2.40k" — so match the label, not the digits)
+  ok('15c colony: found button reads "Need £…" and is ghosted when unaffordable (2nd+ colony)',
+    foundGhost.cost > 0 && /^Need £/.test(foundGhost.text) && foundGhost.ghosted);
+
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.setBiome('mountain'); window.__harbor.selectSite(0); });
+  await sleep(120);
+  const foundReady = await page.evaluate(() => {
+    var btn = document.getElementById('foundbtn');
+    return { text: btn.textContent, ghosted: btn.classList.contains('ghosted'), cost: window.HARBOR_SIM.foundCost(), moneyBefore: window.HARBOR_SIM.raw().money };
+  });
+  ok('15c colony: found button reads "Found colony — £…" once affordable', /^Found colony — £/.test(foundReady.text) && !foundReady.ghosted);
+  await page.evaluate(() => { var b = document.getElementById('foundbtn'); if (b) b.click(); });
+  await sleep(150);
+  const founded15c = await page.evaluate(() => ({ port: !!window.HARBOR_SIM.port('mountain'), money: window.HARBOR_SIM.raw().money }));
+  // founding immediately makes the port live, so a frame or two of real passive income from the
+  // OTHER already-founded ports (green/tropical — ticking was paused while viewing an unfounded
+  // world) can land in the 150ms settle window above; assert the charge itself (a floor at exactly
+  // moneyBefore-cost) with a small tolerance for that incidental drift, not exact equality.
+  const expectedAfterCharge = foundReady.moneyBefore - foundReady.cost;
+  ok('15c colony: clicking Found colony creates the port and charges the colony cost exactly once',
+    founded15c.port && founded15c.money >= expectedAfterCharge && founded15c.money < expectedAfterCharge + 50);
+
+  // Building slots: the Manage header shows "Buildings X/Y", and once full, new-building rows
+  // ghost with "Full" (not "Need £") behind a port-at-capacity explainer.
+  await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    S.setActive('green'); window.__harbor.setBiome('green');
+    S.setEra(0);
+    var p = S.port('green'); if (p) p.buildings.length = 0;
+    S.raw().money = 1e7;
+    for (var i = 0; i < 20; i++) { if (S.canBuild('fishing_hut')) S.build('fishing_hut'); }
+    document.getElementById('managebtn').click();
+  });
+  await sleep(150);
+  const slotsUI = await page.evaluate(() => {
+    var S = window.HARBOR_SIM;
+    var head = document.querySelector('#managepanel .mp-slots');
+    var full = document.querySelector('#managepanel .mp-teaser.mp-full');
+    var rows = Array.from(document.querySelectorAll('#managepanel .mp-item.ghosted')).map(r => r.textContent);
+    return { cap: S.slotCap(), used: S.slotsUsed('green'), headText: head ? head.textContent : null, fullShown: !!full, hasFullRow: rows.some(t => /Full/.test(t)) };
+  });
+  ok('15c slots: Manage header shows "Buildings X/Y" matching slotCap()/slotsUsed()',
+    slotsUI.headText === ('Buildings ' + slotsUI.used + '/' + slotsUI.cap));
+  ok('15c slots: port-at-capacity explainer shown + a ghosted row reads "Full" once slot-capped',
+    slotsUI.used >= slotsUI.cap && slotsUI.fullShown && slotsUI.hasFullRow);
+  await page.evaluate(() => document.getElementById('managebtn').click());   // close it back up
+
+  // Phase 15c migration: a world already unlocked on this device (e.g. from a pre-15c save, or an
+  // earlier discovery this run) must survive a reload untouched — removing the era auto-unlock
+  // loop must never also revert an already-unlocked world back to locked.
+  await page.evaluate(() => window.Retention.set('harbor', 'worlds', ['green', 'mountain', 'desert']));
 
   // rival race → win
   await page.evaluate(() => window.__harbor.triggerRival()); await sleep(120);
@@ -302,6 +418,13 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(400);
   const an3 = await page.evaluate(() => { window.__harbor.announce('testfeat11b', '🧪', 'Test Feature', 'A one-time test announcement.'); return window.__harbor.announceState(); });
   ok('announce: "seen" persists across reload — never shows again', an3.showing === false);
+
+  // Phase 15c migration (reuses this reload): the 'worlds' Retention blob seeded just before it
+  // must load back intact — an already-unlocked world survives, unaffected by removing the era
+  // auto-unlock loop from doAdvance().
+  const migrated15c = await page.evaluate(() => window.__harbor.state().unlocked.slice());
+  ok('15c migration: pre-existing unlocked worlds survive a reload (green, mountain, desert all still unlocked)',
+    migrated15c.indexOf('green') >= 0 && migrated15c.indexOf('mountain') >= 0 && migrated15c.indexOf('desert') >= 0);
 
   // Phase 11c: layered audio — wave/night/weather/music gain layers driven by ToD + hazard
   // state, plus a Music toggle. WebAudio can't be screenshotted, so these assert the exposed
