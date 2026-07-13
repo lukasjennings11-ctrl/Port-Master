@@ -1011,6 +1011,7 @@
       SIM.tick(dt); tickAutomation(dt);
       frame._hud = (frame._hud || 0) + dt; if (frame._hud > 0.2) { updateHUD(); frame._hud = 0; }
       frame._sv = (frame._sv || 0) + dt; if (frame._sv > 5) { SIM.mark(); frame._sv = 0; }
+      frame._tip = (frame._tip || 0) + dt; if (frame._tip > 4) { tickTips(); frame._tip = 0; }   // Phase 15d: contextual hint check, ~4s cadence
       var m = SIM.raw().money; if (!prevMoney) prevMoney = m;
       incomeTimer += dt;
       if (incomeTimer > 0.8) {                                   // floating +£ income from the port
@@ -1396,6 +1397,164 @@
     if (window.Retention) Retention.set(GAME, 'pace', paceMode);
     if (settingsOpen) renderSettings();
   }
+  // ---- Phase 15d: Harbourmaster's Tips — quiet, situational hints that read the player's live
+  // state and nudge toward whatever system they seem to be missing. Deliberately quieter than both
+  // the storm banner (urgent) and the announce card (celebratory) — this is ambient guidance, not
+  // an interruption. tickTips() is driven off a slow wall-clock accumulator in frame() (~every 4s,
+  // see frame._tip below) and no-ops entirely while a modal/panel owns the screen or fever is
+  // running (tipsBlocked()) — never talk over an active moment. At most one rule fires per check
+  // (first match in TIPS, top to bottom), each gated by: its own "once ever" flag (Retention
+  // 'tipsSeen', survives reload), an in-memory per-rule cooldown (cooldowns don't need to survive
+  // reload — a fresh session earning the same nudge again immediately is fine), and a single global
+  // rate limit (>=45s since the last tip of ANY kind) so tips never pile up even when several
+  // conditions are true at once. A Settings toggle (Retention 'tips', default ON) hard-disables the
+  // whole system with no other state changes.
+  function tipsEnabled() { return !(window.Retention && Retention.get(GAME, 'tips', true) === false); }
+  function setTipsEnabled(v) { if (window.Retention) Retention.set(GAME, 'tips', !!v); }
+  function tipsSeenMap() { return (window.Retention && Retention.get(GAME, 'tipsSeen', {})) || {}; }
+  function hasTipSeen(id) { return !!tipsSeenMap()[id]; }
+  function markTipSeen(id) { var m = tipsSeenMap(); if (m[id]) return false; m[id] = 1; if (window.Retention) Retention.set(GAME, 'tipsSeen', m); return true; }
+
+  // cheapest building upgrade on the active port right now — used by the "idle gold" rule, and
+  // named in its copy so the nudge points at something concrete instead of "spend money somewhere".
+  function cheapestUpgrade(s) {
+    if (!s.buildings || !s.buildings.length) return null;
+    var best = null;
+    for (var i = 0; i < s.buildings.length; i++) {
+      var b = s.buildings[i];
+      if (!b.up) continue;
+      if (!best || b.up < best.cost) best = { cost: b.up, name: b.name };
+    }
+    return best;
+  }
+
+  var idleGoldSince = 0;   // sustained-state tracker for "idleGold" — resets the instant the condition drops, so a
+                            // momentary cash spike right after a big sale doesn't trip it; only a genuine stretch of
+                            // sitting on 5x+ the cheapest upgrade (~20s) does.
+  var TIPS = [
+    // fires once, ever, the first time the tip system has anything to say — introduces itself so a
+    // lone toast later doesn't feel like it came from nowhere.
+    { id: 'intro', once: true, cooldown: 0,
+      when: function (s) { return s.portFounded; },
+      text: '👋 I’m your Harbourmaster — I’ll drop a tip when I spot something (mute me in Settings).' },
+    // time-sensitive: a telegraphed storm/crash can still be cancelled outright while affordable —
+    // checked first so it never loses out to a lower-urgency rule underneath it.
+    { id: 'hazardAvert', cooldown: 240,
+      when: function (s) { return !!(s.hazard && s.hazard.phase === 'warn' && s.hazard.avertCost > 0 && s.money >= s.hazard.avertCost); },
+      text: 'You can avert this storm before it hits — tap the warning banner' },
+    // storage overflowing, and a Warehouse is still buildable (era-gated, and not already at its own cap)
+    { id: 'storageFull', cooldown: 240,
+      when: function (s) {
+        if (!s.caps || !s.res || !s.counts) return false;
+        var wt = SIM.BT.warehouse;
+        if (s.era < wt.era || (s.counts.warehouse || 0) >= wt.max) return false;
+        return ['fish', 'timber', 'goods'].some(function (r) { return s.caps[r] > 0 && s.res[r] >= s.caps[r] * 0.9; });
+      },
+      text: 'Your stores are overflowing — build a Warehouse to keep production flowing' },
+    // a standing harbour Order can be fulfilled right now
+    { id: 'orderReady', cooldown: 240,
+      when: function (s) { return !!(s.contracts && s.contracts.some(function (c) { return c.can; })); },
+      text: 'You can fulfil a harbour Order right now — check Orders in Manage' },
+    // Uncharted Waters is discovered AND affordable, not just theoretically unlockable at this era
+    { id: 'unchartedReady', cooldown: 240,
+      when: function () {
+        var id = unchartedTarget(); if (!id) return false;
+        return !!SIM.canStartUncharted(HARBOR_BIOMES[id].unlockEra);
+      },
+      text: function () { var id = unchartedTarget(); return '🧭 The horizon calls — chart Uncharted Waters to discover ' + wname(id); } },
+    // era-up requirements (cash + building minimums) are fully met
+    { id: 'eraReady', cooldown: 240,
+      when: function (s) { return !!s.canAdvance; },
+      text: 'Your port is ready — tap Advance to reach the next era' },
+    // no room left for more buildings, and the era-up that would raise the ceiling isn't affordable yet
+    { id: 'portCapped', cooldown: 240,
+      when: function (s) { return !!(s.portFounded && s.slotCap > 0 && s.slotsUsed >= s.slotCap && !s.canAdvance); },
+      text: 'Port at capacity — grow your earnings to advance the era' },
+    // a voyage slot sits empty and at least one destination is affordable right now
+    { id: 'voyageIdle', cooldown: 240,
+      when: function (s) { return !!(s.voyages && s.voyages.used < s.voyages.slots && s.voyages.dests.some(function (d) { return d.can; })); },
+      text: 'A ship sits idle — send an expedition, they pay out even offline' },
+    // cash has piled up well past what the cheapest upgrade costs, and stayed that way for a
+    // stretch — not just a momentary blip right after a big sale (see idleGoldSince above)
+    { id: 'idleGold', cooldown: 240,
+      when: function (s) {
+        var u = cheapestUpgrade(s);
+        if (!u || !(s.money > u.cost * 5)) { idleGoldSince = 0; return false; }
+        if (!idleGoldSince) idleGoldSince = Date.now();
+        return (Date.now() - idleGoldSince) > 20000;
+      },
+      text: function (s) { var u = cheapestUpgrade(s); return 'Idle gold, captain — upgrading your ' + (u ? u.name : 'port') + ' pays for itself'; } },
+    // the active port has grown a little (3+ buildings) but never had a specialisation picked
+    { id: 'noFocus', cooldown: 240,
+      when: function (s) { return !!(s.portFounded && s.focus === 'none' && (s.buildings || []).length >= 3); },
+      text: 'Set a Port Focus in Manage — specialists out-earn generalists' },
+    // 2+ harbours founded but never linked into a trade route
+    { id: 'tradeNetwork', cooldown: 240,
+      when: function (s) { return !!((s.ports || []).length >= 2 && s.network && s.network.routes.length === 0); },
+      text: 'Link your harbours in the Trade Network for passive income' },
+    // Legacy currency sitting unspent (from prestige, crates, or relics)
+    { id: 'legacyUnspent', cooldown: 240,
+      when: function () { return legacyBal() > 0; },
+      text: function () { return 'Spend your Legacy ' + (legacyBal() === 1 ? 'point' : 'points') + ' — permanent upgrades survive prestige'; } },
+    // a salvage crate is sitting unopened
+    { id: 'crateWaiting', cooldown: 240,
+      when: function () { return crateCount() > 0; },
+      text: 'You have an unopened crate — treasure inside!' }
+  ];
+  // Dropped: a "fever/festival ready or being ignored" rule was scoped but isn't shippable — Festival
+  // is a random ambient event with no meter/threshold that reads as "ready" (just a randomised gap
+  // roll), and tickTips already has to skip entirely while fever IS active (a hard requirement — it
+  // must never talk over the tap-frenzy it would be pointing at), so there is no reliable window
+  // left in which to fire it.
+
+  var tipToastEl = null, tipToastT = null, tipLastShownAt = 0, tipLastId = null;
+  var tipRuleLastShown = {};
+  var TIP_GLOBAL_COOLDOWN_MS = 45000;
+  function ensureTipToast() {
+    if (tipToastEl) return;
+    tipToastEl = document.createElement('div'); tipToastEl.id = 'tiptoast';
+    tipToastEl.innerHTML = '<span class="tip-ic">💡</span><span class="tip-txt"></span>';
+    wrap.appendChild(tipToastEl);
+    tipToastEl.addEventListener('click', hideTip);
+  }
+  function hideTip() { if (tipToastEl) tipToastEl.classList.remove('show'); clearTimeout(tipToastT); }
+  function showTip(rule, s) {
+    var text = typeof rule.text === 'function' ? rule.text(s) : rule.text;
+    ensureTipToast();
+    tipToastEl.querySelector('.tip-txt').textContent = text;
+    tipToastEl.classList.add('show');
+    clearTimeout(tipToastT); tipToastT = setTimeout(hideTip, 8000);
+    tipLastShownAt = Date.now(); tipLastId = rule.id; tipRuleLastShown[rule.id] = Date.now();
+    if (rule.once) markTipSeen(rule.id);
+  }
+  // any surface that currently owns input — tips stay silent rather than talk over it
+  function tipsBlocked() {
+    return settingsOpen || manageOpen || expOpen || tradeOpen || legacyOpen || feverActive() ||
+      (eventModal && eventModal.classList.contains('show')) ||
+      (rivalModal && rivalModal.classList.contains('show')) ||
+      !!document.getElementById('welcomemodal') ||
+      (crateModal && crateModal.classList.contains('show')) ||
+      (bonusModal && bonusModal.classList.contains('show')) ||
+      (fortuneModal && fortuneModal.classList.contains('show')) ||
+      (announceCard && announceCard.classList.contains('show'));
+  }
+  function tickTips() {
+    if (!tipsEnabled() || !simReady() || tipsBlocked()) return;
+    if (tipToastEl && tipToastEl.classList.contains('show')) return;   // never stacks
+    if (Date.now() - tipLastShownAt < TIP_GLOBAL_COOLDOWN_MS) return;
+    var s = SIM.state(); if (!s) return;
+    for (var i = 0; i < TIPS.length; i++) {
+      var rule = TIPS[i];
+      if (rule.once && hasTipSeen(rule.id)) continue;
+      if (!rule.once && (Date.now() - (tipRuleLastShown[rule.id] || 0)) < rule.cooldown * 1000) continue;
+      var match = false;
+      try { match = !!rule.when(s); } catch (e) { match = false; }
+      if (!match) continue;
+      showTip(rule, s);
+      return;
+    }
+  }
+
   // idle number notation: 1.2k, 3.40M, 5.7B … Td, then scientific. Stays readable as numbers explode.
   var NUM_SUF = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc', 'Ud', 'Dd', 'Td'];
   function fmt(n) {
@@ -2440,7 +2599,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v63';
+  var BUILD_TAG = 'v64';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2519,6 +2678,11 @@
     h += '<button class="mp-item auto' + (paceMode === 'relaxed' ? ' on' : '') + '" data-set="pace-relaxed"><span class="mi-n">🌤 Relaxed</span><span class="mi-c">' + (paceMode === 'relaxed' ? 'ON' : 'Pick') + '</span></button>';
     h += '<button class="mp-item auto' + (paceMode === 'lively' ? ' on' : '') + '" data-set="pace-lively"><span class="mi-n">⚡ Lively</span><span class="mi-c">' + (paceMode === 'lively' ? 'ON' : 'Pick') + '</span></button>';
     h += '</div><div class="set-help">Relaxed spreads out storms and events. Economy speed is unchanged.</div>';
+    // Phase 15d: Harbourmaster's Tips — a single ON/OFF toggle (default ON), following the Pace
+    // section immediately above it. OFF makes tickTips() a hard no-op (no other state changes).
+    h += '<div class="mp-sec">Tips</div><div class="mp-grid">';
+    h += '<button class="mp-item auto' + (tipsEnabled() ? ' on' : '') + '" data-set="tips"><span class="mi-n">💡 Harbourmaster tips</span><span class="mi-c">' + (tipsEnabled() ? 'ON' : 'OFF') + '</span></button>';
+    h += '</div><div class="set-help">Occasional contextual nudges when something needs attention — mute anytime.</div>';
     h += '<div class="mp-sec">How to play</div>';
     h += '<div class="set-help">⚓ Tap the glowing harbour, then <b>Found village</b>.<br>' +
          '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
@@ -2569,6 +2733,7 @@
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'pace-relaxed') { applyPace('relaxed'); sfx('tap'); haptic(8); }
         else if (a === 'pace-lively') { applyPace('lively'); sfx('tap'); haptic(8); }
+        else if (a === 'tips') { setTipsEnabled(!tipsEnabled()); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'install') { promptInstall(); }
         else if (a === 'errlog') { copyAndClearErrLog(); sfx('tap'); haptic(8); }
         else if (a === 'reset') {
@@ -3100,7 +3265,19 @@
     portalMode: function () { return PORTAL_MODE; },
     advance: function () { doAdvance(); return !!cine; },      // test-only: drive the real era-advance path (incl. the commercialBreak hook) without needing to grind the money/building gate live
     // Phase 13d: local fun-funnel metrics (full record + derived avgSessionMin) — also our debug view
-    metrics: function () { return metricsSnapshot(); }
+    metrics: function () { return metricsSnapshot(); },
+    // Phase 15d: Harbourmaster's Tips (test/debug hooks)
+    tips: function () {
+      return {
+        enabled: tipsEnabled(), lastId: tipLastId, shownAt: tipLastShownAt, seen: tipsSeenMap(),
+        showing: !!(tipToastEl && tipToastEl.classList.contains('show')),
+        text: tipToastEl ? tipToastEl.querySelector('.tip-txt').textContent : null
+      };
+    },
+    forceTipCheck: function () { tickTips(); return window.__harbor.tips(); },   // test-only: run one tickTips() pass synchronously, bypassing the wall-clock frame accumulator
+    setTipsEnabled: function (v) { setTipsEnabled(!!v); if (settingsOpen) renderSettings(); return tipsEnabled(); },
+    resetTipRateLimit: function () { tipLastShownAt = 0; tipRuleLastShown = {}; },   // test-only: zero the global + per-rule cooldowns
+    dismissTip: function () { hideTip(); }
   };
 
   if (canvas && canvas.getContext) boot();

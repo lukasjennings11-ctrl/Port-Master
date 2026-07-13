@@ -525,6 +525,23 @@ html, body {
 #announcecard .an-title { font-family: 'Lilita', cursive; font-weight: 400; font-size: 15px; color: var(--text); }
 #announcecard .an-txt { font-family: 'Fredoka', sans-serif; font-size: 11px; line-height: 1.4; color: var(--muted); margin-top: 2px; }
 
+/* Phase 15d: Harbourmaster's Tips — quiet contextual-hint toast, slides up from behind the action
+   bar. Deliberately muted (dark pill, no border glow, no pulse animation) so it reads as ambient
+   guidance rather than an alert (contrast #stormalert, which pulses with a hazard-red border) or a
+   celebration (contrast #announcecard, which has a teal border + brighter gradient). Tap anywhere
+   on it to dismiss immediately; tickTips() itself guarantees it never stacks. */
+#tiptoast {
+  position: absolute; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); max-width: min(320px, 88%);
+  display: flex; align-items: center; gap: 9px; padding: 9px 14px; border-radius: 999px; z-index: 9;
+  background: rgba(14,26,34,.9); border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 6px 20px rgba(0,0,0,.4); backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none; cursor: pointer;
+  transform: translate(-50%, 14px); transition: opacity .35s ease, transform .35s cubic-bezier(.2,1,.4,1);
+}
+#tiptoast.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+#tiptoast .tip-ic { flex: 0 0 auto; font-size: 15px; line-height: 1; opacity: .85; }
+#tiptoast .tip-txt { font-family: 'Fredoka', sans-serif; font-size: 11.5px; font-weight: 600; color: var(--muted); line-height: 1.35; }
+
 /* era ascension banner */
 #ascendbanner {
   position: absolute; left: 50%; top: 38%; transform: translate(-50%, -40%) scale(.6); opacity: 0;
