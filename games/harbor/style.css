@@ -118,7 +118,7 @@ html, body {
   font-family: 'Fredoka', system-ui, sans-serif; font-size: 11.5px; font-weight: 800; letter-spacing: .02em;
   color: #20140a; background: var(--brass); border: 0; border-radius: 999px; padding: 6px 15px; cursor: pointer; white-space: nowrap;
 }
-#foundbtn:disabled { background: rgba(255,255,255,.18); color: rgba(255,255,255,.55); cursor: default; }
+#foundbtn:disabled, #foundbtn.ghosted { background: rgba(255,255,255,.18); color: rgba(255,255,255,.55); cursor: default; }
 #foundbtn:not(:disabled):active { transform: scale(.95); }
 
 /* economy HUD */
@@ -386,6 +386,12 @@ html, body {
 .mp-item.ex-send { background: rgba(120,180,255,.08); }
 .mp-item.ex-send .mi-d { font-size: 9px; color: var(--muted); }
 .ex-note { font-family: 'Fredoka',sans-serif; font-size: 10px; color: var(--muted); margin-top: 4px; text-align: center; }
+/* Phase 15c: Uncharted Waters — pinned, visually distinct from ordinary destinations (gold vs teal) */
+.mp-item.ex-uncharted { background: linear-gradient(135deg, rgba(255,210,74,.18), rgba(124,224,214,.10)); border-color: rgba(255,210,74,.55); }
+.mp-item.ex-uncharted .mi-n { font-weight: 800; }
+.mp-item.ex-uncharted .mi-d { flex-basis: 100%; order: 3; font-size: 9px; color: var(--muted); margin-top: 1px; }
+.mp-item.ex-uncharted .mi-c { color: var(--brass); }
+.mp-item.ex-uncharted.ready { background: rgba(255,210,74,.26); }
 #expbtn { position: relative; }
 #expbtn.hasready::after { content: attr(data-n); position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px; background: var(--brass); color: #20140a; font: 800 9px/16px 'Fredoka', sans-serif; }
 #settingspanel { max-height: 64%; }
@@ -402,6 +408,9 @@ html, body {
 @keyframes armpulse { from { box-shadow: 0 0 0 0 rgba(255,90,70,.5); } to { box-shadow: 0 0 0 5px rgba(255,90,70,0); } }
 .mp-head { display: flex; align-items: center; font-family: 'Lilita', cursive; font-weight: 400; font-size: 15px; letter-spacing: .02em; color: var(--text); }
 .mp-head #mp-close { margin-left: auto; background: rgba(255,255,255,.1); border: 0; color: var(--text); border-radius: 7px; width: 22px; height: 22px; cursor: pointer; font-size: 13px; }
+/* Phase 15c: "Buildings 12/16" slot-cap readout in the Manage header */
+.mp-slots { margin-left: 8px; font-family: 'Fredoka',sans-serif; font-size: 10px; font-weight: 800; color: var(--teal); }
+.mp-slots.full { color: #ff9b8f; }
 .mp-sec { font-family: 'Fredoka',system-ui,sans-serif; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
 .mp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .mp-item {
@@ -541,6 +550,7 @@ html, body {
 .mp-item.ghosted .mi-n, .mp-item.ghosted .mi-d, .lg-node.ghosted .ln-n, .lg-node.ghosted .ln-d { color: var(--muted) !important; }
 .mp-item.ghosted .mi-c, .lg-node.ghosted .ln-c { color: rgba(143,176,189,.9) !important; font-weight: 700; }
 .mp-teaser { font-family: 'Fredoka',system-ui,sans-serif; font-size: 10px; font-weight: 600; color: var(--teal); opacity: .85; text-align: center; padding: 3px 4px 1px; }
+.mp-teaser.mp-full { color: #ffb37a; opacity: 1; }   /* Phase 15c: port-at-capacity explainer — warmer than the neutral era teaser */
 
 /* Phase 15a: trade-map guide card — the map used to give zero feedback when there was nothing to
    connect yet ("I can't set up a trade network, I can only click on one city"). Shown while fewer
@@ -561,6 +571,10 @@ html, body {
 /* biome-bar nudge — the "Show me" fallback when no unlocked-but-unfounded world exists yet */
 @keyframes barNudge { 0%,100% { box-shadow: 0 0 0 0 rgba(242,179,94,0); } 50% { box-shadow: 0 0 0 6px rgba(242,179,94,.4); } }
 #biomebar.nudge { animation: barNudge .6s ease-in-out 3; }
+/* Phase 15c: a fresh Uncharted Waters discovery pulses its new biome-bar entry — celebratory,
+   distinct from the amber "look here" nudge above (teal, matches the expedition/discovery colour). */
+@keyframes discoverPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(127,224,214,0); } 50% { box-shadow: 0 0 0 8px rgba(127,224,214,.55); } }
+.biome-btn.discover-pulse { animation: discoverPulse .6s ease-in-out 4; }
 
 /* offline welcome-back modal */
 #offlineModal { position: absolute; inset: 0; z-index: 13; display: flex; align-items: center; justify-content: center; background: rgba(4,10,16,0); transition: background .3s ease; }
