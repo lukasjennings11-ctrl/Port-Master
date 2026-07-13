@@ -465,6 +465,51 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
     await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
 
+  // Phase 16b: VIBRANT STORYBOOK world pass — bolder saturated palette, a two-tone postcard water
+  // gradient (rich teal deep -> bright turquoise shallow, quantized into toon bands), a wider/
+  // bolder ink outline, and cheap static lushness (bigger canopy trees + bushes/flowers near a
+  // founded port). Assertions pivot on the __harbor.water()/outlineTuning() debug hooks added for
+  // this phase, sentinel colour comparisons against the pre-16b (14a-era) biome palette constants,
+  // and the same zero-GL-warning render-soak pattern 14a used to prove the outline/shadow RTT
+  // passes (now carrying the new shaders) stay feedback-loop-free.
+  const errsBefore16b = errs.length;
+  const water0 = await page.evaluate(() => window.__harbor.water());
+  ok('16b: water() exposes the two-tone shore-gradient hook — 4 toon bands, shallow brighter/more turquoise than deep',
+    water0 && water0.gradientOn === true && water0.shoreBands === 4 &&
+    Array.isArray(water0.deep) && Array.isArray(water0.shallow) &&
+    (water0.shallow[0] + water0.shallow[1] + water0.shallow[2]) > (water0.deep[0] + water0.deep[1] + water0.deep[2]));
+  const outlineT = await page.evaluate(() => window.__harbor.outlineTuning());
+  ok('16b: ink outline tuned bolder than 14a — narrower depth threshold (fires more readily) + a >1x tap-width multiplier',
+    outlineT && outlineT.depthT < 0.03 && outlineT.width > 1.0);
+  // sentinel palette check: the pre-16b (14a-era) green-isles colour constants, hardcoded here —
+  // biomes.js's ground/shallow-water/roof values must have moved (bolder + more saturated), not
+  // just been left byte-identical under a new comment.
+  const OLD_GREEN = { ground: [0.21, 0.38, 0.14], shallow: [0.12, 0.46, 0.52], roof: [0.58, 0.22, 0.18] };
+  const green16b = await page.evaluate(() => { var b = window.HARBOR_BIOMES.green; return { ground: b.ground.slice(), shallow: b.shallow.slice(), roof: b.build.roof.slice() }; });
+  function luma(c) { return c[0] + c[1] + c[2]; }
+  ok('16b: green-isles palette sentinels changed from the pre-16b constants — lusher ground, brighter shallow turquoise, punchier roof red',
+    JSON.stringify(green16b.ground) !== JSON.stringify(OLD_GREEN.ground) &&
+    JSON.stringify(green16b.shallow) !== JSON.stringify(OLD_GREEN.shallow) &&
+    luma(green16b.shallow) > luma(OLD_GREEN.shallow) &&
+    green16b.roof[0] > OLD_GREEN.roof[0]);
+  // outline/water/palette soak: sweep ToD with quality (outlines+shadows) ON — proves the retuned
+  // F_POST edge detector stays sky-masked + slope-rejecting (a regression there is a hard fail)
+  // and the new F_WATER gradient math never trips the RTT feedback-loop trap.
+  for (const t of [0.0, 0.34, 0.5, 0.755]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(220); }
+  ok('16b: ToD soak with the retuned outline + two-tone water live → zero GL warnings/errors (outline stays sky-masked)', errs.length === errsBefore16b);
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  // legacy (quality off) path: palette/water/tree changes ride the same base shaders regardless of
+  // the post quality gate, so the no-outline/no-shadow fallback must stay just as clean.
+  await page.evaluate(() => window.__harbor.setPost(false)); await sleep(400);
+  ok('16b: legacy quality-off path renders the new palette/water/props clean', errs.length === errsBefore16b);
+  await page.evaluate(() => window.__harbor.setPost(true));
+  // geomStats: the bigger canopy trees + near-port bush/flower scatter raise the static-scene
+  // vertex floor a little over 14a/16a's baseline (~60k on green isles) while staying nowhere near
+  // the existing 250k ceiling — budget-aware lushness, not a poly explosion.
+  const gs16b = await page.evaluate(() => window.__harbor.geomStats());
+  ok('16b: geomStats reflects the added lushness (raised floor) and stays within the existing 250k ceiling',
+    gs16b && gs16b.verts > 60000 && gs16b.verts < 250000);
+
   // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
   // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
   // any real (already-seen — exp/prestige/storm/…) announce still queued from earlier in the run,

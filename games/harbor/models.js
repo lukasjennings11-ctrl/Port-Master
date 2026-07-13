@@ -154,11 +154,47 @@
   }
 
   // ---------------- vegetation (grounded on the field) ----------------
+  // Phase 16b VIBRANT STORYBOOK: bigger, chunkier canopies with a visible tier or two — each kind
+  // keeps its old vertex shape (no new cylinders on palm/pine — just scaled up, budget-free) except
+  // the broadleaf 'hill' tree, which gains ONE extra small top tier (still just 2 cyls total, +1
+  // over the old single-canopy shape) so it reads as a lumpy layered canopy instead of a smooth
+  // cone — the #1 silhouette most on-screen (green isles' default world).
   function tree(flat, x, z, rng, kind, by) {
     var hy = by + 0.4;
-    if (kind === 'palm') { var th = 5 + rng() * 3; flat.cyl(x, hy, z, 0.35, th, 6, [0.45, 0.34, 0.22], 0.7); for (var f = 0; f < 6; f++) flat.box(x, hy + th, z, 4.2, 0.3, 1.0, [0.16, 0.46, 0.20], f / 6 * TAU, 0.32); }
-    else if (kind === 'pine') { flat.cyl(x, hy, z, 0.5, 2, 6, [0.36, 0.27, 0.18], 1); for (var c = 0; c < 3; c++) flat.cyl(x, hy + 1.5 + c * 2.2, z, 3 - c * 0.8, 2.6, 6, [0.12, 0.34, 0.19], 0.04); }
-    else { flat.cyl(x, hy, z, 0.6, 2.4, 6, [0.38, 0.28, 0.18], 1); flat.cyl(x, hy + 2.2, z, 3.0, 4.2, 7, [0.18, 0.44, 0.20], 0.25); }
+    if (kind === 'palm') { var th = 5 + rng() * 3; flat.cyl(x, hy, z, 0.40, th, 6, [0.48, 0.36, 0.22], 0.7); for (var f = 0; f < 6; f++) flat.box(x, hy + th, z, 5.4, 0.34, 1.3, [0.14, 0.56, 0.20], f / 6 * TAU, 0.30); }
+    else if (kind === 'pine') { flat.cyl(x, hy, z, 0.56, 2.2, 6, [0.38, 0.28, 0.17], 1); for (var c = 0; c < 3; c++) flat.cyl(x, hy + 1.6 + c * 2.5, z, 3.7 - c * 0.95, 3.1, 6, [0.10, 0.40, 0.20], 0.04); }
+    else { // broadleaf: trunk + two chunky canopy tiers (bigger base, smaller lumpy top)
+      flat.cyl(x, hy, z, 0.66, 2.5, 6, [0.40, 0.28, 0.17], 0.92);
+      flat.cyl(x, hy + 2.3, z, 3.6, 4.4, 7, [0.16, 0.52, 0.20], 0.28);
+      flat.cyl(x, hy + 5.6, z, 2.15, 2.6, 6, [0.24, 0.62, 0.22], 0.30);
+    }
+  }
+  // Phase 16b: cheap static lushness — small bushes + flower dots scattered on the grass near a
+  // FOUNDED port only (the always-visible "hero" area). Bounded, budget-capped count (see the
+  // scatterLushness() caller below); one box (24 verts) per flower, one small cyl (32 verts) per
+  // bush — far cheaper than another tree, but enough colour confetti to read as a storybook
+  // meadow rather than bare grass right around the harbour.
+  function bush(flat, x, z, rng, y) {
+    var g = jit([0.18, 0.54, 0.20], 0.07, rng);
+    flat.cyl(x, y + 0.02, z, 0.85 + rng() * 0.55, 0.9 + rng() * 0.5, 6, g, 0.5);
+  }
+  var FLOWER_HUES = [[0.97, 0.28, 0.40], [0.99, 0.82, 0.16], [0.94, 0.94, 0.99], [0.66, 0.32, 0.90], [1.0, 0.56, 0.20]];
+  function flower(flat, x, z, rng) {
+    var y = heightAt(x, z), petal = pick(FLOWER_HUES, rng);
+    flat.box(x, y + 0.32, z, 0.46, 0.64, 0.46, petal, rng() * TAU);
+  }
+  function scatterLushness(flat, rng, port, biome) {
+    if (!port || biome.veg === 'none') return;
+    var n = 46, placed = 0, tries = 0;
+    while (placed < n && tries < n * 3) {
+      tries++;
+      var a = rng() * TAU, r = 22 + rng() * 60;
+      var x = port.x + Math.cos(a) * r, z = port.z + Math.sin(a) * r, y = heightAt(x, z);
+      if (y < 1.1 || y > 8) continue;                          // grass band only, never sand/rock
+      if (Math.abs(x - port.x) < 16 && Math.abs(z - port.z) < 16) continue;   // keep the harbour core clear
+      if (placed % 3 === 0) bush(flat, x, z, rng, y); else flower(flat, x, z, rng);
+      placed++;
+    }
   }
 
   // ---------------- distant landforms (built at origin, baked onto the field) ----------------
@@ -198,8 +234,11 @@
   }
 
   // ---------------- port structures (LOCAL origin: water toward -z, land +z) ----------------
+  // Phase 16b: hut wood + prop colours pushed warmer/more saturated — confident toy-like hues
+  // rather than desaturated realism (the biome's own build.wall/roof palette in biomes.js carries
+  // the bigger structures; these are the small shared kit pieces every era reuses).
   function hut(flat, x, z, rng, b) {
-    var wood = pick([[0.55, 0.40, 0.26], [0.62, 0.46, 0.30], [0.48, 0.34, 0.22], [0.66, 0.54, 0.40]], rng);
+    var wood = pick([[0.62, 0.42, 0.24], [0.70, 0.48, 0.26], [0.52, 0.34, 0.20], [0.74, 0.58, 0.36]], rng);
     var w = 4 + rng() * 2, h = 3 + rng() * 1.5, d = 4 + rng() * 2, rot = (rng() - 0.5) * 0.5;
     flat.bbox(x, h / 2, z, w, h, d, wood, rot, Math.min(w, d) * 0.11);   // softened top edges (10b shape language)
     var roof = b.build ? b.build.roof : [0.4, 0.2, 0.15];
@@ -220,7 +259,7 @@
     flat.box(x, 0.8, 8, 6, 0.5, 18, [0.52, 0.4, 0.27], 0);
     for (var sx = -2; sx <= 2; sx += 2) for (var sz = 1; sz <= 15; sz += 7) flat.cyl(x + sx, -2.5, sz, 0.45, 3.3, 6, [0.36, 0.26, 0.17], 1);
   }
-  function concreteQuay(grit, flat, era) { var w = 150 + era * 18; grit.bbox(0, 1.1, 15, w, 2.2, 24, [0.64, 0.64, 0.66], 0, 0.7, 7); grit.box(0, 1.0, 3.6, w, 1.8, 1.4, [0.5, 0.5, 0.52], 0); for (var bx = -w / 2 + 6; bx <= w / 2 - 6; bx += 12) grit.cyl(bx, 0, 4.4, 0.5, 1.5, 6, [0.16, 0.17, 0.19], 0.8); }
+  function concreteQuay(grit, flat, era) { var w = 150 + era * 18; grit.bbox(0, 1.1, 15, w, 2.2, 24, [0.70, 0.68, 0.64], 0, 0.7, 7); grit.box(0, 1.0, 3.6, w, 1.8, 1.4, [0.56, 0.54, 0.50], 0); for (var bx = -w / 2 + 6; bx <= w / 2 - 6; bx += 12) grit.cyl(bx, 0, 4.4, 0.5, 1.5, 6, [0.16, 0.17, 0.19], 0.8); }
   function freighter(grit, flat, x, z, rng) {
     var L = 38, B = 11, deck = 1.8, hb = -2.6, hull = [0.30, 0.34, 0.42];
     grit.bbox(x, hb + 2.2, z, L * 0.76, 4.4, B, hull, 0, 1.0, 3); grit.bbox(x - L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.66, hull, 0.2, 0.8); grit.bbox(x + L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.82, hull, -0.13, 0.8);
@@ -241,12 +280,12 @@
     flat.cyl(bx - 2, deck + 12, z, 0.2, 6, 6, [0.7, 0.72, 0.75], 1); flat.box(bx - 2, deck + 18, z, 3.2, 0.3, 0.3, [0.7, 0.72, 0.75], 0);
   }
   function warehouse(grit, flat, x, z, w, d, rng, b) {
-    var h = 8 + rng() * 3, col = jit([0.64, 0.66, 0.70], 0.1, rng);
+    var h = 8 + rng() * 3, col = jit([0.78, 0.74, 0.62], 0.10, rng);
     grit.bbox(x, h / 2, z, w, h, d, col, 0, Math.min(w, d) * 0.09, 2); grit.bbox(x, h + 0.5, z, w + 1.2, 1.2, d + 1.2, mul(b.build ? b.build.roof : [0.4, 0.3, 0.3], 0.9), 0, 0.5, 1);
     var dn = Math.max(2, Math.round(w / 7)); for (var i = 0; i < dn; i++) flat.box(x - w / 2 + (i + 0.5) * w / dn, 2.6, z + d / 2 + 0.05, w / dn * 0.7, 5, 0.4, [0.22, 0.23, 0.26], 0);
   }
   function craneStatic(grit, baseX, z) {
-    var col = [0.98, 0.80, 0.20], h = 32, lx = [baseX - 11, baseX + 11], lz = [z + 9, z - 9];
+    var col = [1.0, 0.78, 0.08], h = 32, lx = [baseX - 11, baseX + 11], lz = [z + 9, z - 9];
     for (var a = 0; a < 2; a++) for (var bI = 0; bI < 2; bI++) { grit.box(lx[a], h / 2, lz[bI], 2.2, h, 2.2, col); grit.box(lx[a], h * 0.5, lz[bI], 1.1, h * 0.9, 1.1, mul(col, 0.92), 0, (a ? -0.5 : 0.5)); }
     grit.box(lx[0], h, z, 2.4, 2.4, 20, col); grit.box(lx[1], h, z, 2.4, 2.4, 20, col); grit.box(baseX, h, lz[0], 24, 2.4, 2.6, col); grit.box(baseX, h, lz[1], 24, 2.4, 2.6, col);
     grit.box(baseX, h + 2.1, z - 14, 30, 2.6, 3.0, col); grit.box(baseX, h + 2.1, z + 5, 30, 2.6, 3.0, col); grit.bbox(baseX - 7, h + 2.6, z, 7, 4.8, 9, [0.22, 0.24, 0.28], 0, 0.6);
@@ -257,7 +296,7 @@
   }
   function lighthouse(grit, flat, x, z) {
     grit.cyl(x, 0, z, 5, 2.5, 8, [0.3, 0.31, 0.33], 0.9);
-    for (var i = 0; i < 5; i++) grit.cyl(x, 2.5 + i * 4, z, 2.6 - i * 0.28, 4, 10, i % 2 ? [0.95, 0.95, 0.97] : [0.92, 0.26, 0.22], 0.92);
+    for (var i = 0; i < 5; i++) grit.cyl(x, 2.5 + i * 4, z, 2.6 - i * 0.28, 4, 10, i % 2 ? [0.97, 0.97, 0.98] : [0.96, 0.20, 0.16], 0.92);
     grit.box(x, 22.5, z, 3.4, 2.8, 3.4, [0.15, 0.16, 0.18]); flat.box(x, 23, z, 1.8, 1.8, 1.8, [1.5, 1.3, 0.6]);
   }
 
@@ -546,6 +585,7 @@
         tree(B.flat, x, z, rng, biome.veg, y);
       }
     }
+    scatterLushness(B.flat, rng, port, biome);   // Phase 16b: bushes + flowers near a founded port
     for (var bk = 0, bt = 0; bk < 8 && bt < 80; bt++) {    // little boats dotted in the water around the island
       var bx = -760 + rng() * 1520, bz = -210 + rng() * 760, byy = heightAt(bx, bz);
       if (byy > -3.2 && byy < -0.7) { dinghy(B.flat, bx, bz, rng); bk++; }
