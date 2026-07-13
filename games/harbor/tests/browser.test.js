@@ -155,11 +155,27 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('fleet: empty baseline', await page.evaluate(() => { var f = window.__harbor.fleet(); return f.expedition === 0 && f.route === 0 && f.rival === 0; }));
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.startVoyage('reef'); });
   ok('fleet: expedition ship at sea while voyage active', await page.evaluate(() => window.__harbor.fleet().expedition === 1));
+  // Phase 16a SHIPYARD: expedition kind maps to the schooner class while the voyage is at sea
+  ok('16a fleet: expedition ships map to the schooner class', await page.evaluate(() => window.__harbor.fleet().expClass === 'schooner'));
   await page.evaluate(() => { window.HARBOR_SIM.raw().voyages[0].endsAt = Date.now() - 1; var v = window.__harbor.voyages().active[0]; window.__harbor.collectVoyage(v.seq); });
   ok('fleet: expedition ship gone after collect', await page.evaluate(() => window.__harbor.fleet().expedition === 0));
   // living fleet: a route touching the active port spawns a shuttling cargo ship
   await page.evaluate(() => { var S = window.HARBOR_SIM; S.foundPort('tropical'); S.setActive('green'); S.raw().money = 1e6; S.addRoute('green', 'tropical', 'fish'); });
   ok('fleet: cargo ship shuttles the active-port route', await page.evaluate(() => window.__harbor.fleet().route === 1));
+  // Phase 16a SHIPYARD: the route freighter's class is era-gated — sail (brig) before the
+  // Industrial Port era, funnel (steamer) from era 2 on. Era is captured from the SIM (the
+  // authority — an earlier block set it via SIM.setEra, which game.js's own era var hasn't
+  // synced yet) and restored through __harbor.setEra so both stay consistent for the 15c
+  // assertions that follow (they rely on era 4 keeping Mountain Fjord's unlockEra(1) cleared).
+  const f16 = await page.evaluate(() => {
+    var H = window.__harbor, out = { era0: window.HARBOR_SIM.raw().era };
+    H.setEra(1); out.pre = H.fleet().routeClass;
+    H.setEra(2); out.post = H.fleet().routeClass;
+    H.setEra(out.era0);
+    return out;
+  });
+  ok('16a fleet: route ships sail as brigs pre-industrial and steamers from era 2 (era restored)',
+    f16.pre === 'brig' && f16.post === 'steamer' && await page.evaluate(() => window.HARBOR_SIM.raw().era) === f16.era0);
 
   // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
   await page.evaluate(() => window.__harbor.openTrade());
@@ -288,6 +304,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.triggerRival()); await sleep(120);
   await page.evaluate(() => { var bs = document.querySelectorAll('#rivalmodal .ev-btn'); if (bs.length) bs[bs.length - 1].click(); }); await sleep(120);
   ok('fleet: rival ship patrols during the race', await page.evaluate(() => window.__harbor.fleet().rival === 1));
+  ok('16a fleet: the rival patrols as the corsair class', await page.evaluate(() => window.__harbor.fleet().rivalClass === 'corsair'));
   await page.evaluate(() => { var r = window.__harbor.rival().race; if (r) window.HARBOR_SIM.raw().lifetimeMoney += r.target + 10; window.__harbor.forceHUD(); }); await sleep(150);
   await page.evaluate(() => { var b = document.querySelector('#rivalmodal.show .ev-btn'); if (b) b.click(); });
   ok('rival: race won recorded', await page.evaluate(() => window.__harbor.rival().wins >= 1));
@@ -418,6 +435,35 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     await page.evaluate(() => window.Retention.get('harbor', 'post', null) === true));
   const gs14 = await page.evaluate(() => window.__harbor.geomStats());
   ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 250000);
+
+  // Phase 16a: SHIPYARD — six real ship classes (models.js HARBOR_MODELS.SHIPYARD), each a
+  // static hull/trim/sails mesh set built once at boot. Budget: every class must beat the old
+  // single-primitive ship (78 verts: 12-gon hull 61 + tri sail 17) yet stay under a deliberate
+  // 4000-vert class ceiling (actual max is corsair ~1302 — headroom is for the planned future
+  // class ladders, not slack for this six). Render soak drives every class through the
+  // test-only debugShip hook so each hull+trim+sails set actually hits the GPU.
+  const errsBefore16a = errs.length;
+  const ss16 = await page.evaluate(() => window.__harbor.shipStats());
+  ok('16a shipyard: all six classes build bigger than the old ship and under the 4000-vert class budget',
+    ss16 && ss16.oldShipBaseline === 78 && ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'].every(c => {
+      var s = ss16.classes[c]; return s && s.total > ss16.oldShipBaseline && s.total < 4000;
+    }));
+  ok('16a shipyard: sails are separate animatable meshes per class, none on the steamer',
+    await page.evaluate(() => {
+      var SY = window.HARBOR_MODELS.SHIPYARD, n = {};
+      SY.CLASSES.forEach(c => { n[c] = SY.build(c).sails.length; });
+      return n.dinghy === 1 && n.sloop === 2 && n.brig === 2 && n.schooner === 3 && n.steamer === 0 && n.corsair === 2;
+    }));
+  for (const c of ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair']) {
+    await page.evaluate(cc => window.__harbor.debugShip(cc), c); await sleep(180);
+  }
+  await page.evaluate(() => window.__harbor.debugShip(null));
+  ok('16a shipyard: all six classes render several frames with zero GL warnings/errors', errs.length === errsBefore16a);
+  await page.evaluate(() => { window.__harbor.debugShip('brig'); window.__harbor.setPost(false); }); await sleep(350);
+  ok('16a shipyard: legacy quality path (post off) renders the new fleet clean', errs.length === errsBefore16a);
+  await page.evaluate(() => { window.__harbor.debugShip(null); window.__harbor.setPost(true); });
+  ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
+    await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
 
   // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
   // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
