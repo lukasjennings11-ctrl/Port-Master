@@ -45,7 +45,7 @@ function near(a, b, eps) { return Math.abs(a - b) <= (eps || 1e-6); }
   ok('migrate: snapshot has voyages field', snap && snap.voyages && Array.isArray(snap.voyages.active));
   // Phase 9a: patch() must backfill focus:'none' on a save that predates specialisation
   ok('migrate: focus backfilled to none', S.ports.green.focus === 'none');
-  ok('migrate: snapshot exposes synergies + focus', snap && Array.isArray(snap.synergies) && snap.synergies.length === 4 && snap.focus === 'none');
+  ok('migrate: snapshot exposes synergies + focus', snap && Array.isArray(snap.synergies) && snap.synergies.length === 5 && snap.focus === 'none');
 })();
 
 // ---------------------------------------------------------------- deterministic setup
@@ -214,7 +214,7 @@ function buildSet(list) {
   buildSet(['warehouse', 'market']);
   SIM.setFocus('green', 'industry');
   var st = SIM.state();
-  ok('snapshot: synergies array (4 entries)', Array.isArray(st.synergies) && st.synergies.length === 4);
+  ok('snapshot: synergies array (5 entries)', Array.isArray(st.synergies) && st.synergies.length === 5);
   var hub = st.synergies.filter(function (x) { return x.id === 'tradehub'; })[0];
   ok('snapshot: tradehub active with warehouse+market', !!hub && hub.active === true);
   var boom = st.synergies.filter(function (x) { return x.id === 'boomtown'; })[0];
@@ -594,6 +594,135 @@ function autoplay(cfg) {
   var st = SIM.state();
   ok('snapshot: exposes slotCap/slotsUsed for the active port', st.slotCap === 12 && typeof st.slotsUsed === 'number');
   ok('snapshot: exposes foundCost/canFoundPort at the empire level', typeof st.foundCost === 'number' && typeof st.canFoundPort === 'boolean');
+})();
+
+// ---------------------------------------------------------------- Phase 17a: technology ages —
+// Automated Harbour (era6) + Neon Horizon (era7), plus the timeline UI's data (eraName tail).
+(function ages17aLadder() {
+  ok('17a: ERAS extends to 8 ages, ending Automated Harbour/Neon Horizon', SIM.ERAS.length === 8 && SIM.ERAS[6] === 'Automated Harbour' && SIM.ERAS[7] === 'Neon Horizon');
+  ok('17a: eraName roman tail continues past Neon Horizon (not Global Hub)', SIM.eraName(8) === 'Neon Horizon II' && SIM.eraName(9) === 'Neon Horizon III' && SIM.eraName(10) === 'Neon Horizon IV');
+  ok('17a: eraName unchanged for the original curated ladder', SIM.eraName(0) === 'Fishing Village' && SIM.eraName(5) === 'Global Hub');
+})();
+
+(function ages17aGates() {
+  SIM.__setRng(mulberry32(17170)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  SIM.setEra(5); g.money = 1e7;
+  ['dock', 'dock', 'dock', 'factory', 'factory'].forEach(function (t) { if (SIM.canBuild(t)) SIM.build(t); });
+  ok('17a gate: era5->6 (dock:3,factory:2 + £300k) satisfied by proven era2 industry', SIM.canAdvance());
+  SIM.advanceEra();
+  ok('17a gate: advancing lands on era6 Automated Harbour', SIM.raw().era === 6 && SIM.eraName(6) === 'Automated Harbour');
+  g.money = 1e7;
+  ok('17a gate: era6->7 stays blocked on money alone (Neon Horizon needs the NEW age6 buildings)', !SIM.canAdvance());
+  SIM.build('container_terminal'); SIM.build('drone_bay');
+  ok('17a gate: era6->7 (£2M + container_terminal+drone_bay) satisfied once built', SIM.canAdvance());
+  SIM.advanceEra();
+  ok('17a gate: advancing lands on era7 Neon Horizon', SIM.raw().era === 7 && SIM.eraName(7) === 'Neon Horizon');
+})();
+
+(function ages17aBuildGating() {
+  SIM.__setRng(mulberry32(1717)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw(); g.money = 1e7;
+  var age6 = ['container_terminal', 'drone_bay', 'robo_crane', 'logistics_hub'], age7 = ['solar_spire', 'holo_market', 'fusion_dock', 'sky_beacon'];
+  SIM.setEra(5);
+  age6.concat(age7).forEach(function (t) { ok('17a build-gate: ' + t + ' not buildable before its age', !SIM.canBuild(t)); });
+  SIM.setEra(6);
+  age6.forEach(function (t) { ok('17a build-gate: ' + t + ' buildable once Automated Harbour is reached', SIM.canBuild(t)); });
+  age7.forEach(function (t) { ok('17a build-gate: ' + t + ' still locked at era6 (needs Neon Horizon)', !SIM.canBuild(t)); });
+  SIM.setEra(7);
+  age7.forEach(function (t) { ok('17a build-gate: ' + t + ' buildable once Neon Horizon is reached', SIM.canBuild(t)); });
+})();
+
+(function ages17aEconAndSynergy() {
+  // container_terminal (era6 sales building) — seeded tick with stock shows a clear income effect
+  SIM.__setRng(mulberry32(555)); SIM.newGame(); SIM.foundPort('green'); SIM.setEra(6); var g = SIM.raw(); g.money = 1e7;
+  SIM.build('container_terminal'); SIM.port('green').res.goods = 500;
+  var b0 = g.money; SIM.tick(5);
+  ok('17a econ: container_terminal sale yields income on tick', g.money > b0);
+  // solar_spire (era7 `money` field) — direct £/s income, immune to demand softening AND crashes
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(7); g = SIM.raw(); g.money = 1e7;
+  SIM.build('solar_spire'); SIM.raw().crash = { res: 'fish', t: 30 };
+  var b1 = g.money; SIM.tick(5);
+  ok('17a econ: solar_spire (money field) yields income even mid-crash', g.money > b1);
+  // Automated Line synergy: drone_bay + robo_crane -> +18% production
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(6); g = SIM.raw(); g.money = 1e7;
+  SIM.build('drone_bay'); SIM.build('robo_crane');
+  var m = SIM.synergyMul('green');
+  ok('17a econ: automation synergy (drone_bay+robo_crane) → prod +18%', near(m.prod, 1.18) && near(m.sales, 1));
+  // Sky Beacon — a 4th defense tier, stacks into strike() damage reduction (portDef is internal, so
+  // exercised indirectly: forcing a strike must never throw, and stats.storms still increments)
+  SIM.build('sky_beacon');
+  var stormsBefore = (SIM.raw().stats.storms || 0);
+  SIM.strikePort('green');
+  ok('17a econ: a Sky-Beacon-defended port survives a forced strike cleanly', SIM.raw().stats.storms === stormsBefore + 1 && SIM.raw().money >= 0);
+})();
+
+(function ages17aFormulasAtEra7() {
+  SIM.__setRng(mulberry32(70)); SIM.newGame(); SIM.foundPort('green'); SIM.setEra(7);
+  ok('17a formulas: slotCap sane at era7 (8+4×7=36)', SIM.slotCap() === 36);
+  ok('17a formulas: avertCost finite, positive & era-scaled at era7 (60×2^7=7680)', SIM.avertCost() === 7680);
+  ok('17a formulas: colony (2nd port) cost finite, positive & era-scaled at era7 (150×2^7=19200)', SIM.foundCost() === 19200);
+})();
+
+(function ages17aReachability() {
+  // accelerated autoplay: era6 (Automated Harbour) and era7 (Neon Horizon) must both be reachable
+  // through ordinary building/upgrading play within a bounded number of accelerated ticks. Policy:
+  // diversify (one of every currently-unlocked type) before duplicating, and — since blind greed
+  // would otherwise let cheap era0 buildings hog the whole per-port slot cap before later-era types
+  // ever get their first copy — cap duplicates at 3/type while more ages are still to come. Tuned
+  // against this exact policy: era6 ≈240 sim-min in, era7 ≈345 sim-min in (seed 20260713); see the
+  // commit body for the building cost/rate numbers this was checked against.
+  SIM.setPace(1); SIM.__setRng(mulberry32(20260713)); SIM.newGame(); SIM.foundPort('green');
+  var st = SIM.raw();
+  var order = ['fishing_hut', 'jetty', 'cottage', 'warehouse', 'market', 'sawmill', 'factory', 'dock', 'seawall', 'lighthouse',
+    'logistics_hub', 'robo_crane', 'drone_bay', 'container_terminal', 'sky_beacon', 'holo_market', 'fusion_dock', 'solar_spire'];
+  function haveCount(t) { var B = SIM.port('green').buildings, n = 0; for (var i = 0; i < B.length; i++) if (B[i].type === t) n++; return n; }
+  var rrIdx = 0;
+  function tryBuild(budget) {
+    for (var oi = 0; oi < order.length; oi++) { var t = order[oi]; if (haveCount(t) === 0 && SIM.canBuild(t) && SIM.buildCost(t) <= budget) { SIM.build(t); return true; } }
+    var capDup = st.era >= 7 ? Infinity : 3;
+    for (var oj = 0; oj < order.length; oj++) {
+      var idx = (rrIdx + oj) % order.length, u = order[idx];
+      if (haveCount(u) < capDup && SIM.canBuild(u) && SIM.buildCost(u) <= budget) { SIM.build(u); rrIdx = (idx + 1) % order.length; return true; }
+    }
+    return false;
+  }
+  var era6Step = null, era7Step = null;
+  for (var step = 0; step < 1000; step++) {
+    SIM.tick(30);
+    for (var k = 0; k < 6; k++) {
+      var budget = st.money * 0.5, did = tryBuild(budget);
+      if (!did) {
+        var B = SIM.port('green').buildings, best = -1, bestC = Infinity;
+        for (var bi = 0; bi < B.length; bi++) if (SIM.canUpgrade(bi)) { var c = SIM.upCost(bi); if (c < bestC && c <= budget) { bestC = c; best = bi; } }
+        if (best >= 0) { SIM.upgrade(best); did = true; }
+      }
+      if (!did) break;
+    }
+    if (SIM.canAdvance()) SIM.advanceEra();
+    if (st.era >= 6 && era6Step === null) era6Step = step;
+    if (st.era >= 7 && era7Step === null) { era7Step = step; break; }
+  }
+  ok('17a reachability: Automated Harbour (era6) reached within 1000 accelerated ticks', era6Step !== null);
+  ok('17a reachability: Neon Horizon (era7) reached within 1000 accelerated ticks', era7Step !== null);
+  ok('17a reachability: money/lifetime stay finite & non-negative throughout the climb', isFinite(st.money) && st.money >= 0 && isFinite(st.lifetimeMoney));
+})();
+
+(function ages17aMigration() {
+  // a pre-17a save with era=5 (Global Hub under the OLD 6-era ladder) must load with its era index
+  // UNCHANGED — index 5 still names 'Global Hub' on the new 8-era ladder (the ladder only grew past
+  // the end; nothing shifted underneath an existing save).
+  var oldBlob = {
+    era: 5, money: 300000, lifetimeMoney: 5000000, lastSeen: Date.now(), founded: true,
+    managers: { fishing: 2, sales: 1, labour: 0 }, active: 'green',
+    ports: { green: { id: 'green', res: { fish: 0, timber: 0, goods: 0 }, buildings: [{ type: 'dock', level: 2, hp: 100 }, { type: 'dock', level: 1, hp: 100 }], pop: 10, focus: 'none', demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 } },
+    network: { xp: 0, level: 1, routes: [] }, hazard: { t: 0, next: 100, phase: 'idle', strikeId: 0, last: null },
+    crash: null, evt: { t: 0, next: 100, active: null, lastId: '', seq: 0 }, voyages: [], voyageSeq: 0,
+    stats: { storms: 0, shipped: 0, averted: 0 }
+  };
+  STORE['harbor:sim'] = JSON.parse(JSON.stringify(oldBlob));
+  var snap = SIM.load();
+  ok('17a migrate: pre-17a era5 save loads with its era index unchanged', SIM.raw().era === 5);
+  ok('17a migrate: era5 still names Global Hub (ladder only grew past the end)', snap.eraName === 'Global Hub');
+  ok('17a migrate: era5->6 gate resolves cleanly (new gate wired in, no throw)', typeof SIM.canAdvance() === 'boolean');
 })();
 
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');

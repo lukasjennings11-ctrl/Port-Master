@@ -27,7 +27,11 @@
   function setPace(m) { PACE = (typeof m === 'number' && m > 0) ? m : 1; }
 
   // ---- era ladder (empire rank) ----
-  var ERAS = ['Fishing Village', 'Trading Post', 'Industrial Port', 'Metropolis', 'Megaport', 'Global Hub'];
+  // Phase 17a: extended past Global Hub with two technology ages — Automated Harbour (robots +
+  // logistics take over the docks) and Neon Horizon (the harbour of tomorrow: solar/fusion power,
+  // holographic markets). eraName()'s roman-numeral endless tail now continues past Neon Horizon
+  // ("Neon Horizon II"…) exactly as it used to continue past Global Hub.
+  var ERAS = ['Fishing Village', 'Trading Post', 'Industrial Port', 'Metropolis', 'Megaport', 'Global Hub', 'Automated Harbour', 'Neon Horizon'];
 
   // ---- building catalogue (data-driven) ----
   // prod: {res:rate/s}; sells:{from,rate/s,price}; money:rate/s (direct trade); cap:{res:amount};
@@ -44,7 +48,26 @@
     dock:        { name: 'Cargo Dock', era: 2, cost: 800, costMul: 1.6, jobs: 5, cat: 'sales', sells: { from: 'goods', rate: 0.7, price: 22 }, lvlCost: 1.7, lvlGain: 1.42, max: 12 },
     // defenses (no output) — Sea Wall cuts storm damage to this port; Lighthouse cuts route cargo loss
     seawall:     { name: 'Sea Wall', era: 1, cost: 200, costMul: 1.6, cat: 'defense', def: 'wall', lvlCost: 1.55, lvlGain: 1.0, max: 5 },
-    lighthouse:  { name: 'Lighthouse', era: 2, cost: 300, costMul: 1.7, cat: 'defense', def: 'light', lvlCost: 1.6, lvlGain: 1.0, max: 3 }
+    lighthouse:  { name: 'Lighthouse', era: 2, cost: 300, costMul: 1.7, cat: 'defense', def: 'light', lvlCost: 1.6, lvlGain: 1.0, max: 3 },
+
+    // Phase 17a: Age 6 — Automated Harbour (era 6). Eras 3-5 (Metropolis/Megaport/Global Hub) never
+    // added new building TYPES — they only asked for more of the era-2 set — so these are the first
+    // new buildings since Industrial Port. Robo-Crane also gives timber its first direct sale outlet
+    // (previously timber only ever fed the sawmill→factory convert chain).
+    container_terminal: { name: 'Container Terminal', era: 6, cost: 6000, costMul: 1.62, jobs: 9, cat: 'sales', sells: { from: 'goods', rate: 2.4, price: 150 }, lvlCost: 1.72, lvlGain: 1.42, max: 12 },
+    drone_bay:          { name: 'Drone Bay', era: 6, cost: 9000, costMul: 1.64, jobs: 0, cat: 'prod', convert: { from: 'timber', to: 'goods', rate: 5.5 }, lvlCost: 1.74, lvlGain: 1.42, max: 12 },
+    robo_crane:         { name: 'Robo-Crane', era: 6, cost: 5000, costMul: 1.6, jobs: 5, cat: 'sales', sells: { from: 'timber', rate: 3.4, price: 55 }, lvlCost: 1.7, lvlGain: 1.4, max: 12 },
+    logistics_hub:      { name: 'Logistics Hub', era: 6, cost: 8000, costMul: 1.66, cap: { fish: 500, timber: 500, goods: 500 }, lvlCost: 1.7, lvlGain: 1.35, max: 12 },
+
+    // Phase 17a: Age 7 — Neon Horizon (era 7). Solar Spire is the game's first building to use the
+    // `money` field (direct £/s income — see tickPort()): it needs no resource to sell, so it's
+    // immune to demand-softening AND market crashes, a genuine "harbour of tomorrow" perk. Sky
+    // Beacon is a fourth defense tier, stacking with Sea Wall/Lighthouse/network insurance (see
+    // portDef()/strike()/evData('raid') below).
+    solar_spire: { name: 'Solar Spire', era: 7, cost: 55000, costMul: 1.65, jobs: 0, cat: 'money', money: 34, lvlCost: 1.75, lvlGain: 1.45, max: 10 },
+    holo_market: { name: 'Holo-Market', era: 7, cost: 45000, costMul: 1.6, jobs: 10, cat: 'sales', sells: { from: 'fish', rate: 6.0, price: 220 }, lvlCost: 1.72, lvlGain: 1.42, max: 12 },
+    fusion_dock: { name: 'Fusion Dock', era: 7, cost: 60000, costMul: 1.62, jobs: 12, cat: 'sales', sells: { from: 'goods', rate: 3.2, price: 620 }, lvlCost: 1.74, lvlGain: 1.44, max: 12 },
+    sky_beacon:  { name: 'Sky Beacon', era: 7, cost: 70000, costMul: 1.8, cat: 'defense', def: 'beacon', lvlCost: 1.65, lvlGain: 1.0, max: 5 }
   };
   var BASE_CAP = { fish: 80, timber: 80, goods: 80 };
 
@@ -68,7 +91,9 @@
     { id: 'tradehub',  name: 'Trade Hub',   effect: '+12% sales',      chan: 'sales', amt: 0.12, test: function (c) { return (c.warehouse || 0) >= 1 && (c.market || 0) >= 1; } },
     { id: 'boomtown',  name: 'Boomtown',    effect: '+15% production', chan: 'prod',  amt: 0.15, test: function (c) { return (c.cottage || 0) >= 3; } },
     { id: 'millforge', name: 'Mill & Forge', effect: '+15% goods',     chan: 'prod',  amt: 0.15, test: function (c) { return (c.sawmill || 0) >= 1 && (c.factory || 0) >= 1; } },
-    { id: 'freeport',  name: 'Free Port',   effect: '+10% sales',      chan: 'sales', amt: 0.10, test: function (c) { return (c.market || 0) >= 1 && (c.dock || 0) >= 1; } }
+    { id: 'freeport',  name: 'Free Port',   effect: '+10% sales',      chan: 'sales', amt: 0.10, test: function (c) { return (c.market || 0) >= 1 && (c.dock || 0) >= 1; } },
+    // Phase 17a: Automated Harbour's pair — a crew-free convert building + the timber loading crane
+    { id: 'automation', name: 'Automated Line', effect: '+18% production', chan: 'prod', amt: 0.18, test: function (c) { return (c.drone_bay || 0) >= 1 && (c.robo_crane || 0) >= 1; } }
   ];
   var SYN_MAX = 1.6;                                   // clamp: synergies stack but never runaway
   function portCounts(port) { var c = {}, B = port.buildings || []; for (var i = 0; i < B.length; i++) { var t = B[i].type; c[t] = (c[t] || 0) + 1; } return c; }
@@ -111,15 +136,27 @@
   var WAGE = 0.10, DEMAND_SOFT = 14;   // wage/worker/s; sales/s above which demand price softens
 
   // era advance requirements: money on hand + minimum building counts (EMPIRE-wide counts)
+  // Phase 17a: two new gates continue the ~5-7x money curve past Megaport's 40000: index5 (Global
+  // Hub -> Automated Harbour) needs a proven era2 industrial base (no era3-5 buildings ever existed
+  // to gate on, so — like the Megaport/Global Hub gates before it — this reuses dock/factory counts);
+  // index6 (Automated Harbour -> Neon Horizon) is the first gate to require NEW-age buildings, since
+  // Automated Harbour is the first age since Industrial Port to actually add any. Numbers: 200000 ->
+  // 300000 (1.5x — Global Hub itself was already the "prove you're industrial" gate) -> 2000000
+  // (6.67x, back on the established 5-7x/step curve) — see the commit body for the autoplay this was
+  // checked against.
   var ERA_REQ = [
     { money: 250, need: { fishing_hut: 2, cottage: 1 } },           // -> Trading Post
     { money: 1500, need: { jetty: 1, cottage: 2 } },                // -> Industrial Port
     { money: 8000, need: { warehouse: 1, market: 1 } },             // -> Metropolis
     { money: 40000, need: { factory: 1, dock: 1 } },                // -> Megaport
-    { money: 200000, need: { dock: 2 } }                            // -> Global Hub
+    { money: 200000, need: { dock: 2 } },                           // -> Global Hub
+    { money: 300000, need: { dock: 3, factory: 2 } },               // -> Automated Harbour
+    { money: 2000000, need: { container_terminal: 1, drone_bay: 1 } }  // -> Neon Horizon
   ];
-  // ENDLESS eras: past the curated 6, generate "Global Hub II, III…" with exponentially scaling
-  // money thresholds, so the ladder never ends (prestige multipliers keep you climbing it).
+  // ENDLESS eras: past the curated ladder, generate "Neon Horizon II, III…" with exponentially
+  // scaling money thresholds (continuing the same 6x/step the curated gates settle into), so the
+  // ladder never ends (prestige multipliers keep you climbing it).
+  var ERA_TAIL_MUL = 6;
   function roman(n) {
     if (n < 1) return '' + n;
     var M = ['', 'M', 'MM', 'MMM'], C = ['', 'C', 'CC', 'CCC', 'CD', 'D', 'DC', 'DCC', 'DCCC', 'CM'],
@@ -127,8 +164,12 @@
     if (n > 3999) return '' + n;
     return M[(n / 1000) | 0] + C[((n % 1000) / 100) | 0] + X[((n % 100) / 10) | 0] + I[n % 10];
   }
-  function eraName(n) { return n < ERAS.length ? ERAS[n] : 'Global Hub ' + roman(n - ERAS.length + 2); }
-  function eraReq(n) { return n < ERA_REQ.length ? ERA_REQ[n] : { money: 200000 * Math.pow(6, n - (ERA_REQ.length - 1)) }; }
+  function eraName(n) { return n < ERAS.length ? ERAS[n] : 'Neon Horizon ' + roman(n - ERAS.length + 2); }
+  function eraReq(n) {
+    if (n < ERA_REQ.length) return ERA_REQ[n];
+    var lastMoney = ERA_REQ[ERA_REQ.length - 1].money;
+    return { money: Math.round(lastMoney * Math.pow(ERA_TAIL_MUL, n - (ERA_REQ.length - 1))) };
+  }
 
   // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
   // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
@@ -347,11 +388,14 @@
   var HAZARD = { green: 'Squall', mountain: 'Rockslide', desert: 'Sandstorm', tropical: 'Hurricane', nordic: 'Ice Storm' };
   function hzRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between hazards, not their telegraph/strike
   function bhp(b) { return b.hp == null ? 100 : b.hp; }
-  function portDef(p) { var w = 0, l = 0, B = p.buildings; for (var i = 0; i < B.length; i++) { if (B[i].type === 'seawall') w += B[i].level; else if (B[i].type === 'lighthouse') l += B[i].level; } return { wall: w, light: l }; }
+  // Phase 17a: Sky Beacon (era7 defense) adds a THIRD defense stat alongside Sea Wall/Lighthouse —
+  // a further storm-damage cut (strike() below) and a raid-survival edge (evData('raid')) — a late-
+  // game defense tier so hazards stay a real (if shrinking) threat instead of trivial once maxed.
+  function portDef(p) { var w = 0, l = 0, bcn = 0, B = p.buildings; for (var i = 0; i < B.length; i++) { if (B[i].type === 'seawall') w += B[i].level; else if (B[i].type === 'lighthouse') l += B[i].level; else if (B[i].type === 'sky_beacon') bcn += B[i].level; } return { wall: w, light: l, beacon: bcn }; }
   function strike(portId) {
     var p = S.ports[portId]; if (!p) return;
     var def = portDef(p);
-    var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0));   // sea wall + insurance + Legacy
+    var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.10 * def.beacon - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0));   // sea wall + sky beacon + insurance + Legacy
     var pool = []; for (var i = 0; i < p.buildings.length; i++) if (BT[p.buildings[i].type].cat !== 'defense') pool.push(i);
     var n = Math.min(pool.length, 1 + Math.floor(_rng() * 2)), damaged = 0;     // hit 1–2 buildings
     for (var k = 0; k < n && pool.length; k++) {
@@ -458,7 +502,7 @@
     if (def.id === 'goldrush') return { mult: 1.8, secs: 30 };
     if (def.id === 'festival') return { mult: 1.5, secs: 30, fever: true };
     if (def.id === 'castaway') return {};
-    if (def.id === 'raid') return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(0.45 + 0.12 * d.wall + 0.06 * d.light, 0.45, 0.92) };
+    if (def.id === 'raid') return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(0.45 + 0.12 * d.wall + 0.06 * d.light + 0.08 * d.beacon, 0.45, 0.92) };
     if (def.id === 'gamble') return { wager: Math.round(Math.max(40, Math.min(money * 0.15, 90 * Math.pow(2, era)))), odds: 0.6 };
     if (def.id === 'commission') { var res = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var amt = Math.round(40 * (1 + era * 0.6)); return { res: res, amt: amt, reward: Math.round(amt * basePrice(res) * 2.4) }; }
     if (def.id === 'smuggler') { var sr = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var sa = Math.round(60 * (1 + era * 0.7)); return { res: sr, amt: sa, cost: Math.round(sa * basePrice(sr) * 0.55) }; }

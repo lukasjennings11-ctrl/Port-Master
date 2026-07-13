@@ -1217,7 +1217,7 @@
   }
   function showAscendBanner(name, unlocks, bonus) {
     if (!ascendBanner) { ascendBanner = document.createElement('div'); ascendBanner.id = 'ascendbanner'; wrap.appendChild(ascendBanner); }
-    ascendBanner.innerHTML = '<div class="ab-sub">ERA ASCENSION</div><div class="ab-name">' + name + '</div>' + (unlocks ? '<div class="ab-unlock">Unlocked: ' + unlocks + '</div>' : '') + (bonus ? '<div class="ab-bonus">+ £' + fmt(bonus) + ' grant</div>' : '');
+    ascendBanner.innerHTML = '<div class="ab-sub">ERA ASCENSION</div><div class="ab-name">Welcome to the ' + name + ' age!</div>' + (unlocks ? '<div class="ab-unlock">Unlocked: ' + unlocks + '</div>' : '') + (bonus ? '<div class="ab-bonus">+ £' + fmt(bonus) + ' grant</div>' : '');
     ascendBanner.classList.remove('show'); void ascendBanner.offsetWidth; ascendBanner.classList.add('show');
     clearTimeout(showAscendBanner._t); showAscendBanner._t = setTimeout(function () { ascendBanner.classList.remove('show'); }, 2600);
   }
@@ -1623,6 +1623,7 @@
   var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
   var setBtn = null, settingsPanel = null, settingsOpen = false, resetArm = false;
   var expBtn = null, expPanel = null, expOpen = false;
+  var timelinePanel = null, timelineStrip = null, timelineOpen = false;   // Phase 17a: age timeline strip
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
 
@@ -1775,7 +1776,7 @@
   }
   // any surface that currently owns input — tips stay silent rather than talk over it
   function tipsBlocked() {
-    return settingsOpen || manageOpen || expOpen || tradeOpen || legacyOpen || feverActive() ||
+    return settingsOpen || manageOpen || expOpen || tradeOpen || legacyOpen || timelineOpen || feverActive() ||
       (eventModal && eventModal.classList.contains('show')) ||
       (rivalModal && rivalModal.classList.contains('show')) ||
       !!document.getElementById('welcomemodal') ||
@@ -2794,10 +2795,61 @@
   }
   function onBonusFail() { bonusBusy = false; closeBonusCard(); }   // decline / no-fill / cap race — state left exactly as before
 
+  // ---- Phase 17a: Empire Timeline — tapping the era pill opens a compact horizontal age ribbon:
+  // one node per curated age (icon + name), filled once reached, the current age pulsing, future
+  // ages ghosted with a one-line teaser, and a trailing "∞" node for the endless roman-numeral tail
+  // past Neon Horizon. Reached nodes just say "Reached" (no per-era timestamp is persisted, so this
+  // is the "otherwise just state" fallback) — the current node is called out separately. Full-screen
+  // backdrop like #cratemodal so a tap outside the card closes it, same as ✕.
+  var ERA_META = [
+    { icon: '🎣', teaser: 'Nets and driftwood docks — where every empire starts.' },
+    { icon: '⚓', teaser: 'The first market stalls open along the quay.' },
+    { icon: '🏭', teaser: 'Steam, sawdust and the first cargo cranes.' },
+    { icon: '🏙️', teaser: 'A skyline rises over the harbour.' },
+    { icon: '🚢', teaser: 'Container giants dock round the clock.' },
+    { icon: '🌐', teaser: 'Trade routes span the whole map.' },
+    { icon: '🤖', teaser: 'Robots run the docks — you run the empire.' },
+    { icon: '🌆', teaser: 'Glass, light and fusion power — the harbour of tomorrow.' }
+  ];
+  function timelineNodeHtml(i, cur) {
+    var meta = ERA_META[i] || { icon: '❔', teaser: '' }, name = SIM.eraName(i);
+    var state = i < cur ? 'reached' : i === cur ? 'current' : 'future';
+    var sub = state === 'current' ? 'Current age' : state === 'reached' ? 'Reached' : meta.teaser;
+    return '<div class="tl-node ' + state + '"><div class="tl-ic">' + meta.icon + '</div><div class="tl-name">' + name + '</div><div class="tl-sub">' + sub + '</div></div>';
+  }
+  function renderTimeline() {
+    if (!timelineStrip || !SIM || !SIM.raw()) return;
+    var cur = SIM.raw().era, total = SIM.ERAS.length, html = '';
+    for (var i = 0; i < total; i++) html += timelineNodeHtml(i, cur);
+    var pastLadder = cur >= total;   // in the endless roman-numeral tail past Neon Horizon
+    html += '<div class="tl-node tl-tail ' + (pastLadder ? 'current' : 'future') + '"><div class="tl-ic">∞</div>' +
+      '<div class="tl-name">' + (pastLadder ? SIM.eraName(cur) : 'Beyond') + '</div>' +
+      '<div class="tl-sub">The climb continues, forever.</div></div>';
+    timelineStrip.innerHTML = html;
+    var live = timelineStrip.querySelector('.tl-node.current'); if (live && live.scrollIntoView) live.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }
+  function ensureTimelinePanel() {
+    if (timelinePanel) return;
+    timelinePanel = document.createElement('div'); timelinePanel.id = 'timelinepanel';
+    timelinePanel.innerHTML = '<div class="tl-card"><div class="tl-head"><span class="tl-title">Empire Timeline</span><button class="tl-close" id="tl-close">✕</button></div><div class="tl-strip" id="tl-strip"></div></div>';
+    wrap.appendChild(timelinePanel);
+    timelineStrip = timelinePanel.querySelector('#tl-strip');
+    timelinePanel.addEventListener('click', function (e) { if (e.target === timelinePanel) closeTimeline(); });
+    timelinePanel.querySelector('#tl-close').addEventListener('click', closeTimeline);
+  }
+  function openTimeline() {
+    if (!simReady()) return;
+    ensureTimelinePanel(); timelineOpen = true; timelinePanel.classList.add('show'); renderTimeline(); sfx('tap'); haptic(10);
+    announceFeature('timeline', '🕰️', 'Empire Timeline', 'Tap the era pill anytime to see how far you’ve come — and what’s next.');
+  }
+  function closeTimeline() { timelineOpen = false; if (timelinePanel) timelinePanel.classList.remove('show'); }
+  function toggleTimeline() { if (timelineOpen) closeTimeline(); else openTimeline(); }
+
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
     hudMoney = chip('e-money', '£'); hudFish = chip('e-fish', 'Fish'); hudPop = chip('e-pop', 'Crew');
+    var eraPill = document.getElementById('era-pill'); if (eraPill) eraPill.addEventListener('click', toggleTimeline);   // Phase 17a: era pill opens the age timeline
     muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.title = 'Sound'; muteBtn.classList.toggle('off', muted);
     muteBtn.addEventListener('click', function () { applyMuted(!muted); sfx('tap'); });
     if (window.Juice) Juice.Audio.setMuted(muted);
@@ -2845,7 +2897,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v65';
+  var BUILD_TAG = 'v66';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3101,8 +3153,11 @@
     var pill = document.getElementById('era-pill'); if (pill) pill.textContent = s.eraName;
     advBtn.style.display = s.canAdvance ? '' : 'none';
     advBtn.textContent = s.nextEra ? 'Advance → ' + s.nextEra : 'Advance era';
-    // era progress bar
-    var req = SIM.ERA_REQ[s.era];
+    // era progress bar — eraReq() (not the raw ERA_REQ table) so the endless tail past the curated
+    // ladder still shows real progress instead of a premature "Max era" once you outrun ERA_REQ.length
+    // (this was already silently true from Global Hub onward before Phase 17a; now it'd misfire one
+    // age later at Neon Horizon — fixed here rather than pushed further down the road).
+    var req = SIM.eraReq(s.era);
     if (eraBar) {
       if (!req) { eraBar.querySelector('.eb-fill').style.width = '100%'; eraBar.querySelector('.eb-label').textContent = 'Max era — ' + s.eraName; eraBar.querySelector('.eb-need').textContent = ''; }
       else {
@@ -3452,6 +3507,17 @@
     lookAt: function (x, z, dist, el, az, ty) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } if (ty != null) { C.ty = ty; } },   // Phase 16a: optional ty for debug-ship close-up framing
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
+    // Phase 17a: Empire Timeline strip (test/debug hooks)
+    openTimeline: function () { openTimeline(); }, closeTimeline: function () { closeTimeline(); },
+    tapEraPill: function () { var el = document.getElementById('era-pill'); if (el) el.click(); },
+    timelineState: function () {
+      var cur = timelineStrip ? timelineStrip.querySelector('.tl-node.current') : null;
+      return {
+        open: timelineOpen, shown: timelinePanel ? timelinePanel.classList.contains('show') : false,
+        nodes: timelineStrip ? timelineStrip.querySelectorAll('.tl-node').length : 0,
+        currentName: cur ? cur.querySelector('.tl-name').textContent : null
+      };
+    },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, msg: tradeAct ? tradeAct.textContent : '' }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
     forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
