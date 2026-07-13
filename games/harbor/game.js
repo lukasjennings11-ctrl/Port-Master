@@ -152,7 +152,13 @@
   function mulberry(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
   // ---- scene ----
-  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, hullMesh, sailMesh, gullMesh;
+  var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, gullMesh;
+  // Phase 16a: SHIPYARD — six real ship-class meshes (models.js HARBOR_MODELS.SHIPYARD), built
+  // once in boot() and reused every frame via compose transforms — replaces the old single
+  // hull-box + triangle-sail (hullMesh/sailMesh) that read as floating triangles at gameplay zoom.
+  // SHIP[cls] = { hull: mesh (tint-ready), trim: mesh (baked real colours, drawn uVCol=1),
+  //               sails: [{mesh, phase}], meta: {len,beam,funnel} }.
+  var SHIP = {}, shipStats = null, DEBUG_SHIP = null;   // DEBUG_SHIP: test-only forced close-up ship (see __harbor.debugShip)
   var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
   var cityModels = null, atlasTex = null, blobTex = null, wakeTex = null;   // glTF buildings (async) + shared atlas + shadow decal + wake decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
@@ -382,7 +388,12 @@
     var rng = mulberry(hash('amb:' + biomeId + ':' + Math.round(cx) + ':' + era));
     var nBoats = 2 + Math.min(9, era * 2 + (dev / 5 | 0)), nGulls = 4 + Math.min(12, era * 2 + (dev / 4 | 0)), boats = [], gulls = [], i;
     for (i = 0; i < nBoats; i++) {
-      boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20, hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: rng() < 0.4 });
+      // Phase 16a: ambient traffic is a SHIPYARD mix — small one-mast dinghies filling most of the
+      // bay, with the occasional bigger one-mast-plus-jib sloop (the old 'big' scale flag now picks
+      // the class outright instead of just stretching the same triangle).
+      var big = rng() < 0.4;
+      boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20,
+        hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: big, cls: big ? 'sloop' : 'dinghy', sc: 0.92 + rng() * 0.22 });
     }
     for (i = 0; i < nGulls; i++) {
       gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
@@ -393,6 +404,24 @@
   // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
   function sailSway(ph) { return Math.sin(clock * 1.7 + ph) * 0.07 + Math.sin(clock * 0.53 + ph * 0.7) * 0.025; }   // ±~5.5°
   function sailBillow(ph) { return 1 + Math.sin(clock * 2.4 + ph * 1.9) * 0.045; }                                  // ±4.5% width
+  // Phase 16a: draw one SHIPYARD ship — hull (tint-ready, uBase = hullC), trim (baked real
+  // colours: keel/planks/gunwale/rudder/bowsprit/masts/rigging/cabin/pennant/props — one call
+  // with uVCol toggled to 1 so its own vertex colours win over uBase), then each sail as its own
+  // mesh billowing/swaying on phase (sd.phase + phaseBase) so a two-masted ship's sails never move
+  // in lockstep. sailC may be a single colour (every sail) or an array indexed per sail.
+  function drawShip(M, cls, x, y, z, yaw, scale, hullC, sailC, phaseBase) {
+    var S = SHIP[cls]; if (!S) return;
+    y -= S.meta.draft * scale;                    // ride IN the water: waterline ~1/3 up the hull
+    gl.uniform3fv(M.u.uBase, hullC);
+    composeRYS(mModel, x, y, z, scale, scale, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
+    gl.uniform1f(M.u.uVCol, 1); drawMesh(M, S.trim); gl.uniform1f(M.u.uVCol, 0);
+    for (var i = 0; i < S.sails.length; i++) {
+      var sm = S.sails[i], ph = sm.phase + (phaseBase || 0), billow = scale * sailBillow(ph);
+      gl.uniform3fv(M.u.uBase, Array.isArray(sailC[0]) ? (sailC[i] || sailC[0]) : sailC);   // nested array = per-sail colours; flat [r,g,b] = every sail
+      composeRYS(mModel, x, y, z, billow, scale, scale, yaw + sailSway(ph));
+      gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sm.mesh);
+    }
+  }
   // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
   function drawAmbient(M) {
     if (!ambient) return;
@@ -403,16 +432,8 @@
       // heading = tangent of the ellipse
       nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1); nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
       yaw = Math.atan2(nx, nz);
-      var sc = b.big ? 1.5 : 1, bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
-      // rounded wooden hull (flattened 12-gon, long & narrow), riding the water
-      gl.uniform3fv(M.u.uBase, b.hull);
-      composeRYS(mModel, x, 0.55 + bob, z, 3.6 * sc, 1.0, 1.5 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // little deck cabin
-      gl.uniform3fv(M.u.uBase, [b.hull[0] * 0.8, b.hull[1] * 0.8, b.hull[2] * 0.78]);
-      composeRYS(mModel, x, 1.2 + bob, z, 1.5 * sc, 1.0, 1.2 * sc, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      // tall triangular sail — swaying + billowing in the shared breeze
-      gl.uniform3fv(M.u.uBase, [0.96, 0.95, 0.92]);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.2 * sc * sailBillow(b.a0), 4.6 * sc, 0.5, yaw + sailSway(b.a0)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      var bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
+      drawShip(M, b.cls, x, bob, z, yaw, b.sc, b.hull, [0.94, 0.93, 0.90], b.a0);
     }
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
@@ -433,8 +454,14 @@
   var fleet = { exp: [], routes: [], rival: null, at: -1e9 };
   var FLEET_SAIL = [[0.78, 0.9, 1.0], [0.55, 0.95, 0.72], [1.0, 0.82, 0.34], [0.85, 0.5, 1.0]];       // sail tint per destination tier 1..4
   var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
-  var EXP_HULL = [0.38, 0.26, 0.17], EXP_CABIN = [0.3, 0.21, 0.14], RTE_SAIL = [0.93, 0.91, 0.87],
-      RVL_HULL = [0.15, 0.13, 0.18], RVL_CABIN = [0.1, 0.09, 0.13], RVL_SAIL = [0.06, 0.05, 0.08];
+  var EXP_HULL = [0.38, 0.26, 0.17], RTE_SAIL = [0.93, 0.91, 0.87],
+      RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08];
+  // Phase 16a: era gate for the route freighter's SHIPYARD class — 'Industrial Port' (era 2, see
+  // sim.js ERAS) is when the world plausibly has steam power, so route ships upgrade from sail
+  // (brig) to stack/funnel (steamer) right when the static port scene itself starts getting a
+  // crane + container ship (models.js assemblePort's own era>=2 gate) — the fleet and the harbour
+  // read as the same era together.
+  function routeShipClass() { return era >= 2 ? 'steamer' : 'brig'; }
   function refreshFleet() {
     fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null;
     var p = scene.port; if (!p || !simReady()) return;
@@ -453,63 +480,64 @@
         sail: FLEET_SAIL[clamp((a.tier || 1) - 1, 0, 3)]
       });
     }
-    var net = SIM.network();
+    var net = SIM.network(), rCls = routeShipClass();
     for (i = 0, k = 0; i < net.routes.length && k < 4; i++) {
       var rt = net.routes[i]; if (rt.a !== biomeId && rt.b !== biomeId) continue;
       var h = hash('rt:' + rt.id), roff = ((h % 1000) / 1000 - 0.5) * 1.7;   // stable heading per route id
       ca = Math.cos(roff); sa = Math.sin(roff); dx = ox * ca + oz * sa; dz = oz * ca - ox * sa;
       var hull = FLEET_HULL[rt.res] || FLEET_HULL.goods;
-      fleet.routes.push({ dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), sp: 0.09 + (h % 7) * 0.008, ph: (h % 200) / 100, hull: hull, cargo: [hull[0] * 0.8, hull[1] * 0.8, hull[2] * 0.8] });
+      fleet.routes.push({ dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), sp: 0.09 + (h % 7) * 0.008, ph: (h % 200) / 100, hull: hull, cargo: [hull[0] * 0.8, hull[1] * 0.8, hull[2] * 0.8], cls: rCls });
       k++;
     }
     var rr = rivalGet();
     if (rr && rr.race) fleet.rival = { cx: p.x + ox * 96, cz: p.z + oz * 96, px: oz, pz: -ox };   // patrol line runs along the coast
   }
-  // draw the meta fleet; assumes the same flat-colour program state as drawAmbient
+  // draw the meta fleet; assumes the same flat-colour program state as drawAmbient. Each kind maps
+  // to a SHIPYARD class: expedition → schooner (tier-tinted sails, kept), route → brig (resource-
+  // tinted hull + kept deck cargo) or steamer once the port's era is industrial+, rival → corsair.
   function drawFleet(M) {
     var p = scene.port; if (!p) return;
     if (clock - fleet.at > 1) refreshFleet();
     var i, x, z, yaw, bob, e, r;
-    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships (1.3x, tier-tinted sail)
+    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships: schooner, tier-tinted sails
       e = fleet.exp[i];
       var f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2;        // out for the first half, home for the second
       var d = 28 + f * 132;                                        // ready ships wait just off the harbour
       x = p.x + e.dx * d; z = p.z + e.dz * d;
       yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
-      gl.uniform3fv(M.u.uBase, EXP_HULL);
-      composeRYS(mModel, x, 0.55 + bob, z, 4.68, 1.0, 1.95, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, EXP_CABIN);
-      composeRYS(mModel, x, 1.2 + bob, z, 1.95, 1.0, 1.56, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, e.sail);
-      composeRYS(mModel, x, 1.4 + bob, z, 2.86 * sailBillow(e.ph), 5.98, 0.5, yaw + sailSway(e.ph)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, 'schooner', x, bob, z, yaw, 1.0, EXP_HULL, e.sail, e.ph);
     }
-    for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters (resource-tinted hull + deck cargo)
+    for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters: brig (+ kept deck cargo) or late-era steamer
       r = fleet.routes[i];
       var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph;
       var dd = 24 + ff * 92;
       x = p.x + r.dx * dd; z = p.z + r.dz * dd;
       yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + r.ph * 3) * 0.3;
-      gl.uniform3fv(M.u.uBase, r.hull);
-      composeRYS(mModel, x, 0.55 + bob, z, 3.6, 1.0, 1.5, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, r.cargo);
-      composeRYS(mModel, x, 1.35 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
-      gl.uniform3fv(M.u.uBase, RTE_SAIL);
-      composeRYS(mModel, x, 1.4 + bob, z, 1.9 * sailBillow(r.ph * 3), 3.7, 0.5, yaw + sailSway(r.ph * 3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, r.cls, x, bob, z, yaw, 1.0, r.hull, RTE_SAIL, r.ph * 3);
+      if (r.cls === 'brig') {                                      // kept: a tinted cargo crate riding the deck (steamer bakes its own containers)
+        gl.uniform3fv(M.u.uBase, r.cargo);
+        composeRYS(mModel, x, 2.2 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);   // brig deck y ≈ H*0.99 - draft + crate half-height
+      }
     }
-    if (fleet.rival) {                                             // Baron Krall patrols while the race is on
+    if (fleet.rival) {                                             // Baron Krall's corsair patrols while the race is on
       var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
       x = rv.cx + rv.px * Math.sin(pa) * 46; z = rv.cz + rv.pz * Math.sin(pa) * 46;
       yaw = Math.atan2(rv.px * dir, rv.pz * dir);
       bob = Math.sin(clock * 1.3) * 0.3;
-      gl.uniform3fv(M.u.uBase, RVL_HULL);
-      composeRYS(mModel, x, 0.55 + bob, z, 5.76, 1.1, 2.4, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, RVL_CABIN);
-      composeRYS(mModel, x, 1.3 + bob, z, 2.4, 1.1, 1.9, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, hullMesh);
-      gl.uniform3fv(M.u.uBase, RVL_SAIL);
-      composeRYS(mModel, x, 1.5 + bob, z, 3.5 * sailBillow(1.3), 7.4, 0.5, yaw + sailSway(1.3)); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sailMesh);
+      drawShip(M, 'corsair', x, bob, z, yaw, 1.0, RVL_HULL, RVL_SAIL, 1.3);
     }
+  }
+  // Phase 16a: test-only forced close-up ship (see __harbor.debugShip) — parked AT the camera
+  // target in a 3/4 view regardless of founded/fleet state, so a screenshot can isolate one class
+  // (camera dist frames it directly). Colours match each class's real in-game tints.
+  var DEBUG_LOOK = { dinghy: [[0.5, 0.4, 0.28], [0.94, 0.93, 0.90]], sloop: [[0.45, 0.22, 0.14], [0.94, 0.93, 0.90]],
+    brig: [[0.9, 0.52, 0.2], [0.93, 0.91, 0.87]], schooner: [[0.38, 0.26, 0.17], [1.0, 0.82, 0.34]],
+    steamer: [[0.30, 0.34, 0.42], [0.9, 0.9, 0.9]], corsair: [[0.15, 0.13, 0.18], [0.06, 0.05, 0.08]] };
+  function drawDebugShip(M) {
+    var look = DEBUG_LOOK[DEBUG_SHIP] || DEBUG_LOOK.dinghy;
+    drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
   }
 
   // Phase 14a: revive the dormant PCF shadow path. A small directional-light ortho frustum,
@@ -551,7 +579,8 @@
         var b = ambient.boats[i], ang = b.a0 + clock * b.sp;
         var x = ambient.cx + Math.cos(ang) * b.rx, z = ambient.cz + Math.sin(ang) * b.rz;
         var nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1), nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
-        out.push({ x: x, z: z, yaw: Math.atan2(nx, nz), sc: b.big ? 1.5 : 1 });
+        // Phase 16a: wake width tracks the SHIPYARD class — a dinghy leaves a ripple, a sloop a real trail
+        out.push({ x: x, z: z, yaw: Math.atan2(nx, nz), sc: (b.cls === 'sloop' ? 1.0 : 0.55) * b.sc });
       }
     }
     var p = scene.port;
@@ -561,17 +590,17 @@
       for (i = 0; i < fleet.exp.length; i++) {
         e = fleet.exp[i]; f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2; d = 28 + f * 132;
         x2 = p.x + e.dx * d; z2 = p.z + e.dz * d; yaw2 = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
-        out.push({ x: x2, z: z2, yaw: yaw2, sc: 1.3 });
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: 1.5 });                                   // schooner: long elegant hull, long wake
       }
       for (i = 0; i < fleet.routes.length; i++) {
         r = fleet.routes[i]; var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph, dd = 24 + ff * 92;
         x2 = p.x + r.dx * dd; z2 = p.z + r.dz * dd; yaw2 = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
-        out.push({ x: x2, z: z2, yaw: yaw2, sc: 1 });
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: r.cls === 'steamer' ? 1.7 : 1.3 });       // steamer churns harder than the brig
       }
       if (fleet.rival) {
         var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
         x2 = rv.cx + rv.px * Math.sin(pa) * 46; z2 = rv.cz + rv.pz * Math.sin(pa) * 46;
-        out.push({ x: x2, z: z2, yaw: Math.atan2(rv.px * dir, rv.pz * dir), sc: 1.6 });
+        out.push({ x: x2, z: z2, yaw: Math.atan2(rv.px * dir, rv.pz * dir), sc: 1.4 });   // corsair
       }
     }
     return out;
@@ -667,6 +696,7 @@
     }
     // living port: sailing boats + wheeling gulls (flat-colour, same program state as crane parts)
     if (scene.port) { drawAmbient(M); drawFleet(M); }
+    if (DEBUG_SHIP) drawDebugShip(M);   // Phase 16a test-only: forced close-up ship (works founded or wild)
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
     if (foundMode() && sites.length) {
@@ -1107,6 +1137,27 @@
       FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
     }
   }
+  // Phase 16a: steamer funnel smoke — the same soft grey puffs as the factory chimneys (above),
+  // emitted from each SHIPYARD steamer's funnel top (meta.funnel local offset rotated by the
+  // ship's current yaw, same position math as drawFleet). Gentle: one puff/sec per steamer.
+  var funnelT = 0;
+  function emitFunnelSmoke(dt) {
+    if (!FX || cine || tradeOpen) return;
+    var p = scene.port; if (!p || !fleet.routes.length) return;
+    funnelT += dt; if (funnelT < 1.0) return;
+    funnelT -= 1.0;
+    var fun = SHIP.steamer && SHIP.steamer.meta.funnel; if (!fun) return;
+    for (var i = 0; i < fleet.routes.length; i++) {
+      var r = fleet.routes[i]; if (r.cls !== 'steamer') continue;
+      var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph, dd = 24 + ff * 92;
+      var x = p.x + r.dx * dd, z = p.z + r.dz * dd, yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
+      var c = Math.cos(yaw), s = Math.sin(yaw);
+      var sc = worldToScreen(x + fun[0] * c + fun[2] * s, fun[1], z - fun[0] * s + fun[2] * c);
+      if (!sc) continue;
+      var g = 0.60 + Math.random() * 0.2, wind = 8 + Math.sin(clock * 0.53) * 4;   // same shared breeze as chimneys/sails
+      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 4, vy: -16 - Math.random() * 10, life: 1.4 + Math.random() * 0.8, max: 2.2, size: 4 + Math.random() * 4, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.45)', gravity: -5, shape: 'circle' });
+    }
+  }
 
   // ---- Era Ascension cinematic ----
   // Phase 12b: the one natural pause where a portal SDK gets to show a commercial break. It fires
@@ -1199,6 +1250,7 @@
     }
     render();
     emitSmoke(dt);                                               // industry breathes: chimney smoke once you manufacture
+    emitFunnelSmoke(dt);                                         // Phase 16a: steamers puff too
     if (FX && fxCtx) {                                            // draw the 2D juice overlay (with screenshake)
       FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
       fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
@@ -3274,10 +3326,20 @@
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
-    // cartoon ambient shapes: a rounded hull (flat 12-gon), a triangular sail, a small gull triangle
-    hullMesh = E.mesh(new HGL.Builder().cyl(0, -0.5, 0, 1, 1, 12, [1, 1, 1], 1).data());
-    sailMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 1, 3, [1, 1, 1], 0.05).data());
     gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
+    // Phase 16a: SHIPYARD — build all six real ship-class meshes once (hull/trim/sails); see
+    // HARBOR_MODELS.SHIPYARD (models.js) for the shared part-builder kit + per-class spec table.
+    var shipVertTotal = 0, shipStatsByClass = {};
+    HARBOR_MODELS.SHIPYARD.CLASSES.forEach(function (cls) {
+      var s = HARBOR_MODELS.SHIPYARD.build(cls);
+      var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
+      var sailMeshes = s.sails.map(function (sd) { return { mesh: E.mesh(sd.data), phase: sd.phase, verts: sd.data.positions.length / 3 }; });
+      var sailV = sailMeshes.reduce(function (a, sm) { return a + sm.verts; }, 0);
+      SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, meta: s.meta };
+      shipStatsByClass[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV };
+      shipVertTotal += hullV + trimV + sailV;
+    });
+    shipStats = { classes: shipStatsByClass, total: shipVertTotal, oldShipBaseline: 78 };   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives
     facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture()); wakeTex = E.texture(wakeTexture());   // waterMesh is (re)built per-biome in buildBiome() → buildWaterMesh() (Phase 14a: bakes shore-foam heights)
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
@@ -3350,6 +3412,8 @@
     post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail, outlines: postEnabled(), shadow: postEnabled() }; },   // Phase 14a: outlines + soft shadows ride the same quality gate — see render()
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
+    shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
+    debugShip: function (cls) { DEBUG_SHIP = (cls && SHIP[cls]) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears)
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
     setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },
@@ -3362,7 +3426,7 @@
     goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; },
     goalOkAt: function (i) { return !!(i < GOALS.length ? GOALS[i] : genGoal(i)).ok(SIM.state()); },   // test hook: evaluate any ladder goal's ok() without needing goalIdx to be there yet
     tickAuto: function () { autoT = 10; tickAutomation(2); },
-    lookAt: function (x, z, dist, el, az) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } },
+    lookAt: function (x, z, dist, el, az, ty) { C.txT = C.tx = x; C.tzT = C.tz = z; if (dist) { C.distT = C.dist = dist; } if (el) { C.elT = C.el = el; } if (az != null) { C.azT = C.az = az; } if (ty != null) { C.ty = ty; } },   // Phase 16a: optional ty for debug-ship close-up framing
     boatPos: function () { if (!ambient || !ambient.boats.length) return null; var b = ambient.boats[0], ang = b.a0 + clock * b.sp; return { x: ambient.cx + Math.cos(ang) * b.rx, z: ambient.cz + Math.sin(ang) * b.rz }; },
     openTrade: function () { openTrade(); }, closeTrade: function () { closeTrade(); },
     tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, msg: tradeAct ? tradeAct.textContent : '' }; },
@@ -3420,7 +3484,8 @@
     rival: function () { return rivalGet(); },
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
-    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0 }; },
+    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0,
+      expClass: fleet.exp.length ? 'schooner' : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null }; },   // Phase 16a: kind→SHIPYARD class mapping
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
     season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
     fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); },
