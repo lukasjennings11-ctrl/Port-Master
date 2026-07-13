@@ -393,6 +393,32 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     await page.evaluate(() => window.__harbor.post().on === true));
   await page.evaluate(() => window.__harbor.setTod(0.5));
 
+  // Phase 14a: proper-cartoon pass — ink outlines + revived PCF shadows ride the SAME quality
+  // gate as the post pass (one flag, one weak-device fallback), so the assertions here pivot on
+  // post()'s new outlines/shadow fields and on multi-frame soaks with BOTH RTT passes live
+  // (shadow depth pass + scene RT with a samplable depth texture — the two feedback-loop traps).
+  const errsBefore14a = errs.length;
+  const q14 = await page.evaluate(() => window.__harbor.post());
+  ok('14a: post() exposes outline + shadow flags, ON under forced quality', q14.on === true && q14.outlines === true && q14.shadow === true);
+  await page.evaluate(() => window.__harbor.setTod(0.5));   // noon: sun-height shadow strength ~1 → depth pass definitely rendering
+  await sleep(3000);   // multi-second render soak with shadow map + post RT + depth-texture reads all live
+  ok('14a: 3s noon soak with both RTT passes live → zero GL warnings/errors', errs.length === errsBefore14a);
+  for (const t of [0.34, 0.755, 0.0]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(200); }
+  ok('14a: morning/dusk/night sweep (sun-height shadow fade path) renders zero errors', errs.length === errsBefore14a);
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  await page.setViewportSize({ width: 700, height: 500 }); await sleep(300);
+  await page.setViewportSize({ width: 414, height: 820 }); await sleep(300);
+  ok('14a: resize with shadows live (colour + depth texture recreate) renders zero errors', errs.length === errsBefore14a);
+  const q14off = await page.evaluate(() => { window.__harbor.setPost(false); return window.__harbor.post(); });
+  ok('14a: quality off → outlines + shadow flags fall back with it (legacy path)', q14off.on === false && q14off.outlines === false && q14off.shadow === false);
+  await sleep(500);   // several legacy-path frames: uShadowOn 0, no RTT, no outline pass
+  ok('14a: legacy path (quality off) renders several frames with zero errors', errs.length === errsBefore14a);
+  const q14on = await page.evaluate(() => { window.__harbor.setPost(true); return window.__harbor.post(); });
+  ok('14a: quality back on → cartoon flags return and persist', q14on.on === true && q14on.outlines === true && q14on.shadow === true &&
+    await page.evaluate(() => window.Retention.get('harbor', 'post', null) === true));
+  const gs14 = await page.evaluate(() => window.__harbor.geomStats());
+  ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 250000);
+
   // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
   // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
   // any real (already-seen — exp/prestige/storm/…) announce still queued from earlier in the run,

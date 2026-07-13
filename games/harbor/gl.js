@@ -169,16 +169,22 @@
   precision highp float;
   in vec3 vN; in vec3 vW; in vec2 vUV; in vec4 vLP; in vec3 vCol;
   uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin, uShadowTint;
-  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo, uShadowK;
+  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo, uShadowK, uCrush;
   uniform sampler2D uShadow; uniform sampler2D uTex;
   out vec4 frag;
-  float shadow(vec4 lp){
-    if(uShadowOn<0.5) return 1.0;
+  // Phase 14a: slope-scaled bias — grazing light (low ndl) needs a bigger depth push to avoid
+  // acne, direct light can use a thin one so small buildings still ground convincingly (no
+  // peter-panning gap under their feet). uShadowOn is now a continuous STRENGTH (0..1), not a
+  // boolean: game.js fades it with sun height so the map only bites when the sun is high enough
+  // for clean projections — at grazing dusk light the coarse terrain would self-shadow into
+  // ugly mottling, so the soft contact blobs carry the low-sun grounding instead.
+  float shadow(vec4 lp, float ndl){
+    if(uShadowOn<0.05) return 1.0;
     vec3 p=lp.xyz/lp.w*0.5+0.5;
     if(p.z>1.0||p.x<0.0||p.x>1.0||p.y<0.0||p.y>1.0) return 1.0;
-    float bias=0.0017; float s=0.0; vec2 tx=vec2(1.0/2048.0);
+    float bias=clamp(0.0028*(1.0-ndl)+0.0006, 0.0006, 0.0034); float s=0.0; vec2 tx=vec2(1.0/2048.0);
     for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++){ float d=texture(uShadow,p.xy+vec2(float(x),float(y))*tx).r; s+=(p.z-bias>d)?0.0:1.0; }
-    return s/9.0;
+    return mix(1.0, s/9.0, clamp(uShadowOn,0.0,1.0));
   }
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
@@ -189,7 +195,7 @@
     if(uAlbedo>0.5){ vec4 t=texture(uTex,vUV); base = t.rgb * uBase; }   // asset albedo atlas, tinted by uBase
     else if(uTexMix>0.0){ vec4 t=texture(uTex,vUV); base=mix(base, base*(0.55+0.9*t.r), uTexMix); emiss=t.a; }
     float ndl=max(dot(N,uSunDir),0.0);
-    float sh=shadow(vLP);
+    float sh=shadow(vLP, ndl);
     vec3 V=normalize(uCam-vW); vec3 H=normalize(uSunDir+V);
     // cartoon banded diffuse (stepped with soft edges) + soft rim highlight
     float diff = ndl;
@@ -214,6 +220,11 @@
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     col*=uExposure;
     float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
+    // Phase 14a palette pop: pull mid-shadows down a touch for a more "confident", graphic-novel
+    // read (m*(1-m) peaks at col=0.5 and is zero at both black and bright, so highlights never
+    // clip and true blacks never crush further — safe on HDR-ish >1 values too, since the clamp
+    // used to build the factor pins those to m=1, i.e. no effect).
+    vec3 m=clamp(col,0.0,1.0); col -= uCrush*m*(1.0-m);
     col += (dth(gl_FragCoord.xy)-0.5)/255.0;   // hash dither kills mobile gradient banding
     frag=vec4(aces(col),1.0);
   }`;
@@ -247,14 +258,16 @@
     frag=vec4(aces(c*1.05),1.0); }`;
 
   var V_WATER = `#version 300 es
-  layout(location=0) in vec3 aPos; uniform mat4 uVP; uniform float uTime; out vec3 vW; out vec3 vN;
+  layout(location=0) in vec3 aPos; layout(location=3) in vec3 aColor; uniform mat4 uVP; uniform float uTime; out vec3 vW; out vec3 vN; out float vLandH;
   void main(){ vec3 p=aPos; float t=uTime;
     float h=sin(p.x*0.18+t*1.1)*0.06+sin(p.z*0.23-t*0.9)*0.05+sin((p.x+p.z)*0.4+t*1.7)*0.025; p.y+=h-0.12; // sea level just below the heightfield coastline
     float dx=cos(p.x*0.18+t*1.1)*0.018+cos((p.x+p.z)*0.4+t*1.7)*0.016;
     float dz=cos(p.z*0.23-t*0.9)*0.021+cos((p.x+p.z)*0.4+t*1.7)*0.016;
-    vN=normalize(vec3(-dx,1.0,-dz)); vW=p; gl_Position=uVP*vec4(p,1.0); }`;
+    vN=normalize(vec3(-dx,1.0,-dz)); vW=p;
+    vLandH=aColor.r;   // Phase 14a: terrain height baked per-vertex at mesh-build time (buildWaterMesh) — feeds the shoreline foam band below, no runtime heightfield lookup needed
+    gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
-  precision highp float; in vec3 vW; in vec3 vN; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uSparkle;
+  precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uSparkle,uFoam;
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
@@ -267,6 +280,15 @@
     vec3 col=mix(water,sky,clamp(fres*0.78,0.0,1.0));
     vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),140.0); col+=uSunCol*smoothstep(0.35,0.75,gl)*0.85; // soft toon glint
     float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
+    // Phase 14a: scalloped shoreline foam — vLandH (baked from the terrain heightfield) tells us
+    // how close this water fragment sits to the coastline; band it into a soft white fringe right
+    // at the shore (fades out to open deep water AND to dry land, which is usually occluded here
+    // anyway), animated with a slow lateral scallop so it reads as lapping surf, not a paint
+    // stripe. uFoam is the ToD strength (authored from env(): full by day, faint by night so the
+    // coast never glows against the dark sea).
+    float shoreBand=1.0-smoothstep(0.0,2.6,abs(vLandH+0.15));
+    float scallop=0.55+0.45*sin(vW.x*0.55+vW.z*0.33+uTime*0.8);
+    col=mix(col,vec3(0.96,0.985,1.0),clamp(shoreBand*scallop,0.0,1.0)*0.6*uFoam);
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     // animated toon sparkle: hashed world-XZ grid of crisp glints popping in/out with uTime,
     // denser along the sun lane, brightness authored per ToD via uSparkle (faint moon-glints at night)
@@ -292,11 +314,22 @@
   // no second target, so night windows / sun glints get a gentle halo for one texture fetch set.
   var V_POST = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.0,1.0); }`;
+  // Phase 14a: the same fullscreen composite also does screen-space INK OUTLINES. The scene RT's
+  // depth is now a samplable texture (see createRT below). Silhouette lines come from a 4-tap
+  // depth cross (per-pixel — fwidth is 2x2-quad granular and dashes mid-distance lines) gated by
+  // a screen-space Laplacian so smooth-but-steep terrain seen at grazing angles never reads as
+  // an edge; interior detail lines come from derivative-reconstructed normals, near field only.
+  // Distance-faded + smoothly cut past uOutlineMaxDist, sky masked outright, and the final edge
+  // term is snapped through a confidence smoothstep so lines are solid or absent, never speckle.
   var F_POST = `#version 300 es
   precision highp float; in vec2 vUv;
-  uniform sampler2D uTex; uniform vec2 uTexel;
+  uniform sampler2D uTex; uniform sampler2D uDepth; uniform vec2 uTexel;
   uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
+  uniform float uNear, uFar, uFovY, uAspect;
+  uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist;
+  uniform vec3 uOutlineTint;
   out vec4 frag;
+  float linZ(float d){ float z=d*2.0-1.0; return (2.0*uNear*uFar)/(uFar+uNear-z*(uFar-uNear)); }
   void main(){
     // blur strength: 0 inside the focus band, easing to 1 at the screen edges (quadratic onset keeps the band edge creamy)
     float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b;
@@ -317,6 +350,43 @@
     acc /= 12.0; bloom /= 12.0;
     vec3 col = mix(sharp, acc, min(b * 1.15, 1.0));  // crisp in the band, dreamy top/bottom
     col += bloom * uBloomAmt * vec3(1.0, 0.92, 0.78); // bloom-lite, tinted slightly warm
+    if (uOutlineOn > 0.5) {
+      float d = texture(uDepth, vUv).r;
+      float lz = linZ(d);
+      // explicit cross taps, NOT fwidth: screen derivatives are 2x2-quad granular, which broke
+      // mid-distance lines into dash/dot speckle. Four extra depth fetches buy per-pixel ink.
+      float zL = linZ(texture(uDepth, vUv - vec2(uTexel.x, 0.0)).r);
+      float zR = linZ(texture(uDepth, vUv + vec2(uTexel.x, 0.0)).r);
+      float zD = linZ(texture(uDepth, vUv - vec2(0.0, uTexel.y)).r);
+      float zU = linZ(texture(uDepth, vUv + vec2(0.0, uTexel.y)).r);
+      // positive gap = neighbour is FARTHER: the ink hugs the near object, never halos onto the
+      // background. Gap alone still fires on steep terrain seen at grazing angles (a slope IS a
+      // big per-pixel depth ramp), so gate it with the Laplacian: on any smooth surface the
+      // opposite neighbours straddle the centre (2nd derivative ~ 0) no matter how tilted, while
+      // a true silhouette step breaks that symmetry — min(gap, lap) fires only on real edges.
+      float gap = max(max(zL - lz, zR - lz), max(zD - lz, zU - lz));
+      float lap = max(abs(zL + zR - 2.0 * lz), abs(zD + zU - 2.0 * lz));
+      float depthEdge = min(gap, lap) / max(lz, 1.0);
+      // relative threshold GROWS with view depth: a mid-distance silhouette needs a proportionally
+      // bigger step to ink, so terrain/skyline noise stays clean while port buildings keep lines
+      float dT = uOutlineDepthT * (1.0 + lz * 0.012);
+      float edge = smoothstep(dT * 0.7, dT * 1.3, depthEdge);
+      // interior detail lines (roof trim vs wall) from derivative-reconstructed normals — near
+      // field only (quad-granular derivatives get noisy with distance: mid-range dot speckle)
+      vec2 ndc = vUv * 2.0 - 1.0;
+      float th = tan(uFovY * 0.5);
+      vec3 viewPos = vec3(ndc.x * th * uAspect, ndc.y * th, -1.0) * lz;  // rough view-space position (fovY/aspect reconstruction, no inverse-projection matrix needed)
+      vec3 N = normalize(cross(dFdx(viewPos), dFdy(viewPos)));
+      float normEdge = length(fwidth(N));
+      edge = max(edge, smoothstep(uOutlineNormT * 0.7, uOutlineNormT * 1.3, normEdge) * exp(-lz * 0.025));
+      edge *= exp(-lz * uOutlineFade);                             // gentle distance fade
+      edge *= 1.0 - smoothstep(uOutlineMaxDist * 0.55, uOutlineMaxDist, lz);  // smooth OUT beyond the playable port — far coast and horizon never ink
+      edge *= 1.0 - step(0.9999, d);                               // sky mask: sky draws depthMask-off, so its pixels keep the cleared far-plane depth — never ink sky
+      // confidence shaping (hysteresis-ish): values hovering at threshold snap to absent, strong
+      // edges snap to full — a line is either there or it isn't, never a shimmer of dots
+      edge = smoothstep(0.30, 0.70, edge);
+      col = mix(col, uOutlineTint, clamp(edge, 0.0, 1.0));
+    }
     frag = vec4(col, 1.0);
   }`;
 
@@ -324,9 +394,12 @@
   var V_BLOB = `#version 300 es
   layout(location=0) in vec3 aPos; layout(location=2) in vec2 aUV; uniform mat4 uVP, uModel; out vec2 vUv;
   void main(){ vUv=aUV; gl_Position=uVP*uModel*vec4(aPos,1.0); }`;
+  // uTint defaults to (0,0,0) — WebGL zero-initializes uniforms never explicitly set — so the
+  // original contact-shadow callers (which never set it) are unaffected; Phase 14a's wake decals
+  // (drawWakes) set it pale-white to reuse this same alpha-quad pipeline for foam instead of shadow.
   var F_BLOB = `#version 300 es
-  precision highp float; in vec2 vUv; uniform sampler2D uTex; uniform float uStr; out vec4 frag;
-  void main(){ float a=texture(uTex,vUv).a*uStr; frag=vec4(0.0,0.0,0.0,a); }`;
+  precision highp float; in vec2 vUv; uniform sampler2D uTex; uniform float uStr; uniform vec3 uTint; out vec4 frag;
+  void main(){ float a=texture(uTex,vUv).a*uStr; frag=vec4(uTint,a); }`;
 
   // ---------------- engine ----------------
   function createEngine(gl) {
@@ -353,7 +426,11 @@
 
     var quad = mesh({ positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), indices: new Uint16Array([0, 1, 2, 0, 2, 3]) });
     var blobQuad = mesh(plane(2, 1)); // unit XZ plane (-1..1), uvs 0..1 — for ground shadow decals
-    // offscreen render target for the Phase 10c post pass: RGBA8 colour + depth renderbuffer.
+    // offscreen render target for the Phase 10c post pass: RGBA8 colour + depth.
+    // Phase 14a: depth is now a SAMPLABLE texture (not a renderbuffer) — the post pass reads it
+    // back to build screen-space ink outlines (depth + derivative-reconstructed normal
+    // discontinuities). Same DEPTH_COMPONENT24-texture-as-FBO-attachment trick the shadow map
+    // above already uses successfully, so it's a known-safe path on swiftshader.
     // Returns null on any failure so callers can fall back to direct-to-screen rendering.
     function createRT(w, h) {
       try {
@@ -362,21 +439,25 @@
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        var rb = gl.createRenderbuffer();
-        gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+        var dtex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, dtex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         var fb = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, dtex, 0);
         var complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindRenderbuffer(gl.RENDERBUFFER, null); gl.bindTexture(gl.TEXTURE_2D, null);
-        if (!complete) { gl.deleteFramebuffer(fb); gl.deleteRenderbuffer(rb); gl.deleteTexture(tex); return null; }
-        var rt = { fb: fb, tex: tex, rb: rb, w: w, h: h };
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindTexture(gl.TEXTURE_2D, null);
+        if (!complete) { gl.deleteFramebuffer(fb); gl.deleteTexture(dtex); gl.deleteTexture(tex); return null; }
+        var rt = { fb: fb, tex: tex, depthTex: dtex, w: w, h: h };
         rt.resize = function (nw, nh) {
           if (nw === rt.w && nh === rt.h) return true;
           try {
-            gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, nw, nh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.bindTexture(gl.TEXTURE_2D, null);
-            gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, nw, nh); gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+            gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, nw, nh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+            gl.bindTexture(gl.TEXTURE_2D, dtex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, nw, nh, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+            gl.bindTexture(gl.TEXTURE_2D, null);
             rt.w = nw; rt.h = nh; return true;
           } catch (e) { return false; }
         };
