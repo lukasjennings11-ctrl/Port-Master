@@ -1425,6 +1425,51 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('18a: geomStats within the re-derived 300k vertex ceiling (up from 250k pre-18a — faceted terrain + dressing)',
     gs18a && gs18a.verts > 200000 && gs18a.verts < 300000);
 
+  // Phase 18b: LOOK 6.0 building total remodel — every structure rebuilt from a shared diorama
+  // part-kit (roofKit/timberFrame/brickBanding/awning/door/window/chimney...), buildings split out
+  // of the static world bake into their own per-frame-transformed meshes (squash-stretch pop rides
+  // the draw transform), per-type vert budgets via the new buildingStats() hook.
+  // Per-type budgets: measured one-of-each (green) ≈ hut 504 / cottage 792 / warehouse 532 /
+  // market 622 / sawmill 524 / factory 520 / cargoDock 556 / tradingPost 661 / seawall 208 /
+  // lighthouse 978 / solarSpire 406 / neonTower 318 / droneBayPad 276 — the 100..2600 band below
+  // allows per-biome roof-style variance while still catching runaway geometry on any one type.
+  const bKinds = await page.evaluate(() => window.__harbor.buildingKinds());
+  const bStats = await page.evaluate((ks) => { var out = {}; ks.forEach(k => { out[k] = window.__harbor.buildingStats(k, 'green'); }); return out; }, bKinds);
+  ok('18b: all 13 remodeled building types build via buildingStats() with verts inside their per-type budget (100..2600)',
+    bKinds.length === 13 && bKinds.every(k => bStats[k] && bStats[k].verts > 100 && bStats[k].verts < 2600 && bStats[k].indices > 0));
+  ok('18b: roof style follows the biome (desert flat parapet is cheaper than green\'s deep-eave gable on the same cottage)',
+    await page.evaluate(() => {
+      var g = window.__harbor.buildingStats('cottage', 'green'), d = window.__harbor.buildingStats('cottage', 'desert');
+      return g && d && d.verts < g.verts;
+    }));
+  // buildings now live in their own meshes (geomStats.bldg) and still count toward the SAME 300k
+  // static-scene ceiling (re-derived for 18b: measured worst case ~251k at era7 — no bump needed).
+  ok('18b: building meshes present in geomStats (bldg > 1500 at a developed era) and total still within the 300k ceiling',
+    gs18a && gs18a.bldg > 1500 && gs18a.verts < 300000);
+  // squash-stretch pop: DETERMINISTIC — setPopProgress(p) pins the pop clock at an exact point of
+  // its window (no wall-clock sleeps, no dependence on frame rate; precedent: 15b/15d synchronous
+  // forced checks). p=0.15 is mid-squash (y down, xz out); p=1.0 is the window end and must be
+  // exactly identity; clearing the pin (null) with no live trigger must also read identity.
+  const popMid = await page.evaluate(() => window.__harbor.setPopProgress(0.15));
+  ok('18b: forced squash-stretch pop is active mid-window with a real y-squash + xz-stretch on the draw transform',
+    popMid.active && popMid.scale.y < 0.99 && popMid.scale.x > 1.01);
+  const popEnd = await page.evaluate(() => window.__harbor.setPopProgress(1.0));
+  const popCleared = await page.evaluate(() => window.__harbor.setPopProgress(null));
+  ok('18b: pop settles back to identity scale after its 0.35s window (no residual transform, no save state)',
+    popEnd && !popEnd.active && popEnd.scale.x === 1 && popEnd.scale.y === 1 && popEnd.scale.z === 1
+    && popCleared && !popCleared.active && popCleared.scale.x === 1 && popCleared.scale.y === 1);
+  // industry smoke anchors: chimney smoke keys off factory/sawmill counts (emitSmoke) — the
+  // factory's remodeled chimney is cosmetic, the emitter logic must still fire once industry exists.
+  await page.evaluate(() => { var S = window.HARBOR_SIM; S.raw().money = 1e6; if (S.canBuild('factory')) S.build('factory'); });
+  ok('18b: smoke-emitter anchor valid — industry smoke reports active once a factory exists',
+    await page.evaluate(() => window.__harbor.smokeActive()));
+  // zero GL warnings/errors over a ToD sweep with the per-frame building meshes + pop live
+  const errsBefore18b = errs.length;
+  await page.evaluate(() => window.__harbor.forcePop());
+  for (const t of [0, 0.25, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  ok('18b: full ToD sweep with remodeled buildings + squash-stretch live → zero GL warnings/errors', errs.length === errsBefore18b);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

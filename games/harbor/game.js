@@ -160,6 +160,11 @@
 
   // ---- scene ----
   var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, gullMesh;
+  // Phase 18b: the port's BUILDINGS live in their own two meshes (grit/flat split, LOCAL port
+  // space — models.js scene.bldg) drawn each frame with a composeRYS transform at the port frame,
+  // so the squash-and-stretch pop can scale the whole settlement via the draw transform. Quay/
+  // crane/terrain/dressing stay in the static world bake exactly as before.
+  var meshBldgGrit = null, meshBldgFlat = null;
   // Phase 16a: SHIPYARD — real ship-class meshes (models.js HARBOR_MODELS.SHIPYARD), reused every
   // frame via compose transforms — replaces the old single hull-box + triangle-sail (hullMesh/
   // sailMesh) that read as floating triangles at gameplay zoom.
@@ -219,9 +224,14 @@
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
     var port = founded[id] || null;
     scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era, port) || { city: [], blobs: [], lamps: [], crane: false, era: era, founded: !!port, port: null };
-    geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3,
-      verts: (fac.P.length + grit.P.length + flat.P.length) / 3, indices: fac.I.length + grit.I.length + flat.I.length };   // vertex-budget guard (Phase 10b)
+    // Phase 18b: the building meshes (local port space, models.js scene.bldg) count toward the
+    // same static-scene vertex budget as the baked world — they're just as resident on the GPU.
+    var bldgV = scene.bldg ? (scene.bldg.grit.positions.length + scene.bldg.flat.positions.length) / 3 : 0;
+    var bldgI = scene.bldg ? (scene.bldg.grit.indices.length + scene.bldg.flat.indices.length) : 0;
+    geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3, bldg: bldgV,
+      verts: (fac.P.length + grit.P.length + flat.P.length) / 3 + bldgV, indices: fac.I.length + grit.I.length + flat.I.length + bldgI };   // vertex-budget guard (Phase 10b)
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
+    meshBldgGrit = scene.bldg ? E.mesh(scene.bldg.grit) : null; meshBldgFlat = scene.bldg ? E.mesh(scene.bldg.flat) : null;
     buildWaterMesh();                                          // Phase 14a: rebake shore-foam heights for THIS biome's terrain
     sites = port ? [] : HARBOR_MODELS.sites(); selSite = -1;  // curated candidates only when wild
     if (window.Retention) Retention.set(GAME, 'biome', id);
@@ -785,6 +795,44 @@
     drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
   }
 
+  // ---- Phase 18b: squash-and-stretch pop + per-frame building draw --------------------------
+  // A quick scale keyframe on the port's building meshes: y-squash for the first ~35% of the
+  // window, then an ease-out overshoot back to rest — fired on build complete, upgrade and
+  // voyage-collect (the game's "collect tap"). Pure draw-transform juice: no state in the save,
+  // no geometry rebuild, resets itself by the clock.
+  // popTestP: test-only pinned progress (0..1) — when non-null the pop samples EXACTLY that point
+  // of its window instead of the game clock, so the suite can assert mid-squash/settle values with
+  // zero wall-clock dependence (precedent: 15b/15d synchronous forced checks, no sleeps).
+  var POP_DUR = 0.35, popT0 = -10, popTestP = null;
+  function triggerPop() { popT0 = clock; }
+  function popNow() { return popTestP != null ? popTestP * POP_DUR : clock - popT0; }
+  function popScaleFor() {
+    var t = popNow();
+    if (t < 0 || t >= POP_DUR) return { x: 1, y: 1, z: 1 };
+    var k = t / POP_DUR, sy, sxz;
+    if (k < 0.35) {                                      // squash in: y down, xz out (volume-ish)
+      var q = k / 0.35;
+      sy = 1 - 0.30 * q; sxz = 1 + 0.14 * q;
+    } else {                                             // overshoot + ease-out settle to exactly 1
+      var q2 = (k - 0.35) / 0.65, c1 = 1.70158, c3 = c1 + 1, u = q2 - 1;
+      var f = 1 + c3 * u * u * u + c1 * u * u;           // easeOutBack: 0 -> ~1.1 -> 1
+      sy = 0.70 + 0.30 * f; sxz = 1.14 - 0.14 * f;
+    }
+    return { x: sxz, y: sy, z: sxz };
+  }
+  // The buildings render with the SAME program state as the baked scene meshes (uVCol=1, toon sun)
+  // — only the model matrix differs: composeRYS at the founded port frame (identical maths to the
+  // addXform bake that placed them before 18b, so at scale 1 they land on exactly the same spot).
+  function drawPortBuildings(M) {
+    if (!scene.port || !meshBldgFlat) return;
+    var p = scene.port, pk = popScaleFor();
+    composeRYS(mModel, p.x, p.by, p.z, pk.x, pk.y, pk.z, p.yaw);
+    gl.uniformMatrix4fv(M.u.uModel, false, mModel);
+    gl.uniform1f(M.u.uTexMix, 0); drawMesh(M, meshBldgFlat);
+    gl.bindTexture(gl.TEXTURE_2D, gritTex); gl.uniform1f(M.u.uTexMix, 0.5); drawMesh(M, meshBldgGrit);
+    gl.uniformMatrix4fv(M.u.uModel, false, mI);
+  }
+
   // Phase 14a: revive the dormant PCF shadow path. A small directional-light ortho frustum,
   // RECENTRED ON THE CAMERA TARGET every frame (no cascades needed for a human-scale stylized
   // port — the target is always roughly where the player is looking), rendered into the
@@ -803,6 +851,15 @@
     var Dp = E.P_depth; gl.useProgram(Dp.p); gl.uniformMatrix4fv(Dp.u.uLightVP, false, mLVP);
     gl.uniformMatrix4fv(Dp.u.uModel, false, mI);
     drawMesh(Dp, meshFlat); drawMesh(Dp, meshGrit); drawMesh(Dp, meshFac);
+    // Phase 18b: buildings cast shadows from their runtime transform (same composeRYS as the
+    // colour pass, so the shadow squashes with the pop too)
+    if (scene.port && meshBldgFlat) {
+      var pk = popScaleFor();
+      composeRYS(mModel, scene.port.x, scene.port.by, scene.port.z, pk.x, pk.y, pk.z, scene.port.yaw);
+      gl.uniformMatrix4fv(Dp.u.uModel, false, mModel);
+      drawMesh(Dp, meshBldgFlat); drawMesh(Dp, meshBldgGrit);
+      gl.uniformMatrix4fv(Dp.u.uModel, false, mI);
+    }
     if (atlasTex && cityModels && scene.city.length) {
       for (var i = 0; i < scene.city.length; i++) {
         var c = scene.city[i], cm = cityModels[c.bi]; if (!cm) continue;
@@ -939,6 +996,8 @@
     gl.uniform1f(M.u.uTexMix, 0); drawMesh(M, meshFlat);
     gl.bindTexture(gl.TEXTURE_2D, gritTex); gl.uniform1f(M.u.uTexMix, 0.5); drawMesh(M, meshGrit);
     gl.bindTexture(gl.TEXTURE_2D, facTex); gl.uniform1f(M.u.uTexMix, 0.8); drawMesh(M, meshFac);
+    // Phase 18b: port buildings — own meshes, per-frame transform (squash-stretch pop rides here)
+    drawPortBuildings(M);
     // modern skyline (glTF assets)
     gl.uniform1f(M.u.uTexMix, 0); drawCity(M);
     // dynamic crane parts (flat colour) — transformed to the founded port frame
@@ -2354,6 +2413,7 @@
   }
   function collectVoyageUI(seq) {
     var out = SIM.collectVoyage(seq); if (!out) return;
+    triggerPop();   // Phase 18b: collect tap — the settlement gives a happy squash-and-stretch pop
     // Phase 15c: a discovery voyage doesn't pay cash/res — it unlocks the next coast. Handle it as
     // its own celebration path rather than folding it into the normal reward-collect flow below.
     if (out.discover) {
@@ -3190,7 +3250,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v70';
+  var BUILD_TAG = 'v71';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3740,8 +3800,8 @@
     }
     managePanel.innerHTML = html;
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
-    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
-    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); triggerPop(); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); triggerPop(); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
@@ -3906,8 +3966,16 @@
     water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true }; },
     outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH }; },
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
-    geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
+    geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard; .bldg = 18b building meshes)
     terrainStats: function () { return HARBOR_MODELS ? HARBOR_MODELS.terrainStats() : null; },   // Phase 18a: faceted-terrain verts + per-biome dressing + founded-port-only apron/dock/path/fence/props counts
+    // Phase 18b: building remodel (test/debug hooks) — per-type vert counts, squash-stretch pop
+    // state, and a smoke-emitter sanity check (industry smoke keys off factory/sawmill counts).
+    buildingStats: function (kind, biome) { return HARBOR_MODELS && HARBOR_MODELS.buildingStats ? HARBOR_MODELS.buildingStats(kind, biome) : null; },
+    buildingKinds: function () { return HARBOR_MODELS && HARBOR_MODELS.BLDG_KINDS ? HARBOR_MODELS.BLDG_KINDS.slice() : []; },
+    pop: function () { var t = popNow(); return { active: t >= 0 && t < POP_DUR, scale: popScaleFor(), dur: POP_DUR }; },
+    forcePop: function () { triggerPop(); return window.__harbor.pop(); },
+    setPopProgress: function (p) { popTestP = p == null ? null : Math.max(0, Math.min(1, +p)); return window.__harbor.pop(); },   // deterministic pop sampling: pin progress (null = live clock)
+    smokeActive: function () { var s = SIM ? SIM.state() : null; var facs = s ? ((s.counts && s.counts.factory || 0) + (s.counts && s.counts.sawmill || 0) * 0.5) : 0; return facs >= 1; },
     shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
     debugShip: function (cls) { DEBUG_SHIP = (cls && getShip(cls)) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears); lazy-builds it if never seen before
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
