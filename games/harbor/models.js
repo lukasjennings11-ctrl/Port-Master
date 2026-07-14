@@ -192,20 +192,99 @@
   }
 
   // ---------------- vegetation (grounded on the field) ----------------
-  // Phase 16b VIBRANT STORYBOOK: bigger, chunkier canopies with a visible tier or two — each kind
-  // keeps its old vertex shape (no new cylinders on palm/pine — just scaled up, budget-free) except
-  // the broadleaf 'hill' tree, which gains ONE extra small top tier (still just 2 cyls total, +1
-  // over the old single-canopy shape) so it reads as a lumpy layered canopy instead of a smooth
-  // cone — the #1 silhouette most on-screen (green isles' default world).
-  function tree(flat, x, z, rng, kind, by) {
-    var hy = by + 0.4;
-    if (kind === 'palm') { var th = 5 + rng() * 3; flat.cyl(x, hy, z, 0.40, th, 6, [0.52, 0.42, 0.30], 0.7); for (var f = 0; f < 6; f++) flat.box(x, hy + th, z, 5.4, 0.34, 1.3, [0.32, 0.50, 0.28], f / 6 * TAU, 0.30); }
-    else if (kind === 'pine') { flat.cyl(x, hy, z, 0.56, 2.2, 6, [0.42, 0.33, 0.23], 1); for (var c = 0; c < 3; c++) flat.cyl(x, hy + 1.6 + c * 2.5, z, 3.7 - c * 0.95, 3.1, 6, [0.28, 0.42, 0.28], 0.04); }
-    else { // broadleaf: trunk + two chunky canopy tiers (bigger base, smaller lumpy top)
-      flat.cyl(x, hy, z, 0.66, 2.5, 6, [0.44, 0.33, 0.23], 0.92);
-      flat.cyl(x, hy + 2.3, z, 3.6, 4.4, 7, [0.34, 0.48, 0.28], 0.28);
-      flat.cyl(x, hy + 5.6, z, 2.15, 2.6, 6, [0.42, 0.54, 0.32], 0.30);
+  // Phase 19b PAPERCRAFT: trees rebuilt as INTERSECTING FLAT PLANES — the classic papercraft
+  // "cross-billboard" impostor: two identical cutout cards crossed at 90 degrees so the silhouette
+  // reads reasonably from any orbit angle even though this is STATIC baked geometry (vegetation is
+  // merged straight into the shared 'flat' mesh at world-build time, not redrawn per-instance, so
+  // a runtime camera-facing billboard like the 19b clouds' isn't available here). Each card is a
+  // single vertex-coloured polygon fan (kraft trunk verts below a height threshold, felt-green
+  // canopy verts above it — no texture), double-sided (front+back winding baked in) since the
+  // player can end up on either side of a fixed-yaw card. The existing F_POST screen-space outline
+  // pass cuts the white scissor rim around every card's silhouette automatically — no bespoke rim
+  // shader needed. Per-kind vertex totals are tracked in TREE_STATS (read by
+  // __harbor.terrainStats().trees) and land under the old cylinder-built trees' budgets (broadleaf
+  // 101 / pine 128 / palm 176 verts): ~56 / ~64 / ~130 respectively.
+  var TREE_STATS = { broadleaf: { count: 0, verts: 0 }, pine: { count: 0, verts: 0 }, palm: { count: 0, verts: 0 } };
+  var TREE_SAMPLE = null;   // first tree's world {x,z,y} this build — test/screenshot close-up hook
+  var KRAFT_TRUNK = [0.46, 0.34, 0.24], FELT_GREEN_DK = [0.30, 0.44, 0.27];
+  // push ONE flat vertical card: a closed 2D (u=lateral offset, v=height) polygon loop, fan-
+  // triangulated from its own centroid, baked double-sided at world position (x,by,z) yawed by ry.
+  function pushCard(flat, x, by, z, ry, pts, colorFn) {
+    var cs = Math.cos(ry), sn = Math.sin(ry), n = pts.length, i, ax = 0, ay = 0;
+    for (i = 0; i < n; i++) { ax += pts[i][0]; ay += pts[i][1]; } ax /= n; ay /= n;
+    function w(u, v) { return [x + u * cs, by + v, z + u * sn]; }
+    for (var side = 0; side < 2; side++) {
+      var nx = side === 0 ? -sn : sn, nz = side === 0 ? cs : -cs, base = flat.P.length / 3, wa = w(ax, ay), ca = colorFn(ax, ay);
+      flat.P.push(wa[0], wa[1], wa[2]); flat.N.push(nx, 0, nz); flat.U.push(0.5, 0); flat.C.push(ca[0], ca[1], ca[2]);
+      for (i = 0; i < n; i++) { var p = pts[i], wp = w(p[0], p[1]), cp = colorFn(p[0], p[1]); flat.P.push(wp[0], wp[1], wp[2]); flat.N.push(nx, 0, nz); flat.U.push(0, 0); flat.C.push(cp[0], cp[1], cp[2]); }
+      for (i = 0; i < n; i++) { var i0 = base + 1 + i, i1 = base + 1 + ((i + 1) % n); if (side === 0) flat.I.push(base, i0, i1); else flat.I.push(base, i1, i0); }
     }
+  }
+  // broadleaf silhouette: narrow trunk column widening into a scalloped canopy dome (bumps=4 gives
+  // the lumpy layered-canopy read the old 2-tier cylinder version had).
+  function broadleafPts(rng, h) {
+    var trunkW = 0.30 * h, trunkH = 1.55 * h, canR = 2.3 * h, canH = 2.35 * h, bumps = 4, steps = bumps * 2, pts = [];
+    pts.push([-trunkW, 0], [-trunkW, trunkH]);
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps, ang = Math.PI - t * Math.PI;
+      var r = canR * (0.82 + 0.18 * Math.sin(t * bumps * Math.PI * 2 + rng() * 0.6)) * (0.9 + rng() * 0.18);
+      pts.push([Math.cos(ang) * r, trunkH + Math.sin(ang) * r * (canH / canR)]);
+    }
+    pts.push([trunkW, trunkH], [trunkW, 0]);
+    return { pts: pts, trunkH: trunkH };
+  }
+  // pine silhouette: jagged zigzag conical edges (alternating full/short teeth) instead of a smooth cone.
+  function pinePts(rng, h) {
+    var trunkW = 0.20 * h, trunkH = 0.5 * h, top = 3.4 * h, baseW = 1.55 * h, teeth = 4, pts = [], i, t, vy, w, jag;
+    pts.push([-trunkW, 0], [-trunkW, trunkH]);
+    for (i = 0; i <= teeth; i++) { t = i / teeth; vy = trunkH + t * top; w = baseW * (1 - t); jag = (i % 2 === 0) ? 1.0 : 0.58; pts.push([-w * jag, vy]); }
+    pts.push([0, trunkH + top * 1.06]);
+    for (i = teeth; i >= 0; i--) { t = i / teeth; vy = trunkH + t * top; w = baseW * (1 - t); jag = (i % 2 === 0) ? 1.0 : 0.58; pts.push([w * jag, vy]); }
+    pts.push([trunkW, trunkH], [trunkW, 0]);
+    return { pts: pts, trunkH: trunkH };
+  }
+  // one drooping frond blade, lying in the vertical plane radiating outward from the trunk (u=
+  // radial distance, v=droop/thickness) — tapers to a point at the base and the tip, widest ~40%
+  // of the way out, with a gentle rise-then-droop arc (classic palm frond silhouette).
+  function frondPts(rng, len, width) {
+    var n = 4, top = [], bottom = [], i;
+    for (i = 0; i <= n; i++) {
+      var t = i / n, u = t * len;
+      var droop = Math.sin(t * Math.PI * 0.5) * len * 0.22 - t * t * len * 0.32;
+      var thick = width * Math.sin(Math.max(t, 0.001) * Math.PI) * (0.55 + 0.45 * (1 - t));
+      top.push([u, droop + thick * 0.5]); bottom.push([u, droop - thick * 0.5]);
+    }
+    var pts = top.slice(); for (i = n; i >= 0; i--) pts.push(bottom[i]); return pts;
+  }
+  function tree(flat, x, z, rng, kind, by) {
+    var hy = by + 0.4, v0 = flat.P.length / 3, kindKey;
+    if (kind === 'palm') {
+      kindKey = 'palm';
+      var th = 5 + rng() * 3, fronds = 5, trunkPts = [[-0.34, 0], [-0.34, th], [0.34, th], [0.34, 0]];
+      var trunkCol = function () { return KRAFT_TRUNK; };
+      pushCard(flat, x, hy, z, 0, trunkPts, trunkCol);
+      pushCard(flat, x, hy, z, Math.PI / 2, trunkPts, trunkCol);
+      for (var f = 0; f < fronds; f++) {
+        var fry = f / fronds * TAU + rng() * 0.3, fc = jit(FELT_GREEN_DK, 0.06, rng);
+        pushCard(flat, x, hy + th, z, fry, frondPts(rng, 3.4 + rng() * 1.0, 1.15), function () { return fc; });
+      }
+      TREE_STATS.palm.count++;
+    } else if (kind === 'pine') {
+      kindKey = 'pine';
+      var pp = pinePts(rng, 1.35 + rng() * 0.35), pcol = jit(FELT_GREEN_DK, 0.05, rng);
+      var pineColor = function (u, v) { return v < pp.trunkH - 1e-3 ? KRAFT_TRUNK : pcol; };
+      pushCard(flat, x, hy, z, 0, pp.pts, pineColor);
+      pushCard(flat, x, hy, z, Math.PI / 2, pp.pts, pineColor);
+      TREE_STATS.pine.count++;
+    } else {
+      kindKey = 'broadleaf';
+      var bp = broadleafPts(rng, 1.15 + rng() * 0.35), lcol = jit([0.36, 0.50, 0.30], 0.05, rng);
+      var leafColor = function (u, v) { return v < bp.trunkH - 1e-3 ? KRAFT_TRUNK : lcol; };
+      pushCard(flat, x, hy, z, 0, bp.pts, leafColor);
+      pushCard(flat, x, hy, z, Math.PI / 2, bp.pts, leafColor);
+      TREE_STATS.broadleaf.count++;
+    }
+    TREE_STATS[kindKey].verts += (flat.P.length / 3 - v0);
   }
   // Phase 16b: cheap static lushness — small bushes + flower dots scattered on the grass near a
   // FOUNDED port only (the always-visible "hero" area). Bounded, budget-capped count (see the
@@ -852,10 +931,14 @@
   function bowsprit(B, L, H, len) { strutS(B, 0, H * 0.7, L / 2, 0, H * 1.16, L / 2 + len, 0.18, WOOD_LIGHT); return [0, H * 1.16, L / 2 + len]; }
   function mastPole(B, x, z, H, top) { B.cyl(x, H, z, 0.16, top - H, 7, WOOD_DARK, 0.85); }
   function boomSpar(B, x, z, H, len) { strutS(B, x, H * 1.05, z, x, H * 1.05, z - len, 0.13, WOOD_DARK); }
-  function pennant(B, x, y, z, flagC, accent) {           // flagpole + flag panel + optional white cross motif
+  // flagpole (static, baked into trim B) + flag panel/accent (its OWN small builder, flagB) —
+  // Phase 19b: the flag panel is kept separate so game.js can animate it with the same crisp
+  // paper-flutter sway the sails use (see drawShip's S.pennant handling), instead of being frozen
+  // into the static trim mesh like every other fixture.
+  function pennant(B, flagB, x, y, z, flagC, accent) {
     B.box(x, y, z, 0.06, 1.15, 0.06, WOOD_DARK, 0);
-    B.box(x, y + 0.75, z + 0.34, 0.045, 0.5, 0.62, flagC, 0);
-    if (accent) { B.box(x, y + 0.75, z + 0.345, 0.05, 0.42, 0.10, accent, 0); B.box(x, y + 0.75, z + 0.345, 0.05, 0.10, 0.50, accent, 0); }
+    flagB.box(x, y + 0.75, z + 0.34, 0.045, 0.5, 0.62, flagC, 0);
+    if (accent) { flagB.box(x, y + 0.75, z + 0.345, 0.05, 0.42, 0.10, accent, 0); flagB.box(x, y + 0.75, z + 0.345, 0.05, 0.10, 0.50, accent, 0); }
   }
   function sternCabin(B, L, Bm, H, c) { B.bbox(0, H * 1.35, -L * 0.28, Bm * 0.62, H * 0.7, L * 0.22, c || WOOD_LIGHT, 0, 0.18); }
   function barrelProp(B, x, z, H) { B.cyl(x, H * 0.98, z, 0.42, 0.62, 8, WOOD_LIGHT, 0.94); }
@@ -1206,6 +1289,7 @@
     var L = spec.L, Bm = spec.Bm, H = spec.H;
     var hullB = new g.HGL.Builder(); hullTint(hullB, L, Bm, H, spec.n, spec.bowLift);
     var trim = new g.HGL.Builder();
+    var flagB = new g.HGL.Builder();   // Phase 19b: the pennant's flag panel — kept separate from trim so it can flutter (see below)
     keelLine(trim, L, H); deckPlanks(trim, L, Bm, H, spec.n, spec.bowLift, spec.deckTone);
     if (spec.gunwale) gunwaleRim(trim, L, Bm, H, spec.n, spec.bowLift, spec.gunwaleTone);
     if (spec.rudder) rudderBlade(trim, L, H);
@@ -1231,7 +1315,7 @@
     if (spec.lantern) trim.cyl(0, H * 1.5, -L * 0.42, 0.22, 0.4, 6, [1.0, 0.85, 0.5], 0.7);
     if (spec.bench) trim.box(0, H * 0.96, L * 0.12, Bm * 0.7, 0.14, 0.3, PLANK, 0);
     var lastMast = mastPos[mastPos.length - 1];
-    if (spec.pennant) pennant(trim, 0, lastMast ? lastMast.top : H + 2, lastMast ? lastMast.z : 0, spec.pennant.c, spec.pennant.accent);
+    if (spec.pennant) pennant(trim, flagB, 0, lastMast ? lastMast.top : H + 2, lastMast ? lastMast.z : 0, spec.pennant.c, spec.pennant.accent);
     (spec.props || []).forEach(function (p) { if (p.k === 'barrel') barrelProp(trim, p.x, p.z, H); else if (p.k === 'crate') crateProp(trim, p.x, p.z, H, p.c); });
     if (spec.extra) spec.extra(trim, L, Bm, H);
     var deckY = H * 1.0;
@@ -1248,7 +1332,7 @@
     });
     // draft: how deep the hull sits — game.js subtracts it from the draw y so ships ride IN the
     // water (waterline ~1/3 up the hull) instead of floating on top of it.
-    return { hull: hullB.data(), trim: trim.data(), sails: sails, meta: { len: L, beam: Bm, draft: H * 0.40, funnel: spec.funnel || null } };
+    return { hull: hullB.data(), trim: trim.data(), sails: sails, pennant: flagB.P.length ? flagB.data() : null, meta: { len: L, beam: Bm, draft: H * 0.40, funnel: spec.funnel || null } };
   }
   // Phase 17b: the three 8-rung ladders — index === fleetTier() from sim.js (HARBOR_SIM.fleetTier),
   // so game.js just indexes straight in. Display names for the Registry panel + tips sit alongside.
@@ -1532,6 +1616,8 @@
     genField(biome, seed);
     buildFieldMesh(B.flat, biome);
     if (biome.hillType !== 'hill') landforms(B.flat, biome, rng);   // craggy rock props only for mountain/cliff/mesa; green/tropical use natural rolling terrain
+    TREE_STATS = { broadleaf: { count: 0, verts: 0 }, pine: { count: 0, verts: 0 }, palm: { count: 0, verts: 0 } };   // 19b: reset per world build
+    var treeSamplePos = null;
     if (biome.veg !== 'none') {                            // dense forest on the lower/mid slopes
       var nv = Math.round((biome.vegN + 30) * WORLD.W / 760 * 1.7), hw = WORLD.W * 0.48;
       for (var v = 0; v < nv; v++) {
@@ -1541,8 +1627,10 @@
         var pr = Math.hypot((x - PLAIN.x) / (PLAIN.ax * 0.82), (z - PLAIN.z) / (PLAIN.az * 0.82));
         if (pr < 1 && rng() < 0.82) continue;            // keep the harbour apron mostly clear for building
         tree(B.flat, x, z, rng, biome.veg, y);
+        if (!treeSamplePos) treeSamplePos = { x: x, z: z, y: y };   // 19b: first placed tree's world position — test/screenshot close-up hook
       }
     }
+    TREE_SAMPLE = treeSamplePos;
     scatterLushness(B.flat, rng, port, biome);   // Phase 16b: bushes + flowers near a founded port
     DRESS_STATS = biomeDressing(B.flat, biome, rng, port);   // Phase 18a: coastal rocks/shelves/speckle + biome features
     for (var bk = 0, bt = 0; bk < 8 && bt < 80; bt++) {    // little boats dotted in the water around the island
@@ -1605,6 +1693,6 @@
 
   // Phase 18a: LOOK 6.0 terrain/dressing telemetry — read by game.js's __harbor.terrainStats()
   // test hook (vertex-budget + per-biome feature-count + founded-port-only assertions).
-  function terrainStats() { return { terrain: { quads: TERRAIN_STATS.quads, verts: TERRAIN_STATS.verts }, dressing: DRESS_STATS, port: PORT_DRESS }; }
-  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD, terrainStats: terrainStats, buildingStats: buildingStats, BLDG_KINDS: BLDG_KINDS };
+  function terrainStats() { return { terrain: { quads: TERRAIN_STATS.quads, verts: TERRAIN_STATS.verts }, dressing: DRESS_STATS, port: PORT_DRESS, trees: TREE_STATS }; }
+  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD, terrainStats: terrainStats, buildingStats: buildingStats, BLDG_KINDS: BLDG_KINDS, treeSample: function () { return TREE_SAMPLE; } };
 })(window);

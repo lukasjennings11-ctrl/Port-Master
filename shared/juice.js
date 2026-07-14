@@ -102,6 +102,7 @@
       p.life -= dt;
       if (p.life <= 0) { this.list.splice(i, 1); continue; }
       p.vy += p.gravity * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.vr) p.rot = (p.rot || 0) + p.vr * dt;   // optional rotation (used by the 'curl' shape)
     }
   };
   Particles.prototype.draw = function (ctx) {
@@ -111,6 +112,15 @@
       ctx.globalAlpha = a; ctx.fillStyle = p.color;
       var s = p.size * (0.4 + a * 0.6);
       if (p.shape === 'rect') { ctx.fillRect(p.x - s/2, p.y - s/2, s, s); }
+      else if (p.shape === 'curl') {
+        // flat paper comma/spiral curl (harbor's papercraft smoke, but usable by any game) — a
+        // thick stroked arc, not a filled disc, so it reads as a curled ribbon of card rather than
+        // a round puff.
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot || 0);
+        ctx.strokeStyle = p.color; ctx.lineWidth = s * 0.42; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.arc(0, 0, s * 0.55, 0.35 * Math.PI, 1.9 * Math.PI); ctx.stroke();
+        ctx.restore();
+      }
       else { ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, Math.PI * 2); ctx.fill(); }
     }
     ctx.globalAlpha = 1;

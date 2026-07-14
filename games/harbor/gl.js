@@ -241,38 +241,69 @@
 
   var V_SKY = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.999,1.0); }`;
+  // Phase 19b PAPERCRAFT SKY: a clean flat card gradient (2-stop top/bottom, the horizon glow is a
+  // 3rd authored stop, all unchanged) but the sun/moon go from soft glow blobs to CUT PAPER DISCS —
+  // a crisp circle with a thin white rim (the same scissor-cut-rim language as F_POST's outlines
+  // and 19a's construction-paper edges), and the night starfield loses its per-star time-based
+  // twinkle (a shimmer read as glitter, not paper) in favour of small STATIC size variation per
+  // star (hashed once, never animated) — tiny paper flecks pinned to the card, not glinting glass.
   var F_SKY = `#version 300 es
-  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun; uniform float uNight,uTime,uHorizonY,uGrain; out vec4 frag;
+  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun,uMoon; uniform float uNight,uTime,uHorizonY,uGrain,uAspect; out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float hash(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
   float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
     return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x), mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x), u.y); }
   float fib(vec2 p){ return vn2(p*0.31)*0.6 + vn2(p*0.87+17.0)*0.4; }
+  // aspect-corrected distance: vUv is 0..1 in BOTH axes over a non-square viewport, so a plain
+  // distance() would draw every disc as an ellipse — squash x back to real screen proportions first.
+  float discDist(vec2 uv, vec2 c){ vec2 d=uv-c; d.x*=uAspect; return length(d); }
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
     // 3rd stop: a soft authored horizon band anchored to the projected sea horizon (uHorizonY) — a glow, not a stripe
     float hb=exp(-pow(max(vUv.y-uHorizonY,0.0)*4.2,1.5));
     c=mix(c,uHorizon,hb*0.60);
-    float d=distance(vUv,uSun); c+=uSunCol*smoothstep(0.05,0.0,d)*1.5; c+=uSunCol*smoothstep(0.3,0.02,d)*0.16;
+    // paper sun disc: crisp circle (not a soft glow blob) + a thin white cut-paper rim. Explicitly
+    // faded out by (1-uNight) — the sun's screen track never truly dips off-card (todKeys clamps
+    // its apparent height above the horizon), so relying on uSunCol alone left a dim ghost disc
+    // hanging in the night sky; this fully hides it once the crescent moon takes over.
+    float sunVis=1.0-uNight;
+    float sd=discDist(vUv,uSun);
+    float sunDisc=(1.0-smoothstep(0.036,0.040,sd))*sunVis;
+    float sunRim=(1.0-smoothstep(0.040,0.045,sd))*smoothstep(0.036,0.040,sd)*sunVis;
+    c=mix(c,uSunCol*1.35,sunDisc); c+=vec3(1.0,0.98,0.92)*sunRim*0.9;
+    c+=uSunCol*smoothstep(0.16,0.03,sd)*0.10*sunVis;   // faint authored haze so the disc still sits in a hazy sky, not pasted flat
     if(uNight>0.01){
+      // crescent moon card: a disc minus an overlapping "bite" circle, same cut-rim treatment
+      float md=discDist(vUv,uMoon);
+      float bite=1.0-smoothstep(0.019,0.022,discDist(vUv,uMoon+vec2(0.011,0.007)));
+      float moonBase=1.0-smoothstep(0.022,0.025,md);
+      float moonDisc=clamp(moonBase-bite,0.0,1.0);
+      float moonRim=(1.0-smoothstep(0.025,0.029,md))*smoothstep(0.022,0.025,md)*clamp(1.0-bite*1.4,0.0,1.0);
+      c=mix(c,vec3(0.93,0.94,0.98),moonDisc*uNight); c+=vec3(1.0)*moonRim*uNight*0.55;
+      // static paper-fleck stars: size (not brightness) is hashed per-cell and never animated —
+      // no uTime term at all, so nothing twinkles/shimmers.
       vec2 grid=vec2(140.0,90.0); vec2 cell=floor(vUv*grid); float h=hash(cell);
       vec2 f=fract(vUv*grid)-0.5+(vec2(hash(cell+1.7),hash(cell+4.2))-0.5)*0.6;
-      float pt=smoothstep(0.15,0.0,length(f));
-      float tw=0.55+0.45*sin(uTime*2.0+h*30.0);
-      float star=step(0.965,h)*pt*tw*smoothstep(0.20,0.62,vUv.y);
-      c+=vec3(0.92,0.95,1.0)*star*uNight*1.25;
+      float flecksize=0.09+0.10*hash(cell+3.1);                 // static per-star size variation
+      float pt=smoothstep(flecksize,0.0,length(f));
+      float star=step(0.965,h)*pt*smoothstep(0.20,0.62,vUv.y);
+      c+=vec3(0.92,0.95,1.0)*star*uNight*1.15;
     }
     // paper-fibre grain (19a, gentler than terrain — the sky is a distant backdrop card) + dither
     c += (fib(gl_FragCoord.xy)-0.5)*uGrain + (hash(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(c*1.05),1.0); }`;
 
+  // Phase 19b PAPERCRAFT SEA: the sea is now a stack of FLAT paper sheets, not an animated
+  // heightfield — no vertex waves at all (vN is a constant up-normal; the old sin-wave
+  // displacement/normal math is gone). All motion lives in the fragment shader below: shoreT (the
+  // existing shore-distance signal, unchanged) selects one of WATER_SHORE_BANDS(4) flat card-blue
+  // tones, and each band's zigzag boundary slides laterally at its own speed — this is the
+  // "layered paper diorama sea" read (stacked scissor-cut sheets, lightest near shore) rather than
+  // a lit/animated liquid surface.
   var V_WATER = `#version 300 es
-  layout(location=0) in vec3 aPos; layout(location=3) in vec3 aColor; uniform mat4 uVP; uniform float uTime; out vec3 vW; out vec3 vN; out float vLandH;
-  void main(){ vec3 p=aPos; float t=uTime;
-    float h=sin(p.x*0.18+t*1.1)*0.06+sin(p.z*0.23-t*0.9)*0.05+sin((p.x+p.z)*0.4+t*1.7)*0.025; p.y+=h-0.12; // sea level just below the heightfield coastline
-    float dx=cos(p.x*0.18+t*1.1)*0.018+cos((p.x+p.z)*0.4+t*1.7)*0.016;
-    float dz=cos(p.z*0.23-t*0.9)*0.021+cos((p.x+p.z)*0.4+t*1.7)*0.016;
-    vN=normalize(vec3(-dx,1.0,-dz)); vW=p;
-    vLandH=aColor.r;   // Phase 14a: terrain height baked per-vertex at mesh-build time (buildWaterMesh) — feeds the shoreline foam band below, no runtime heightfield lookup needed
+  layout(location=0) in vec3 aPos; layout(location=3) in vec3 aColor; uniform mat4 uVP; out vec3 vW; out vec3 vN; out float vLandH;
+  void main(){ vec3 p=aPos; p.y-=0.12;   // flat sea level, just below the heightfield coastline — no wave displacement (19b: flat paper sheet)
+    vN=vec3(0.0,1.0,0.0); vW=p;
+    vLandH=aColor.r;   // Phase 14a: terrain height baked per-vertex at mesh-build time (buildWaterMesh) — feeds the shore-distance signal below, no runtime heightfield lookup needed
     gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
   precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uFoam,uGrain;
@@ -282,37 +313,47 @@
   float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
     return mix(mix(dth(i),dth(i+vec2(1.0,0.0)),u.x), mix(dth(i+vec2(0.0,1.0)),dth(i+vec2(1.0,1.0)),u.x), u.y); }
   float fib(vec2 p){ return vn2(p*0.31)*0.6 + vn2(p*0.87+17.0)*0.4; }
+  float triW(float x){ float f=fract(x); return abs(f-0.5)*2.0; }   // 0..1 tent wave, period 1 — the zigzag/scallop primitive
   void main(){ vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
-    float fres=pow(1.0-max(dot(N,V),0.0),3.0); fres=floor(fres*3.0+0.2)/3.0;   // banded reflection
-    // Phase 16b: POSTCARD two-tone depth gradient — vLandH (the terrain heightfield baked per-
-    // vertex at mesh-build time, Phase 14a) IS the shore-distance/depth signal: near 0 right at
-    // the coastline, increasingly negative in open water. Reuse it here (not just for the narrow
-    // foam fringe below) so the whole sea reads as rich teal far/deep fading UP into bright
-    // turquoise shallows near shore — quantized into 4 toon bands (matches F_MAIN's n=4 diffuse
-    // banding) for the storybook contour-map look rather than a smooth photo gradient. A touch of
-    // the old wave-normal banding is kept blended in so wave crests still catch a little extra
-    // shimmer variation on top of the shore gradient.
+    float dist=length(uCam-vW);
+    // NBANDS=4 flat card-blue sheets — shoreT (unchanged 14a/16b shore-distance signal baked into
+    // vLandH at mesh-build time) still drives which sheet a fragment sits on: 0 far/deep, 1 near shore.
     float shoreT=smoothstep(-9.0,-0.35,vLandH);
-    float shoreDepthBand=floor(shoreT*4.0+0.001)/4.0;
-    float waveBand=floor(clamp(N.y*0.5+0.4,0.0,1.0)*3.0)/3.0+0.18;
-    float depthMix=clamp(shoreDepthBand*0.82+waveBand*0.18,0.0,1.0);
-    vec3 water=mix(uDeep,uShallow,depthMix);
-    // mirror the sky GRADIENT: steep reflected rays see the zenith, grazing rays the horizon
+    float bandsF=shoreT*4.0;
+    float kf=floor(clamp(bandsF,0.0,3.999));                      // which boundary/band we're near, BEFORE the wobble (picks its slide speed)
+    float spd=0.05+0.035*kf;                                       // each band boundary slides at its OWN speed (matches waterBandPhase() in game.js)
+    float lateral=vW.x*0.035+vW.z*0.022;
+    // wobble fades out with camera distance: at a grazing/far view a single screen pixel spans a
+    // huge range of world-space lateral coordinate, so the (otherwise lovely, up-close) zigzag
+    // aliases into a moire of stripes — fading it to a flat quantized band well before the horizon
+    // keeps the near/mid water "torn paper", the far water a calm flat sheet (also correct: distant
+    // water reading calmer than the foreground is itself a normal depth cue).
+    float wobFade=clamp(1.0-dist*0.0022,0.0,1.0); wobFade*=wobFade;
+    // two nested tent waves: a broad slow zigzag (the sheet-boundary wobble) plus a finer, quicker
+    // one (the small scallop "teeth" along the cut) — both riding the same per-band uTime*spd phase
+    // so the whole boundary slides sideways as one piece, never smoothly (a hand-cut edge, not a sine).
+    float wob=(triW(lateral*0.9+uTime*spd+kf*1.7)-0.5)*0.9*wobFade;
+    float teeth=(triW(lateral*3.4+uTime*spd*1.3+kf*2.3)-0.5)*0.22*wobFade*wobFade;
+    float bandsW=clamp(bandsF+wob+teeth,0.0,3.999);
+    float bandIdx=floor(bandsW);
+    float bandFrac=fract(bandsW);
+    vec3 water=mix(uDeep,uShallow,bandIdx/3.0);
+    // thin white scissor-cut rim right at each band boundary — wobbly, like the 19a paper edges
+    float edgeDist=min(bandFrac,1.0-bandFrac);
+    float rim=(1.0-smoothstep(0.0,0.05,edgeDist))*wobFade;
+    water=mix(water,vec3(0.97,0.99,1.0),rim*0.85);
+    // a whisper of the sky's colour bleeds in at grazing view angles only (postcard horizon fade) —
+    // paper is matte, so this stays gentle; N is now constant, so this is purely a camera-angle term.
+    float fres=pow(1.0-max(dot(N,V),0.0),3.0);
     vec3 R=reflect(-V,N); vec3 sky=mix(uSky,uSkyTop,pow(clamp(R.y,0.0,1.0),0.6));
-    vec3 col=mix(water,sky,clamp(fres*0.78,0.0,1.0));
-    // Phase 19a PAPERCRAFT: the specular sun glint + the animated toon-sparkle grid are GONE —
-    // paper water is matte card; foam/wake whites (below + drawWakes) carry all the life instead.
-    float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
-    // Phase 14a: scalloped shoreline foam — vLandH (baked from the terrain heightfield) tells us
-    // how close this water fragment sits to the coastline; band it into a soft white fringe right
-    // at the shore (fades out to open deep water AND to dry land, which is usually occluded here
-    // anyway), animated with a slow lateral scallop so it reads as lapping surf, not a paint
-    // stripe. uFoam is the ToD strength (authored from env(): full by day, faint by night so the
-    // coast never glows against the dark sea).
+    vec3 col=mix(water,sky,clamp(fres*0.22,0.0,1.0));
+    // Phase 14a/19b: scalloped shoreline foam — same shore-distance signal + uFoam ToD-strength
+    // contract as before. A rounded scallop (not a sharp tent) reads as pinked/scalloped paper edge
+    // rather than jagged shark-teeth — a slow eased ripple, two gentle octaves for a hand-drawn wobble.
     float shoreBand=1.0-smoothstep(0.0,2.6,abs(vLandH+0.15));
-    float scallop=0.55+0.45*sin(vW.x*0.55+vW.z*0.33+uTime*0.8);
-    col=mix(col,vec3(0.96,0.985,1.0),clamp(shoreBand*scallop,0.0,1.0)*0.6*uFoam);
-    float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
+    float scallop=0.5+0.35*sin(vW.x*0.14+vW.z*0.09+uTime*0.45)+0.15*sin(vW.x*0.37+vW.z*0.24-uTime*0.6);
+    col=mix(col,vec3(0.97,0.99,1.0),clamp(shoreBand*scallop,0.0,1.0)*0.6*uFoam);
+    float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
     // paper-fibre grain (19a) + dither — the sea is a sheet of card too
     col += (fib(gl_FragCoord.xy)-0.5)*uGrain + (dth(gl_FragCoord.xy)-0.5)/255.0;
