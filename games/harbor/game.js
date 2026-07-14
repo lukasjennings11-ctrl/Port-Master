@@ -41,18 +41,26 @@
   // '?nopost-probe' query flag disarms the probe, and __harbor.setPost() disarms it too (forced
   // state). Any FBO failure → direct path (legacy look: no DoF/bloom/outlines/shadows).
   var POST_FOCUS_Y = 0.44, POST_FOCUS_W = 0.17, POST_BLOOM_T = 0.78, POST_BLOOM_A = 0.35;
-  // ink-outline tuning (Phase 14a) — see F_POST in gl.js for how these are used. NOTE: the
+  // edge-line tuning (Phase 14a detector) — see F_POST in gl.js for how these are used. NOTE: the
   // "distant" massif skyline sits at only ~60–100 VIEW units in the default framing (camera
   // orbits at ~110), inside the playable port's own depth range — so terrain cleanliness comes
   // from F_POST's Laplacian slope-rejection + distance-scaled threshold, not from these fades.
-  // Phase 16b: thresholds trimmed and a tap-radius WIDTH multiplier added — bolder, more
-  // confident ink at gameplay zoom for the "vibrant storybook" pass (still gated by the same
-  // Laplacian slope-rejection + sky mask in F_POST, so terrain/sky cleanliness is unaffected).
-  var OUTLINE_DEPTH_T = 0.024, OUTLINE_NORM_T = 0.62, OUTLINE_FADE = 0.003, OUTLINE_MAXDIST = 300, OUTLINE_WIDTH = 1.6;
+  // Phase 19a PAPERCRAFT: the line flipped from dark ink to a WHITE scissor-cut paper rim —
+  // WIDTH pushed to 1.75x the 16b ink (2.8 vs 1.6, the rim must read as a cut paper edge, not a
+  // pen stroke) and a WOBBLE amount added: F_POST sways rim width and threshold with a slow
+  // screen-space noise so the cut meanders like real scissors (0 = the old vector-perfect line).
+  // Same detector underneath — Laplacian slope-rejection + sky mask are untouched.
+  var OUTLINE_DEPTH_T = 0.024, OUTLINE_NORM_T = 0.62, OUTLINE_FADE = 0.003, OUTLINE_MAXDIST = 300, OUTLINE_WIDTH = 2.8, OUTLINE_WOBBLE = 0.85;
   // Phase 16b: two-tone postcard water — F_WATER (gl.js) quantizes the vLandH shore-distance
   // signal into this many toon bands (rich deep teal far offshore -> bright turquoise shallows
   // right at the coast). Documented here for __harbor.water()'s test/debug hook below.
   var WATER_SHORE_BANDS = 4;
+  // Phase 19a: papercraft grade — F_MAIN's diffuse ramp is quantized to TOON_BANDS steps (2: a
+  // card face is lit or shaded, nothing between — documented here for the paper() test hook, the
+  // constant lives in the F_MAIN source), and every pass gets a static screen-anchored
+  // paper-fibre grain (two-octave value noise, uGrain amplitude per pass: terrain/buildings
+  // strongest, water a touch less, sky gentlest so the backdrop stays airy).
+  var TOON_BANDS = 2, GRAIN_MAIN = 0.055, GRAIN_WATER = 0.038, GRAIN_SKY = 0.026;
   // camera projection constants shared by the main perspective matrix AND the post pass's
   // depth-linearisation math (single source of truth so the outline reconstruction can never drift)
   var CAM_FOVY = 0.82, CAM_NEAR = 0.5, CAM_FAR = 1600;
@@ -296,44 +304,46 @@
   // from the biome palette so every world keeps its identity across the whole cycle.
   function m3(c, m) { return [c[0] * m[0], c[1] * m[1], c[2] * m[2]]; }
   function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
-  // Phase 16b: VIBRANT STORYBOOK mood pass — dusk pushed warmer (deeper orange-pink, not just
-  // gold-rose), night pushed inkier (darker + more saturated blue-violet for a stronger
-  // light/dark contrast against the window-glow + starfield), noon left crisp/bright (the
-  // biome's own punched-up palette from biomes.js already carries the "vivid" read at noon —
-  // ambient here is nudged for a touch more contrast/confidence, not repainted).
+  // Phase 19a PAPERCRAFT mood pass — the whole cycle re-lit as paper under studio light: noon is
+  // bright warm paper under daylight, dusk an amber card, night a deep blue-GREY card (the 16b
+  // ink-violet pulled toward neutral — night paper is dim, not dyed) with pale whitish rims.
+  // sparkle is 0 at EVERY key: matte card never glints (F_WATER's sparkle machinery is gone too;
+  // the field is kept in env() so the authored-zero is a testable contract, not an absence).
   function todKeys() {
     var b = biome;
-    var night = { // inkier blue-violet, moonlit; stars + window glow carry the magic — pushed
-      // notably darker than 14a (the ACES filmic curve lifts shadows more than raw values
-      // suggest, so getting a truly "ink" night needs a bigger cut at the source) for real
-      // light/dark contrast against the window-glow + starfield.
-      top: m3(b.skyTop, [0.045, 0.06, 0.16]), bot: m3(b.skyBot, [0.025, 0.035, 0.10]),
-      sun: [0.16, 0.22, 0.38],
-      ambTop: [0.09, 0.12, 0.30], ambBot: [0.035, 0.045, 0.13],
-      fog: m3(b.fog, [0.05, 0.06, 0.16]), fogD: 0.0011, shadowK: 0.40, water: [0.08, 0.10, 0.34],
-      horizon: [0.02, 0.03, 0.10], sparkle: 0.16                 // near-black blue rim; faint moon-glints
+    var night = { // deep blue-grey card, moonlit; stars + window glow carry the magic — still
+      // properly dark (the ACES curve lifts shadows more than raw values suggest) but the 16b
+      // blue-violet dye is pulled toward neutral grey so it reads as unlit paper, not ink.
+      top: m3(b.skyTop, [0.08, 0.09, 0.14]), bot: m3(b.skyBot, [0.045, 0.05, 0.08]),
+      sun: [0.24, 0.27, 0.34],
+      ambTop: [0.16, 0.18, 0.26], ambBot: [0.075, 0.08, 0.12],
+      fog: m3(b.fog, [0.07, 0.075, 0.12]), fogD: 0.0011, shadowK: 0.35, water: [0.14, 0.16, 0.28],
+      horizon: [0.04, 0.05, 0.10], sparkle: 0                    // near-black blue-grey rim; no glints
     };
-    var dawn = { // golden-pink sunrise: violet zenith, peach horizon, long warm light
-      top: lerp3(m3(b.skyTop, [0.52, 0.48, 0.80]), [0.46, 0.36, 0.66], 0.35),
-      bot: lerp3(m3(b.skyBot, [1.00, 0.72, 0.62]), [1.10, 0.62, 0.46], 0.5),
-      sun: [1.42, 0.92, 0.56],
-      ambTop: [0.42, 0.37, 0.54], ambBot: [0.32, 0.22, 0.28],
-      fog: lerp3(m3(b.fog, [1.0, 0.72, 0.62]), [1.02, 0.62, 0.5], 0.4), fogD: 0.0009, shadowK: 0.78, water: [0.74, 0.64, 0.68],
-      horizon: [1.28, 0.74, 0.50], sparkle: 0.62                 // warm peach sunrise glow
+    var dawn = { // soft peach-card sunrise — warm but chalky, long gentle light
+      top: lerp3(m3(b.skyTop, [0.58, 0.55, 0.74]), [0.52, 0.46, 0.62], 0.35),
+      bot: lerp3(m3(b.skyBot, [0.96, 0.78, 0.68]), [0.98, 0.72, 0.58], 0.5),
+      sun: [0.86, 0.68, 0.50],
+      ambTop: [0.33, 0.30, 0.38], ambBot: [0.24, 0.19, 0.20],
+      fog: lerp3(m3(b.fog, [0.96, 0.78, 0.68]), [0.94, 0.70, 0.60], 0.4), fogD: 0.0009, shadowK: 0.72, water: [0.78, 0.70, 0.70],
+      horizon: [1.12, 0.80, 0.60], sparkle: 0                    // warm peach card glow
     };
-    var day = { // bright, clean, cheerful — the biome palette as painted, crisp noon confidence
+    var day = { // bright warm paper under daylight — the matte biome palette as painted.
+      // Light energy sits LOWER than 16b's (sun ~1.1 vs 1.4, ambient trimmed): the desaturated
+      // card colours have less chroma headroom, so 16b's blast just bleached them through ACES —
+      // paper needs pigment left in the midtones.
       top: b.skyTop.slice(), bot: b.skyBot.slice(), sun: b.sun.slice(),
-      ambTop: [0.54, 0.60, 0.76], ambBot: [0.25, 0.225, 0.20],
-      fog: b.fog.slice(), fogD: 0.00055, shadowK: 0.55, water: [1, 1, 1],
-      horizon: lerp3(b.skyBot, [1.0, 0.99, 0.94], 0.55), sparkle: 0.55   // soft bright haze
+      ambTop: [0.34, 0.35, 0.41], ambBot: [0.20, 0.185, 0.165],
+      fog: b.fog.slice(), fogD: 0.00045, shadowK: 0.50, water: [1, 1, 1],
+      horizon: lerp3(b.skyBot, [0.99, 0.97, 0.92], 0.55), sparkle: 0   // soft bright haze
     };
-    var dusk = { // deep orange-pink molten sunset — warmer + more saturated than dawn, long warm light
-      top: lerp3(m3(b.skyTop, [0.46, 0.34, 0.72]), [0.44, 0.22, 0.52], 0.46),
-      bot: lerp3(m3(b.skyBot, [1.10, 0.58, 0.42]), [1.22, 0.42, 0.26], 0.62),
-      sun: [1.55, 0.78, 0.36],
-      ambTop: [0.46, 0.30, 0.46], ambBot: [0.36, 0.19, 0.22],
-      fog: lerp3(m3(b.fog, [1.06, 0.58, 0.44]), [1.12, 0.44, 0.30], 0.52), fogD: 0.0009, shadowK: 0.80, water: [0.80, 0.54, 0.56],
-      horizon: [1.55, 0.58, 0.28], sparkle: 0.72                 // molten peach-gold band low over the sea
+    var dusk = { // amber card — warmer than dawn but chalky-matte, never a molten glow
+      top: lerp3(m3(b.skyTop, [0.52, 0.42, 0.62]), [0.50, 0.34, 0.50], 0.46),
+      bot: lerp3(m3(b.skyBot, [1.02, 0.66, 0.50]), [1.06, 0.56, 0.40], 0.62),
+      sun: [0.94, 0.62, 0.38],
+      ambTop: [0.34, 0.26, 0.31], ambBot: [0.27, 0.18, 0.19],
+      fog: lerp3(m3(b.fog, [1.0, 0.66, 0.52]), [1.0, 0.54, 0.42], 0.52), fogD: 0.0009, shadowK: 0.75, water: [0.82, 0.62, 0.60],
+      horizon: [1.26, 0.68, 0.42], sparkle: 0                    // amber-card band low over the sea
     };
     // sun crosses the horizon at tod≈0.23 / 0.77 (see sunDir) — keys straddle those moments
     return [[0.00, night], [0.185, night], [0.25, dawn], [0.34, day], [0.66, day], [0.755, dusk], [0.84, night], [1.00, night]];
@@ -360,10 +370,16 @@
   function norm(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function smoothstep01(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
-  // Phase 14a: ink-outline colour — a warm storybook line, never pure black (a comic-noir black
-  // outline would fight the chromatic shadow ramp); drifts from warm umber by day to a warm
-  // plum-grey by night so it still reads against the darker night grade instead of vanishing.
-  function outlineTint(en) { return lerp3([0.20, 0.12, 0.08], [0.16, 0.11, 0.15], en.night); }
+  // Phase 19a PAPERCRAFT: the edge line is WHITE — the torn/scissor-cut rim of a paper layer,
+  // the exact inversion of the 14a/16b dark ink. Slightly warm by day (paper stock, not printer
+  // white) drifting to a paler, cooler rim after dark — pale card catching moonlight, never a
+  // glow (values stay <=1 so the rim can't bloom).
+  function outlineTint(en) { return lerp3([0.96, 0.95, 0.91], [0.78, 0.79, 0.84], en.night); }
+  // papercraft grade (19a): gentle, matte — the loud 16b uSat push (1.32+) is gone; construction
+  // paper sits near unity saturation with only a whisper of noon lift / night dim, and the
+  // mid-shadow crush eases too (deep inky crush reads as print, not card).
+  function gradeSat(en) { return 1.02 + 0.05 * en.day - 0.06 * en.night; }
+  function gradeCrush(en) { return 0.05 + 0.08 * en.night; }
 
   // ---- Phase 14b: drifting clouds — a handful of puffy cumulus meshes on a high world-space
   // layer, built ONCE at boot (like gullMesh/boxMesh, not per-biome) and translated every frame.
@@ -430,7 +446,7 @@
   }
   function drawClouds(M, en) {
     if (!CLOUDS) return;
-    gl.uniform3fv(M.u.uBase, cloudTint(en)); gl.uniform1f(M.u.uRough, 0.9);   // matte/chalky, no shiny highlight
+    gl.uniform3fv(M.u.uBase, cloudTint(en));   // matte/chalky (19a: F_MAIN is all-matte now — no per-draw roughness left to set)
     for (var i = 0; i < CLOUDS.length; i++) {
       var c = CLOUDS[i], p = cloudWorldPos(c);
       composeRYS(mModel, p[0], c.y, p[1], c.scale, c.scale * 0.72, c.scale, c.ry);
@@ -450,7 +466,7 @@
   // draw the modern skyline (glTF buildings) — textured prim uses the shared atlas, flat "lit" prims use baseColor
   function drawCity(M) {
     if (!atlasTex || !cityModels || !scene.city.length) return;
-    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uRough, 0.5);
+    gl.uniform1f(M.u.uVCol, 0);
     for (var i = 0; i < scene.city.length; i++) {
       var c = scene.city[i], cm = cityModels[c.bi]; if (!cm) continue;
       composeRY(mModel, c.x, HARBOR_MODELS.heightAt(c.x, c.z) - 0.3, c.z, c.s, c.rot); gl.uniformMatrix4fv(M.u.uModel, false, mModel);
@@ -519,7 +535,7 @@
     else if (ph < 0.70) { tx = 13 - 26 * ((ph - 0.52) / 0.18); drop = 2; }
     else if (ph < 0.84) { tx = -13; drop = 2 + 18 * ((ph - 0.70) / 0.14); }
     else { tx = -13; drop = 20 - 18 * ((ph - 0.84) / 0.16); }
-    var p = [{ t: [tx, h + 2.1, z], s: [6, 1.6, 4], c: [0.85, 0.5, 0.12] },
+    var p = [{ t: [tx, h + 2.1, z], s: [6, 1.6, 4], c: [0.70, 0.54, 0.28] },   // 19a: mustard card (was candy amber)
              { t: [tx, h + 2.1 - drop, z], s: [5, 0.9, 4.6], c: [0.13, 0.14, 0.16] }];
     if (carry) p.push({ t: [tx, h + 1.0 - drop, z], s: [4.8, 2.3, 4.4], c: HARBOR_MODELS.CONT[(clock | 0) % 7] });
     return p;
@@ -561,7 +577,7 @@
     // per worker; a few carry a crate.
     var nWork = clamp(2 + era, 2, 6), workers = [];
     var wz0 = era >= 1 ? 14 : 20, wSpan = Math.min(58, 26 + era * 5);   // era>=1: the quay apron; era0: the beach strip between jetty and huts
-    var CAP_HUES = [[0.86, 0.22, 0.20], [0.95, 0.78, 0.18], [0.24, 0.55, 0.86], [0.30, 0.72, 0.36], [0.94, 0.50, 0.20], [0.70, 0.32, 0.80]];
+    var CAP_HUES = [[0.70, 0.34, 0.30], [0.78, 0.66, 0.34], [0.38, 0.52, 0.68], [0.42, 0.58, 0.40], [0.76, 0.52, 0.32], [0.58, 0.42, 0.64]];   // 19a: felt caps, not candy
     for (i = 0; i < nWork; i++) {
       var lane = wz0 + ((i % 2) ? 3.2 : -3.2) + rng() * 2.4, mid = (rng() - 0.5) * wSpan * 0.7, half = 6 + rng() * 9;
       workers.push({ x0: mid - half, x1: mid + half, z: lane, spd: 0.30 + rng() * 0.22, ph: rng() * 6.283, bobPh: rng() * 6.283,
@@ -664,8 +680,8 @@
   // patrolling their own coastal lane, closer to shore and slower than the rival corsair's — see
   // navyPatrolPos()/refreshFleet() below.
   var fleet = { exp: [], routes: [], rival: null, navy: [], at: -1e9 };
-  var FLEET_SAIL = [[0.78, 0.9, 1.0], [0.55, 0.95, 0.72], [1.0, 0.82, 0.34], [0.85, 0.5, 1.0]];       // sail tint per destination tier 1..4
-  var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
+  var FLEET_SAIL = [[0.82, 0.87, 0.92], [0.64, 0.80, 0.68], [0.88, 0.78, 0.52], [0.74, 0.62, 0.82]];  // sail tint per destination tier 1..4 (19a: dyed card, not neon)
+  var FLEET_HULL = { fish: [0.54, 0.62, 0.70], timber: [0.5, 0.36, 0.22], goods: [0.74, 0.52, 0.30] };  // hull tint per route resource (19a matte)
   var EXP_HULL = [0.38, 0.26, 0.17], RTE_SAIL = [0.93, 0.91, 0.87],
       RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08],
       NAVY_HULL = [0.92, 0.92, 0.90], NAVY_SAIL = [0.90, 0.89, 0.84];   // crisp white hull; the navy-blue/gold trim is baked into each class's own mesh
@@ -963,6 +979,7 @@
     gl.uniform1f(S.u.uHorizonY, clamp((hcy / (hcw || 1)) * 0.5 + 0.5, 0.04, 0.8));
     gl.uniform2fv(S.u.uSun, [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5]);
     gl.uniform1f(S.u.uNight, en.night); gl.uniform1f(S.u.uTime, clock);   // night starfield
+    gl.uniform1f(S.u.uGrain, GRAIN_SKY);   // paper-fibre grain (19a) — gentlest on the sky card
     drawMesh(S, E.quad); gl.depthMask(true); gl.enable(gl.CULL_FACE);
 
     // scene meshes
@@ -974,13 +991,12 @@
     gl.uniform3fv(M.u.uShadowTint, biome.shadowTint || [0.58, 0.64, 1.08]); gl.uniform1f(M.u.uShadowK, en.shadowK);
     gl.uniform3fv(M.u.uCam, ev); gl.uniform3fv(M.u.uFog, en.fog); gl.uniform1f(M.u.uFogD, en.fogD);  // gentle authored distance fog
     gl.uniform3fv(M.u.uWin, [1.0, 0.82, 0.46]); gl.uniform1f(M.u.uNight, en.night); gl.uniform1f(M.u.uTime, clock);
-    // Phase 14a palette pop: punchier, more confident colour at noon; slightly desaturated +
-    // deeper-crushed mid-shadows after dark for mood (never blown highlights, never grey shadows —
-    // uCrush's m*(1-m) factor in F_MAIN protects both ends of the range).
-    // Phase 16b: crisper noon (uSat day term bumped) + inkier night (uCrush night term bumped)
-    // for the storybook light/dark mood swing.
-    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.32 + 0.16 * en.day - 0.10 * en.night);
-    gl.uniform1f(M.u.uCrush, 0.06 + 0.15 * en.night);
+    // Phase 19a papercraft grade: near-unity saturation + gentle crush (see gradeSat/gradeCrush
+    // above) — the matte construction-paper palette in biomes.js/models.js carries the colour
+    // now, the grade only breathes with ToD. Paper-fibre grain rides every pass.
+    gl.uniform1f(M.u.uExposure, 1.30); gl.uniform1f(M.u.uSat, gradeSat(en));   // 19a: exposure cut 1.6->1.30 — ACES was bleaching card pigment to pastel
+    gl.uniform1f(M.u.uCrush, gradeCrush(en));
+    gl.uniform1f(M.u.uGrain, GRAIN_MAIN);
     // Phase 14a: revived PCF soft shadows — same directional light, recentred ortho frustum from
     // renderShadowMap() above, gated behind the same quality flag as the post pass. Strength
     // fades with sun height (see shadow() in gl.js): full at noon, gone by dusk — grazing light
@@ -1001,11 +1017,10 @@
     // modern skyline (glTF assets)
     gl.uniform1f(M.u.uTexMix, 0); drawCity(M);
     // dynamic crane parts (flat colour) — transformed to the founded port frame
-    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uAlbedo, 0); gl.uniform1f(M.u.uRough, 0.5);
+    gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uAlbedo, 0);
     // Phase 14b: drifting clouds — every biome/world, founded or wild, sky-layer only (no shadow,
     // no scene.blobs entry); same flat-colour program state the crane parts below reuse.
     drawClouds(M, en);
-    gl.uniform1f(M.u.uRough, 0.5);
     var pf = scene.port, pc = pf ? Math.cos(pf.yaw) : 1, psn = pf ? Math.sin(pf.yaw) : 0;
     for (i = 0; i < parts.length; i++) {
       var t = parts[i].t, lx = t[0], lz = t[2];
@@ -1044,9 +1059,10 @@
     gl.uniform3fv(W.u.uDeep, m3(biome.deep, en.water)); gl.uniform3fv(W.u.uShallow, m3(biome.shallow, en.water));   // ToD-lit water body
     gl.uniform3fv(W.u.uSky, lerp3(en.bot, en.horizon, 0.4)); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient incl. the horizon glow
     gl.uniform3fv(W.u.uFog, en.fog); gl.uniform1f(W.u.uFogD, en.fogD);
-    gl.uniform1f(W.u.uSparkle, en.sparkle);   // ToD-authored sparkle: strong day/dusk, faint moon-glints at night
+    // Phase 19a: sparkle is gone from F_WATER entirely (matte paper sea) — en.sparkle is now
+    // authored 0 at every ToD key and no uniform ships it; foam/wakes carry the white life.
     gl.uniform1f(W.u.uFoam, 0.12 + 0.88 * en.day);   // Phase 14a: shoreline foam full by day, faint by night (never a glowing coast)
-    gl.uniform1f(W.u.uExposure, 1.58); gl.uniform1f(W.u.uSat, 1.25);
+    gl.uniform1f(W.u.uExposure, 1.34); gl.uniform1f(W.u.uSat, 1.0); gl.uniform1f(W.u.uGrain, GRAIN_WATER);   // 19a: exposure trimmed — card sea, not glare
     gl.disable(gl.CULL_FACE); drawMesh(W, waterMesh); gl.enable(gl.CULL_FACE);
 
     // Phase 14a: wake trails, composited over the water (alpha decals — see drawWakes above)
@@ -1067,7 +1083,7 @@
       gl.uniform1f(PP.u.uOutlineOn, quality ? 1 : 0);
       gl.uniform1f(PP.u.uOutlineDepthT, OUTLINE_DEPTH_T); gl.uniform1f(PP.u.uOutlineNormT, OUTLINE_NORM_T);
       gl.uniform1f(PP.u.uOutlineFade, OUTLINE_FADE); gl.uniform1f(PP.u.uOutlineMaxDist, OUTLINE_MAXDIST);
-      gl.uniform1f(PP.u.uOutlineWidth, OUTLINE_WIDTH);
+      gl.uniform1f(PP.u.uOutlineWidth, OUTLINE_WIDTH); gl.uniform1f(PP.u.uOutlineWobble, OUTLINE_WOBBLE);
       gl.uniform3fv(PP.u.uOutlineTint, outlineTint(en));
       drawMesh(PP, E.quad);
       // CRITICAL (doubled for Phase 14a): unbind BOTH rt.tex (unit 0) and rt.depthTex (unit 1) —
@@ -3250,7 +3266,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v71';
+  var BUILD_TAG = 'v72';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3322,7 +3338,7 @@
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!musicOff ? ' on' : '') + '" data-set="music"><span class="mi-n">Music</span><span class="mi-c">' + (musicOff ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!hapticsOff ? ' on' : '') + '" data-set="haptics"><span class="mi-n">Vibration</span><span class="mi-c">' + (hapticsOff ? 'OFF' : 'ON') + '</span></button>';
-    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✨ Cartoon FX</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
+    h += '<button class="mp-item auto' + (postEnabled() ? ' on' : '') + '" data-set="post"><span class="mi-n">✂️ Papercraft</span><span class="mi-c">' + (postEnabled() ? 'ON' : 'OFF') + '</span></button>';
     h += '</div>';
     // Phase 15b: pace — Relaxed (default) spaces storms/events further apart; Lively is the original feel.
     h += '<div class="mp-sec">Pace</div><div class="mp-grid">';
@@ -3665,10 +3681,10 @@
     gl.uniformMatrix4fv(M.u.uVP, false, pVP);
     gl.uniform3fv(M.u.uSunDir, [0.42, 0.80, 0.32]); gl.uniform3fv(M.u.uSunCol, [1.5, 1.42, 1.28]);
     gl.uniform3fv(M.u.uAmbTop, [0.56, 0.60, 0.70]); gl.uniform3fv(M.u.uAmbBot, [0.28, 0.27, 0.29]);
-    gl.uniform3fv(M.u.uShadowTint, [0.60, 0.65, 1.0]); gl.uniform1f(M.u.uShadowK, 0.5);
+    gl.uniform3fv(M.u.uShadowTint, [0.62, 0.61, 0.72]); gl.uniform1f(M.u.uShadowK, 0.5);   // 19a: neutral paper shadow
     gl.uniform3fv(M.u.uCam, eyeP); gl.uniform3fv(M.u.uFog, [0.055, 0.09, 0.13]); gl.uniform1f(M.u.uFogD, 0);
     gl.uniform3fv(M.u.uWin, [1, 1, 1]); gl.uniform1f(M.u.uNight, 0); gl.uniform1f(M.u.uTime, 0);
-    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.28); gl.uniform1f(M.u.uCrush, 0.06);
+    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.02); gl.uniform1f(M.u.uCrush, 0.05);   // 19a: papercraft grade
     gl.uniform1f(M.u.uShadowOn, 0);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(M.u.uShadow, 2);
     gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uAlbedo, 0); gl.uniform1f(M.u.uTexMix, 0);
@@ -3964,7 +3980,11 @@
     // shore-band count F_WATER's gradient quantizes into, and the tuned outline width/threshold
     // (see OUTLINE_* above / F_POST in gl.js) so tests can assert the new look is actually wired.
     water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true }; },
-    outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH }; },
+    outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH, wobble: OUTLINE_WOBBLE, tint: outlineTint(env()) }; },
+    // Phase 19a: papercraft debug hook — the live grade + the matte-flip contract in one place:
+    // white rim tint, 2-step banding, per-pass fibre-grain amplitudes, sparkle authored 0, and
+    // specular/rim-sheen gone from F_MAIN (glossOff documents the shader-side removal).
+    paper: function () { var en = env(); return { rim: outlineTint(en), width: OUTLINE_WIDTH, wobble: OUTLINE_WOBBLE, bands: TOON_BANDS, grain: { main: GRAIN_MAIN, water: GRAIN_WATER, sky: GRAIN_SKY }, sparkle: en.sparkle, glossOff: true, sat: gradeSat(en), crush: gradeCrush(en) }; },
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard; .bldg = 18b building meshes)
     terrainStats: function () { return HARBOR_MODELS ? HARBOR_MODELS.terrainStats() : null; },   // Phase 18a: faceted-terrain verts + per-biome dressing + founded-port-only apron/dock/path/fence/props counts

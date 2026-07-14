@@ -519,10 +519,13 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('env: horizon glow authored per ToD (dusk warm peach, night near-black blue)',
     Array.isArray(envDusk2.horizon) && envDusk2.horizon[0] > envDusk2.horizon[2] && envDusk2.horizon[0] > 1.0 &&
     envNight2.horizon[2] > envNight2.horizon[0] && (envNight2.horizon[0] + envNight2.horizon[1] + envNight2.horizon[2]) < 0.5);
-  ok('env: water sparkle scales with ToD (dusk strong, night faint)',
-    envDusk2.sparkle > 0.5 && envNight2.sparkle > 0 && envNight2.sparkle < 0.3);
+  // (19a papercraft: sparkle is deliberately AUTHORED 0 at every key now — matte card never
+  // glints; the field stays in env() precisely so this stays a testable contract. Updated from
+  // the 10b-era "dusk strong / night faint" scaling check.)
+  ok('env: water sparkle authored to zero at every ToD key (19a matte paper sea)',
+    envDusk2.sparkle === 0 && envNight2.sparkle === 0);
   await page.evaluate(() => window.__harbor.setTod(0.5)); await sleep(150);
-  ok('10b: sky/water/sparkle uniforms render with zero new errors', errs.length === errsBeforeSweep);
+  ok('10b: sky/water uniforms render with zero new errors', errs.length === errsBeforeSweep);
 
   // Phase 10c: quality-gated post pass — tilt-shift miniature DoF + bloom-lite composite
   const errsBefore10c = errs.length;
@@ -1469,6 +1472,54 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   for (const t of [0, 0.25, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
   await page.evaluate(() => window.__harbor.setTod(0.5));
   ok('18b: full ToD sweep with remodeled buildings + squash-stretch live → zero GL warnings/errors', errs.length === errsBefore18b);
+
+  // Phase 19a: PAPERCRAFT REBOOT — material & edge flip. The two signature inversions: the
+  // 14a/16b dark ink outline became a WHITE scissor-cut paper rim (thicker + wobbled, same
+  // detector), and the 16b candy palette became matte construction paper (desaturated source
+  // colours, gloss/sparkle removed, 2-step banding, paper-fibre grain, gentle near-unity grade).
+  // Assertions pivot on the __harbor.paper() debug hook added for this phase + hardcoded 16b-era
+  // palette sentinels, then the same zero-GL-warning soak pattern every look phase uses.
+  const errsBefore19a = errs.length;
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  const paper0 = await page.evaluate(() => window.__harbor.paper());
+  const paperNight = await page.evaluate(() => { window.__harbor.setTod(0.0); return window.__harbor.paper(); });
+  const rimLuma = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  ok('19a: edge line is PAPER-WHITE, not ink — warm white by day (luma > 0.85), pale card by night (luma > 0.7), never >1 (no glow)',
+    paper0 && rimLuma(paper0.rim) > 0.85 && paper0.rim[0] > paper0.rim[2] &&
+    paperNight && rimLuma(paperNight.rim) > 0.7 &&
+    paper0.rim.concat(paperNight.rim).every(v => v <= 1.0));
+  ok('19a: rim is >=1.5x the 16b ink width sentinel (1.6) and the scissor-cut wobble parameter is armed',
+    paper0.width >= 1.6 * 1.5 && paper0.wobble > 0 && paper0.wobble <= 1);
+  const sparkles19a = [];
+  for (const t of [0.0, 0.34, 0.5, 0.755]) sparkles19a.push(await page.evaluate(tt => { window.__harbor.setTod(tt); return window.__harbor.env().sparkle; }, t));
+  ok('19a: sparkle authored 0 across the whole ToD cycle + F_MAIN specular/sheen removed (glossOff)',
+    sparkles19a.every(v => v === 0) && paper0.glossOff === true);
+  ok('19a: 2-step paper banding + fibre grain active on every pass, terrain strongest then water then sky',
+    paper0.bands === 2 && paper0.grain.main > 0 && paper0.grain.main < 0.15 &&
+    paper0.grain.main > paper0.grain.water && paper0.grain.water > paper0.grain.sky);
+  ok('19a: papercraft grade is gentle — uSat near unity (16b\'s 1.32+ candy push gone), mild crush',
+    paper0.sat > 0.9 && paper0.sat < 1.15 && paperNight.sat > 0.9 && paperNight.sat < 1.15 &&
+    paper0.crush >= 0 && paper0.crush < 0.2);
+  // matte-flip palette sentinels: the LIVE v71 (16b-era) green-isles constants, hardcoded — the
+  // painted saturation (max-min)/max must have dropped by >=30% on ground/shallow/wall, and the
+  // 14a chromatic shadow ramp must be pulled to neutral paper shadow (no >1 blue channel).
+  const OLD16B = { ground: [0.20, 0.46, 0.16], shallow: [0.10, 0.62, 0.66], wall0: [0.92, 0.30, 0.24], shadowB: 1.21 };
+  const gp19a = await page.evaluate(() => { var b = window.HARBOR_BIOMES.green; return { ground: b.ground.slice(), shallow: b.shallow.slice(), wall0: b.build.wall[0].slice(), shadowTint: b.shadowTint.slice() }; });
+  const satOf = c => (Math.max(...c) - Math.min(...c)) / Math.max(...c);
+  ok('19a: construction-paper palette flip — green ground/shallow/wall desaturated >=30% vs 16b, shadow ramp neutral grey-mauve',
+    satOf(gp19a.ground) < satOf(OLD16B.ground) * 0.7 &&
+    satOf(gp19a.shallow) < satOf(OLD16B.shallow) * 0.7 &&
+    satOf(gp19a.wall0) < satOf(OLD16B.wall0) * 0.7 &&
+    gp19a.shadowTint[2] <= 1.0 && (gp19a.shadowTint[2] - gp19a.shadowTint[0]) < 0.25);
+  // white-rim/wobble/grain soak: sweep ToD with quality ON — the retuned F_POST must stay
+  // sky-masked + slope-rejecting (unchanged machinery) with zero GL warnings over both RTT passes.
+  for (const t of [0.0, 0.25, 0.34, 0.5, 0.66, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(160); }
+  ok('19a: full ToD sweep with white wobbled rims + fibre grain + matte grade live → zero GL warnings/errors', errs.length === errsBefore19a);
+  // legacy quality-off path: no post pass → no rims (as before, dark ink no longer ships as any
+  // default) — the matte palette/grain/banding ride the base shaders and must render just as clean.
+  await page.evaluate(() => { window.__harbor.setTod(0.5); window.__harbor.setPost(false); }); await sleep(400);
+  ok('19a: legacy quality-off path renders the papercraft world clean (no outlines at all — ink is gone as a default)', errs.length === errsBefore19a);
+  await page.evaluate(() => window.__harbor.setPost(true));
 
   // live ticking after everything — no late errors
   await sleep(2000);
