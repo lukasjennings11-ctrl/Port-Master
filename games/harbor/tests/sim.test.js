@@ -868,16 +868,165 @@ function autoplay(cfg) {
   ok('17b migrate: era0/tier0 multiplier is EXACTLY 1 — no income regression for a vanilla migrated save', SIM.fleetYieldMul('fishing') === 1 && SIM.fleetYieldMul('trade') === 1 && SIM.fleetYieldMul('expedition') === 1);
 })();
 
-// Phase 17b: every SHIPYARD class (6 original + 19 new fleet-registry rungs) builds under the
-// 4000-vert-per-class budget declared in models.js. Loaded headlessly here (gl.js's Builder needs
-// no real WebGL — it just emits typed arrays) so the full 25-class sweep runs without a browser;
-// browser.test.js separately soaks a representative subset through the real GPU via debugShip.
+// ---------------------------------------------------------------- Phase 17c: The Navy
+(function navyTierGating() {
+  SIM.newGame(); SIM.foundPort('green');
+  var S17c = SIM.raw();
+  ok('17c tier: fresh game starts navy at tier 0', SIM.navyTier() === 0);
+  S17c.era = 0; S17c.money = 1e9;
+  ok('17c gate: era0 — tier1 not buyable even flush with cash (era >= NAVY_ERA[1]=1 required)', SIM.canBuyNavy() === false);
+  S17c.era = 1;
+  ok('17c gate: era1 — tier1 (Patrol Cutter, £300) now buyable', SIM.canBuyNavy() === true && SIM.navyShipCost() === 300);
+  ok('17c gate: tier3 (Ironclad) needs era>=4, not era>=3 — the ladder skips era3', SIM.NAVY_ERA[3] === 4);
+  var boughtCount = 0, guard = 0;
+  while (SIM.navyTier() < 5 && guard++ < 10) {
+    var before = SIM.navyTier();
+    S17c.era = 6;                                          // flush past every era gate so only the "in order" rule can block us
+    if (SIM.buyNavy()) { boughtCount++; ok('17c order: tier only ever advances by exactly 1 (' + before + '→' + SIM.navyTier() + ')', SIM.navyTier() === before + 1); }
+  }
+  ok('17c order: bought every tier up to the max (5) one step at a time', SIM.navyTier() === 5 && boughtCount === 5);
+  ok('17c order: maxed tier has no further cost/purchase', SIM.navyShipCost() === null && SIM.canBuyNavy() === false);
+})();
+
+(function navyCharging() {
+  SIM.newGame(); SIM.foundPort('green');
+  var S17c = SIM.raw();
+  S17c.era = 2; S17c.money = 1600;   // tier1 (£300) + tier2 (£1500) = £1800, short by £200 — can afford tier1, not tier2 after
+  var boughtBefore = S17c.stats.navyBought || 0;
+  ok('17c charge: tier1 (£300) affordable at £1600', SIM.canBuyNavy() === true);
+  var b1 = SIM.buyNavy();
+  ok('17c charge: buyNavy charges exactly once — money drops by exactly the tier cost', b1 === true && near(S17c.money, 1600 - 300, 1e-9));
+  ok('17c charge: stats.navyBought increments by exactly 1 per purchase', (S17c.stats.navyBought || 0) === boughtBefore + 1);
+  ok('17c charge: tier1→2 needs £1500, only £1300 left — correctly unaffordable', SIM.canBuyNavy() === false);
+  var moneyBefore = S17c.money, tierBefore = SIM.navyTier();
+  var b2 = SIM.buyNavy();
+  ok('17c charge: buyNavy REFUSES when broke — returns false', b2 === false);
+  ok('17c charge: a refused buyNavy charges NOTHING (money unchanged)', S17c.money === moneyBefore);
+  ok('17c charge: a refused buyNavy leaves the tier unchanged', SIM.navyTier() === tierBefore);
+})();
+
+(function navyWinOddsMath() {
+  // EXACT formula: winOdds = clamp(clamp(0.45 + 0.12*wall + 0.06*light + 0.08*beacon, 0.45, 0.92) + 0.08*navyPower, 0.45, 0.95)
+  // era pinned high enough (raidStrength(10) = 1+floor(10/2) = 6 > any navyPower<=5) so NONE of
+  // these fireEvent('raid') calls ever trip navy auto-defense — every one must open as a normal
+  // modal event so its winOdds is inspectable via SIM.event().data.
+  SIM.newGame(); SIM.foundPort('green');
+  var S17c = SIM.raw(); S17c.era = 10; S17c.money = 100000;
+  S17c.navy = 0;
+  SIM.fireEvent('raid');
+  ok('17c winOdds: navyPower=0, no defenses — matches the exact pre-17c base (0.45)', near(SIM.event().data.winOdds, 0.45, 1e-9));
+  S17c.navy = 1;
+  SIM.fireEvent('raid');
+  ok('17c winOdds: navyPower=1, no defenses — base 0.45 + 0.08 = 0.53', near(SIM.event().data.winOdds, 0.53, 1e-9));
+  // max out wall/light/beacon so the pre-navy base itself clamps at 0.92, then navy stacks on top
+  var p = SIM.port('green');
+  for (var i = 0; i < 5; i++) p.buildings.push({ type: 'seawall', level: 5, hp: 100 });
+  p.buildings.push({ type: 'lighthouse', level: 3, hp: 100 });
+  p.buildings.push({ type: 'sky_beacon', level: 5, hp: 100 });
+  S17c.navy = 0;
+  SIM.fireEvent('raid');
+  ok('17c winOdds: navyPower=0, maxed defenses — clamps at the ORIGINAL 0.92 ceiling (no regression)', near(SIM.event().data.winOdds, 0.92, 1e-9));
+  S17c.navy = 5;
+  SIM.fireEvent('raid');
+  ok('17c winOdds: navyPower=5, maxed defenses — 0.92 + 0.40 clamps at the NEW 0.95 ceiling', near(SIM.event().data.winOdds, 0.95, 1e-9));
+})();
+
+(function navyHazardResist() {
+  // EXACT formula: dmgF = max(0.1, 1 - 0.16*wall - 0.10*beacon - 0.05*(netLvl-1) - META.hazardResist - 0.03*navyPower)
+  // Deterministic: seed rng to a CONSTANT so strike()'s building-count/pick/magnitude rolls are
+  // all fixed, isolating dmgF (which itself has no rng in it) as the only variable.
+  function constRng(v) { return function () { return v; }; }
+  function strikeOneBuildingDmg(navyPower) {
+    SIM.newGame(); SIM.foundPort('green');
+    var s = SIM.raw(); s.era = 3; s.navy = navyPower;
+    var p = SIM.port('green'); p.buildings.length = 0; p.buildings.push({ type: 'fishing_hut', level: 1, hp: 100 });   // exactly 1 non-defense building
+    SIM.__setRng(constRng(0.4));                          // n=1 (only 1 in pool anyway), pick index 0, magnitude = 25+0.4*30 = 37
+    SIM.strikePort('green');
+    SIM.__setRng(Math.random);
+    return p.buildings[0].hp;
+  }
+  var hpNoNavy = strikeOneBuildingDmg(0), hpMaxNavy = strikeOneBuildingDmg(5);
+  ok('17c hazardResist: navyPower=0 — dmgF=1 (unchanged pre-17c), hp = 100 - 37 = 63', near(hpNoNavy, 63, 1e-6));
+  ok('17c hazardResist: navyPower=5 — dmgF=0.85 (1 - 0.03*5), hp = 100 - 31.45 = 68.55', near(hpMaxNavy, 68.55, 1e-6));
+  ok('17c hazardResist: a maxed navy measurably softens storm damage vs no navy', hpMaxNavy > hpNoNavy);
+})();
+
+(function navyAutoDefense() {
+  SIM.__setRng(Math.random);
+  SIM.newGame(); SIM.foundPort('green');
+  var S17c = SIM.raw();
+  S17c.era = 4; S17c.money = 1000;                        // tribute = round(max(30,min(1000*0.12,60*2^4))) = round(max(30,min(120,960))) = 120
+  ok('17c raidStrength: era4 → 1 + floor(4/2) = 3', SIM.raidStrength() === 3);
+  S17c.navy = 2;                                          // BELOW threshold (3) — must resolve as a normal modal-opening raid
+  var moneyBefore = S17c.money, repelledBefore = S17c.stats.raidsRepelled || 0;
+  var r1 = SIM.fireEvent('raid');
+  ok('17c auto-defense: navyPower(2) < raidStrength(3) — raid opens normally (active event, not auto)', !!r1 && !r1.auto && SIM.event() !== null);
+  ok('17c auto-defense: below threshold does NOT touch money or raidsRepelled', S17c.money === moneyBefore && (S17c.stats.raidsRepelled || 0) === repelledBefore);
+  SIM.resolveEvent(0);                                    // clear the open event (pay tribute) before the next fireEvent
+  S17c.navy = 3;                                           // AT threshold (3) — must auto-repel
+  S17c.money = 1000;
+  var moneyBefore2 = S17c.money, repelledBefore2 = S17c.stats.raidsRepelled || 0;
+  var r2 = SIM.fireEvent('raid');
+  ok('17c auto-defense: navyPower(3) >= raidStrength(3) — resolves instantly as a victory (auto:true, no modal)', !!r2 && r2.auto === true && SIM.event() === null);
+  ok('17c auto-defense: loot credited is exactly half the tribute it would have demanded (120*0.5=60)', r2.loot === 60 && near(S17c.money, moneyBefore2 + 60, 1e-9));
+  ok('17c auto-defense: stats.raidsRepelled increments by exactly 1', (S17c.stats.raidsRepelled || 0) === repelledBefore2 + 1);
+  ok('17c auto-defense: snapshot exposes navyRepel keyed by seq for the game.js banner', SIM.state().navyRepel && SIM.state().navyRepel.seq === r2.seq && SIM.state().navyRepel.loot === 60);
+})();
+
+(function navyPureSink() {
+  // Navy must be a PURE money sink + defense effect — it must NOT alter the economy tick (no
+  // production/sales multiplier anywhere navy touches). Two identical economies, same seed/
+  // buildings/era, differing ONLY in S.navy — a long tick (dt>=5, so tickHazard/tickEvents don't
+  // fire at all — see sim.js tick()) must produce IDENTICAL money/resource deltas.
+  function runEconomy(navyTier) {
+    SIM.__setRng(function () { return 0.5; });
+    SIM.newGame(); SIM.foundPort('green');
+    var s = SIM.raw(); s.money = 1e6; s.era = 3; s.navy = navyTier;
+    ['fishing_hut', 'fishing_hut', 'cottage', 'jetty', 'warehouse', 'market'].forEach(function (t) { if (SIM.canBuild(t)) SIM.build(t); });
+    var before = { money: s.money, fish: s.ports.green.res.fish, timber: s.ports.green.res.timber, goods: s.ports.green.res.goods };
+    SIM.tick(30);
+    return { money: s.money - before.money, fish: s.ports.green.res.fish - before.fish, timber: s.ports.green.res.timber - before.timber, goods: s.ports.green.res.goods - before.goods };
+  }
+  var d0 = runEconomy(0), d5 = runEconomy(5);
+  ok('17c pure sink: navy=0 vs navy=5 — identical money delta from an otherwise-identical tick', near(d0.money, d5.money, 1e-6));
+  ok('17c pure sink: navy=0 vs navy=5 — identical fish/timber/goods deltas (no hidden production multiplier)',
+    near(d0.fish, d5.fish, 1e-6) && near(d0.timber, d5.timber, 1e-6) && near(d0.goods, d5.goods, 1e-6));
+  SIM.__setRng(Math.random);
+})();
+
+(function navyMigration() {
+  // a pre-17c save (no `navy` field, no stats.navyBought/raidsRepelled) must load with navy=0 and
+  // raids behaving EXACTLY as pre-17c (already covered precisely by navyWinOddsMath/navyHazardResist
+  // above at navyPower=0 — this section just confirms the backfill itself).
+  var oldBlob = {
+    era: 2, money: 5000, lifetimeMoney: 5000, lastSeen: Date.now(), founded: true,
+    managers: { fishing: 0, sales: 0, labour: 0 }, active: 'green',
+    ports: { green: { id: 'green', res: { fish: 0, timber: 0, goods: 0 }, buildings: [{ type: 'fishing_hut', level: 1, hp: 100 }], pop: 4, focus: 'none', demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 } },
+    network: { xp: 0, level: 1, routes: [] }, hazard: { t: 0, next: 100, phase: 'idle', strikeId: 0, last: null },
+    crash: null, evt: { t: 0, next: 100, active: null, lastId: '', seq: 0 }, voyages: [], voyageSeq: 0,
+    fleetTech: { fishing: 0, trade: 0, expedition: 0 },
+    stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0 }
+    // NOTE: intentionally NO `navy`, NO `lastNavyRepel`, NO `stats.navyBought`/`raidsRepelled`.
+  };
+  STORE['harbor:sim'] = JSON.parse(JSON.stringify(oldBlob));
+  var snap = SIM.load();
+  ok('17c migrate: old blob backfills navy to tier 0', SIM.raw().navy === 0);
+  ok('17c migrate: old blob backfills stats.navyBought and raidsRepelled to 0', SIM.raw().stats.navyBought === 0 && SIM.raw().stats.raidsRepelled === 0);
+  ok('17c migrate: old blob backfills lastNavyRepel to null', SIM.raw().lastNavyRepel === null);
+  ok('17c migrate: snapshot exposes the navy view for a migrated save', snap && snap.navy && snap.navy.tier === 0 && snap.navy.power === 0);
+  ok('17c migrate: navyPower()===0 reproduces the exact pre-17c raidStrength gate (never auto-defends)', SIM.navyPower() === 0);
+})();
+
+// Phase 17b/17c: every SHIPYARD class (6 original + 19 fleet-registry rungs + 5 navy rungs) builds
+// under the 4000-vert-per-class budget declared in models.js. Loaded headlessly here (gl.js's
+// Builder needs no real WebGL — it just emits typed arrays) so the full 30-class sweep runs without
+// a browser; browser.test.js separately soaks a representative subset through the real GPU via debugShip.
 (function shipMatrixVertBudget() {
   if (!global.window) global.window = global;   // gl.js/models.js both close over `window` directly (browser-only IIFE signature)
   if (!global.HGL) require('../gl.js');
   if (!global.HARBOR_MODELS) require('../models.js');
   var SY = global.HARBOR_MODELS.SHIPYARD;
-  ok('17b matrix: SHIPYARD lists 25 classes (6 original + 19 new fleet-registry rungs)', SY.CLASSES.length === 25);
+  ok('17c matrix: SHIPYARD lists 30 classes (6 original + 19 fleet-registry rungs + 5 navy rungs)', SY.CLASSES.length === 30);
   var overBudget = [], underBaseline = [], report = {};
   SY.CLASSES.forEach(function (c) {
     var s = SY.build(c);
@@ -888,11 +1037,13 @@ function autoplay(cfg) {
     if (total >= 4000) overBudget.push(c);
     if (total <= 78) underBaseline.push(c);   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives (16a baseline)
   });
-  ok('17b matrix: every class beats the pre-16a legacy-ship baseline (78 verts)', underBaseline.length === 0);
-  ok('17b matrix: every class stays under the 4000-vert-per-class budget', overBudget.length === 0);
+  ok('17b/17c matrix: every class beats the pre-16a legacy-ship baseline (78 verts)', underBaseline.length === 0);
+  ok('17b/17c matrix: every class stays under the 4000-vert-per-class budget', overBudget.length === 0);
   ok('17b matrix: every ladder rung ID present (fishing/trade/expedition × 8 tiers)',
     ['fishing', 'trade', 'expedition'].every(function (role) { return SY.LADDERS[role].length === 8 && SY.LADDERS[role].every(function (c) { return !!SY.NAMES[c]; }); }));
-  if (process.env.HARBOR_BASELINES) console.log('  [17b] ship matrix verts', JSON.stringify(report));
+  ok('17c matrix: SHIPYARD.NAVY lists all 5 navy rungs, each present in CLASSES with a display name',
+    SY.NAVY.length === 5 && SY.NAVY.every(function (c) { return SY.CLASSES.indexOf(c) >= 0 && !!SY.NAMES[c]; }));
+  if (process.env.HARBOR_BASELINES) console.log('  [17b/17c] ship matrix verts', JSON.stringify(report));
 })();
 
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
