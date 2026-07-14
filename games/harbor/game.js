@@ -3190,7 +3190,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v69';
+  var BUILD_TAG = 'v70';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3907,6 +3907,7 @@
     outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH }; },
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
+    terrainStats: function () { return HARBOR_MODELS ? HARBOR_MODELS.terrainStats() : null; },   // Phase 18a: faceted-terrain verts + per-biome dressing + founded-port-only apron/dock/path/fence/props counts
     shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
     debugShip: function (cls) { DEBUG_SHIP = (cls && getShip(cls)) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears); lazy-builds it if never seen before
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },

@@ -500,8 +500,14 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('env: full ToD sweep renders with zero GL/console errors', errs.length === errsBeforeSweep);
 
   // Phase 10b: shape & motion — bevelled geometry, 3-stop sky horizon, water sparkle
+  // Phase 18a re-derived this ceiling: faceted terrain duplicates vertices per-quad (~4x the old
+  // ~54k shared-vertex field mesh, ~215k) plus coastal/biome dressing (rocks/shelves/speckle/
+  // dunes/boulders/leaf-plants) and founded-port dressing (apron/dock/path/fence/clutter); the
+  // measured worst case across every biome x era combination is ~257k (see terrainStats() below
+  // and the Phase 18a commit message for the full before/after budget table) — 300k documents that
+  // with real headroom, up from the pre-18a 250k ceiling.
   const gs = await page.evaluate(() => window.__harbor.geomStats());
-  ok('geom: static-scene stats exposed and within vertex budget', gs && gs.verts > 10000 && gs.verts < 250000 && gs.indices > 0);
+  ok('geom: static-scene stats exposed and within vertex budget', gs && gs.verts > 10000 && gs.verts < 300000 && gs.indices > 0);
   const bb = await page.evaluate(() => { var b = new window.HGL.Builder().bbox(0, 0, 0, 6, 4, 6, [1, 0, 0], 0.3, 0.7); var d = b.data();
     var fin = true; for (var i = 0; i < d.positions.length; i++) if (!isFinite(d.positions[i])) fin = false;
     return { v: d.positions.length / 3, i: d.indices.length, n: d.normals.length / 3, fin: fin }; });
@@ -564,7 +570,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('14a: quality back on → cartoon flags return and persist', q14on.on === true && q14on.outlines === true && q14on.shadow === true &&
     await page.evaluate(() => window.Retention.get('harbor', 'post', null) === true));
   const gs14 = await page.evaluate(() => window.__harbor.geomStats());
-  ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 250000);
+  ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 300000);
 
   // Phase 16a/17b: SHIPYARD — 25 real ship classes across three fleet-tier ladders (models.js
   // HARBOR_MODELS.SHIPYARD), each a hull/trim/sails mesh set. Budget: every class must beat the
@@ -612,7 +618,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     return window.__harbor.ladderClass('fishing', window.__harbor.fleetTier('fishing')) === 'raft';
   }));
   ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
-    await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
+    await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 300000; }));
 
   // Phase 17c: THE NAVY — 5 more real ship classes (models.js HARBOR_MODELS.SHIPYARD.NAVY), off
   // every fleet ladder. Same lazy-build/vert-budget contract as the fleet-registry classes above.
@@ -671,7 +677,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // the existing 250k ceiling — budget-aware lushness, not a poly explosion.
   const gs16b = await page.evaluate(() => window.__harbor.geomStats());
   ok('16b: geomStats reflects the added lushness (raised floor) and stays within the existing 250k ceiling',
-    gs16b && gs16b.verts > 60000 && gs16b.verts < 250000);
+    gs16b && gs16b.verts > 60000 && gs16b.verts < 300000);
 
   // Phase 11b: feature-unlock announce card — fires once ever, never stacks a queued second
   // announce over the first, and the "seen" flag survives a reload. resetAnnounce() hard-clears
@@ -1224,7 +1230,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(300);
   const gs17a = await page.evaluate(() => window.__harbor.geomStats());
   ok('17a era7: Neon Horizon skyline (solarSpire/neonTower/droneBayPad) stays within the existing 250k vertex budget',
-    gs17a && gs17a.verts > 10000 && gs17a.verts < 250000);
+    gs17a && gs17a.verts > 10000 && gs17a.verts < 300000);
   ok('17a era7: all 8 new-age buildings buildable and recorded on the port', await page.evaluate(() => {
     var c = window.HARBOR_SIM.state().counts;
     return ['container_terminal', 'drone_bay', 'robo_crane', 'logistics_hub', 'solar_spire', 'holo_market', 'fusion_dock', 'sky_beacon'].every(t => (c[t] || 0) >= 1);
@@ -1346,7 +1352,78 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.setTod(0.5));
   const gs14b = await page.evaluate(() => window.__harbor.geomStats());
   ok('14b geomStats: static-scene vertex budget unaffected by the atmosphere pass, still within the 250k ceiling',
-    gs14b && gs14b.verts > 10000 && gs14b.verts < 250000);
+    gs14b && gs14b.verts > 10000 && gs14b.verts < 300000);
+
+  // Phase 18a: LOOK 6.0 — faceted flat-shaded terrain + sculpted coast/biome dressing + dressed
+  // founded-port ground (stone apron, plank dock, dirt paths, low fences, quay clutter). Terrain
+  // vertex growth is a DELIBERATE per-quad flat-shading duplication (not a bug) — each grid quad
+  // gets its own 4 vertices + one flat face normal instead of the old shared/smooth vertex, so
+  // every quad reads as a distinct light-catching facet. heightAt() itself is byte-for-byte
+  // unchanged (gameplay-critical: building placement/site heights) — only how those SAME heights
+  // become a mesh changed; pinned below against known-good values.
+  const hPts = [[0, 0], [79, 42], [100, 100], [-200, 50], [0, 150], [300, -50], [-400, 200]];
+  const hVals = await page.evaluate((pts) => pts.map(p => window.HARBOR_MODELS.heightAt(p[0], p[1])), hPts);
+  const hExpected = [-4, 0.7573668289184559, 6.38262414932251, 11.764867782592773, 35.296443939208984, 1.692590594291687, 6.257427215576172];
+  ok('18a: heightAt() unchanged at sampled points — gameplay (building placement/site heights) untouched by the visual rebuild',
+    hVals.every((v, i) => Math.abs(v - hExpected[i]) < 1e-4));
+
+  await page.evaluate(() => window.__harbor.setEra(3));   // deterministic era for the port-dressing checks below
+  const ts18a = await page.evaluate(() => window.__harbor.terrainStats());
+  ok('18a: terrain vert count reflects per-face duplication — 4 verts/quad (~4x the old ~54k shared-vertex mesh), within budget',
+    ts18a && ts18a.terrain.quads > 50000 && ts18a.terrain.verts === ts18a.terrain.quads * 4 && ts18a.terrain.verts > 160000 && ts18a.terrain.verts < 260000);
+  ok('18a: coastal/biome dressing present for the active (green) world — rocks + shelves + beach speckle',
+    ts18a && ts18a.dressing && ts18a.dressing.rock > 0 && ts18a.dressing.shelf > 0 && ts18a.dressing.speckle > 0);
+  ok('18a: founded-port dressing present at era3 (apron/dock/path/fence/quay clutter), clutter capped at 14 props',
+    ts18a && ts18a.port && ts18a.port.apron > 0 && ts18a.port.dock > 0 && ts18a.port.path > 0 && ts18a.port.fence > 0 && ts18a.port.props > 0 && ts18a.port.props <= 14);
+
+  // era0 (primitive village, no real quay yet) gets paths/fence/clutter but NOT the stone
+  // apron/plank dock — those only make sense once era1's concreteQuay exists.
+  await page.evaluate(() => window.__harbor.setEra(0));
+  const ts18aE0 = await page.evaluate(() => window.__harbor.terrainStats());
+  ok('18a: era0 village dressing is a lighter subset — no apron/dock yet, but path/fence/props present',
+    ts18aE0 && ts18aE0.port && ts18aE0.port.apron === 0 && ts18aE0.port.dock === 0 && ts18aE0.port.path > 0 && ts18aE0.port.fence > 0 && ts18aE0.port.props > 0);
+  await page.evaluate(() => window.__harbor.setEra(3));
+
+  // per-biome feature identity: every world gets ITS OWN dressing signature (mountain/nordic get
+  // boulders, desert gets dunes, tropical gets big-leaf plants) — and port dressing is strictly a
+  // FOUNDED-port feature (null on a wild, unfounded world — mountain/desert/tropical/nordic are
+  // never founded in this run, only 'green' is, via the real foundHere() path).
+  const dressByBiome = await page.evaluate(() => {
+    var H = window.__harbor, out = {};
+    ['mountain', 'desert', 'tropical', 'nordic'].forEach(function (b) { H.setBiome(b); out[b] = H.terrainStats(); });
+    H.setBiome('green');
+    return out;
+  });
+  ok('18a: mountain + nordic (snow biomes) get scattered boulders; wild (unfounded) worlds have no port dressing',
+    dressByBiome.mountain.dressing.boulder > 0 && dressByBiome.nordic.dressing.boulder > 0 &&
+    dressByBiome.mountain.port === null && dressByBiome.desert.port === null && dressByBiome.tropical.port === null && dressByBiome.nordic.port === null);
+  ok('18a: desert (mesa) gets dune ridges, tropical gets extra big-leaf plants — distinct per-biome identity',
+    dressByBiome.desert.dressing.dune > 0 && dressByBiome.tropical.dressing.leaf > 0);
+
+  // zero GL warnings/errors over a ToD sweep with the new faceted terrain + all dressing live
+  const errsBefore18a = errs.length;
+  for (const t of [0, 0.185, 0.34, 0.5, 0.66, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  ok('18a: full ToD sweep over the faceted terrain + coastal/port dressing → zero GL warnings/errors', errs.length === errsBefore18a);
+
+  // outline tuning still sky-masked/slope-rejecting with the new terrain (no regression in F_POST,
+  // gl.js) — verified visually too: a dead-flat facet has zero neighbour-normal delta, so only
+  // genuine silhouette/slope edges ink; gentle rolling terrain stays clean, not scratchy.
+  const outlineT18a = await page.evaluate(() => window.__harbor.outlineTuning());
+  ok('18a: outline tuning unregressed after the terrain rebuild (still sky-masked + slope-rejecting bounds)',
+    outlineT18a && outlineT18a.depthT < 0.03 && outlineT18a.width > 1.0);
+
+  // fps guard: faceted terrain + biome dressing + founded-port dressing all live at once
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  const fps18a = await page.evaluate(() => new Promise((resolve) => {
+    var start = performance.now(), frames = 0;
+    function step(ts) { frames++; if (ts - start < 2000) requestAnimationFrame(step); else resolve(frames / ((ts - start) / 1000)); }
+    requestAnimationFrame(step);
+  }));
+  ok('18a fps guard: render loop keeps advancing frames (no hang/freeze) with the faceted terrain + full dressing live', fps18a > 1.5);
+
+  const gs18a = await page.evaluate(() => window.__harbor.geomStats());
+  ok('18a: geomStats within the re-derived 300k vertex ceiling (up from 250k pre-18a — faceted terrain + dressing)',
+    gs18a && gs18a.verts > 200000 && gs18a.verts < 300000);
 
   // live ticking after everything — no late errors
   await sleep(2000);
