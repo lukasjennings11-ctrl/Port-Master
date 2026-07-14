@@ -55,6 +55,12 @@
   // signal into this many toon bands (rich deep teal far offshore -> bright turquoise shallows
   // right at the coast). Documented here for __harbor.water()'s test/debug hook below.
   var WATER_SHORE_BANDS = 4;
+  // Phase 19b: paper-sea band boundary slide — each of the WATER_SHORE_BANDS-1 boundaries slides
+  // laterally at its own speed (F_WATER's `spd=uWaterBandBase+uWaterBandStep*kf`, gl.js). Mirrored
+  // here in JS (same constants) purely so __harbor.water() can report a deterministic, testable
+  // "does the boundary phase advance" signal without any pixel readback.
+  var WATER_BAND_BASE_SPD = 0.05, WATER_BAND_SPD_STEP = 0.035;
+  function waterBandPhase(k, t) { return (t * (WATER_BAND_BASE_SPD + WATER_BAND_SPD_STEP * k)) % 1; }
   // Phase 19a: papercraft grade — F_MAIN's diffuse ramp is quantized to TOON_BANDS steps (2: a
   // card face is lit or shaded, nothing between — documented here for the paper() test hook, the
   // constant lives in the F_MAIN source), and every pass gets a static screen-anchored
@@ -194,8 +200,9 @@
     var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
     var sailMeshes = s.sails.map(function (sd) { return { mesh: E.mesh(sd.data), phase: sd.phase, verts: sd.data.positions.length / 3 }; });
     var sailV = sailMeshes.reduce(function (a, sm) { return a + sm.verts; }, 0);
-    SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, meta: s.meta };
-    if (shipStats) { shipStats.classes[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV }; shipStats.total += hullV + trimV + sailV; }
+    var pennantV = s.pennant ? s.pennant.positions.length / 3 : 0;
+    SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, pennant: s.pennant ? E.mesh(s.pennant) : null, meta: s.meta };
+    if (shipStats) { shipStats.classes[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV + pennantV }; shipStats.total += hullV + trimV + sailV + pennantV; }
     return SHIP[cls];
   }
   // Phase 17b: the three fleet-registry ladders (models.js HARBOR_MODELS.SHIPYARD.LADDERS is the
@@ -367,6 +374,10 @@
     };
   }
   function sunDir() { var ang = (tod - 0.25) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
+  // Phase 19b: the paper moon card rides roughly the opposite arc from the sun (half a cycle out
+  // of phase) so it's up and near its own screen-space track through the night, same math as
+  // sunDir() otherwise — a stylised position, not a literal orbital model.
+  function moonDir() { var ang = (tod - 0.25 + 0.5) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
   function norm(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function smoothstep01(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
@@ -396,21 +407,52 @@
   // margin. Real 3D meshes at real world positions give parallax with the camera for free.
   var CLOUD_RING_CX = 0, CLOUD_RING_CZ = 150;                    // island centre (models.js ISLAND)
   var CLOUD_MESHES = null, CLOUDS = null, CLOUD_MESH_VERTS = 0;
-  // one puffy cluster: several overlapping chamfered-box "lumps" (house shape language — bbox is
-  // the same bevelled-box primitive trees/huts/warehouses use) scattered around a local origin so
-  // it reads as a soft, hand-placed cumulus rather than a single blocky box.
+  // Phase 19b PAPERCRAFT: clouds are now flat cutout cutouts — a single lumpy, scalloped 2D cloud
+  // silhouette extruded a tiny depth (a thin paper card, not a puffy 3D volume). Drawn as a
+  // camera-yaw-facing billboard (see drawClouds below) so the flat face always shows; the existing
+  // F_POST screen-space outline pass automatically cuts a white scissor rim around its silhouette
+  // (same mechanism every other papercraft mesh already rides), so no bespoke rim shader is needed
+  // here. Replaces the old chamfered-box cumulus cluster (buildCloudMesh, ~160-280 verts) with a
+  // single scalloped fan — cheaper (~60-90 verts) as well as flatter.
   function buildCloudMesh(rng) {
-    var b = new HGL.Builder(), lumps = 4 + (rng() * 3 | 0), i, a, r, lx, lz, s;
-    for (i = 0; i < lumps; i++) {                                // base row: fat overlapping lumps
-      a = rng() * Math.PI * 2; r = rng() * 1.5;
-      lx = Math.cos(a) * r; lz = Math.sin(a) * r * 0.55;
-      s = 0.9 + rng() * 1.2;
-      b.bbox(lx, (rng() - 0.5) * 0.5, lz, s * 1.7, s * 1.05, s * 1.35, [1, 1, 1], rng() * 0.7, s * 0.42);
+    var b = new HGL.Builder();
+    var bumps = 3 + (rng() * 2 | 0), steps = bumps * 2, depth = 0.22, col = [1, 1, 1];
+    var pts = [], trunkW = 0.30;
+    pts.push([-trunkW * 3.2, -0.85]);                            // flat scalloped cloud base (slightly concave, cumulus-style)
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps, ang = Math.PI - t * Math.PI;
+      var r = (0.85 + 0.28 * Math.sin(t * bumps * Math.PI * 2 + rng() * 0.7)) * (0.9 + rng() * 0.22);
+      pts.push([Math.cos(ang) * r * 1.6, -0.15 + Math.sin(ang) * r]);
     }
-    for (i = 0; i < 2; i++) {                                    // 2 smaller crown lumps riding on top — breaks the flat-loaf silhouette
-      a = rng() * Math.PI * 2; r = rng() * 0.9;
-      s = 0.6 + rng() * 0.6;
-      b.bbox(Math.cos(a) * r, 0.55 + rng() * 0.35, Math.sin(a) * r * 0.5, s * 1.5, s * 1.0, s * 1.25, [1, 1, 1], rng() * 0.7, s * 0.42);
+    pts.push([trunkW * 3.2, -0.85]);
+    var n = pts.length, cax = 0, cay = 0, k;
+    for (k = 0; k < n; k++) { cax += pts[k][0]; cay += pts[k][1]; } cax /= n; cay /= n;
+    // two caps (front z=+depth/2, back z=-depth/2 — real extrusion thickness) each pushed with
+    // BOTH triangle windings so the card is robustly double-sided regardless of front-face
+    // convention (cheap: caps are the bulk of this mesh's tiny budget either way).
+    for (var cap = 0; cap < 2; cap++) {
+      var cz = cap === 0 ? depth * 0.5 : -depth * 0.5, outward = cap === 0 ? 1 : -1;
+      for (var wind = 0; wind < 2; wind++) {
+        var nz = wind === 0 ? outward : -outward, base = b.P.length / 3;
+        b.P.push(cax, cay, cz); b.N.push(0, 0, nz); b.U.push(0.5, 0.5); b.C.push(col[0], col[1], col[2]);
+        for (k = 0; k < n; k++) { b.P.push(pts[k][0], pts[k][1], cz); b.N.push(0, 0, nz); b.U.push(0, 0); b.C.push(col[0], col[1], col[2]); }
+        for (k = 0; k < n; k++) {
+          var i0 = base + 1 + k, i1 = base + 1 + ((k + 1) % n);
+          if (wind === 0) b.I.push(base, i0, i1); else b.I.push(base, i1, i0);
+        }
+      }
+    }
+    // thin side rim quads (the card's edge — mostly edge-on/invisible once billboarded, but gives
+    // the mesh genuine 3-D thickness so it's never a degenerate zero-volume plane)
+    for (i = 0; i < n; i++) {
+      var j = (i + 1) % n, p0 = pts[i], p1 = pts[j];
+      var ex = p1[1] - p0[1], ey = -(p1[0] - p0[0]), el = Math.hypot(ex, ey) || 1; ex /= el; ey /= el;
+      var rb = b.P.length / 3;
+      b.P.push(p0[0], p0[1], depth * 0.5); b.N.push(ex, ey, 0); b.U.push(0, 0); b.C.push(col[0], col[1], col[2]);
+      b.P.push(p1[0], p1[1], depth * 0.5); b.N.push(ex, ey, 0); b.U.push(1, 0); b.C.push(col[0], col[1], col[2]);
+      b.P.push(p1[0], p1[1], -depth * 0.5); b.N.push(ex, ey, 0); b.U.push(1, 1); b.C.push(col[0], col[1], col[2]);
+      b.P.push(p0[0], p0[1], -depth * 0.5); b.N.push(ex, ey, 0); b.U.push(0, 1); b.C.push(col[0], col[1], col[2]);
+      b.I.push(rb, rb + 1, rb + 2, rb, rb + 2, rb + 3);
     }
     return b.data();
   }
@@ -444,12 +486,15 @@
     var t = lerp3([1.0, 1.0, 1.0], [1.0, 0.74, 0.72], duskT);
     return lerp3(t, [0.36, 0.38, 0.48], en.night);
   }
-  function drawClouds(M, en) {
+  // Phase 19b: flat cutout clouds are billboarded on the yaw (Y) axis — always facing the camera —
+  // so the scalloped paper silhouette shows its flat face from any orbit angle instead of edge-on.
+  function drawClouds(M, en, ev) {
     if (!CLOUDS) return;
     gl.uniform3fv(M.u.uBase, cloudTint(en));   // matte/chalky (19a: F_MAIN is all-matte now — no per-draw roughness left to set)
     for (var i = 0; i < CLOUDS.length; i++) {
       var c = CLOUDS[i], p = cloudWorldPos(c);
-      composeRYS(mModel, p[0], c.y, p[1], c.scale, c.scale * 0.72, c.scale, c.ry);
+      var byaw = ev ? Math.atan2(ev[0] - p[0], ev[2] - p[1]) : c.ry;
+      composeRYS(mModel, p[0], c.y, p[1], c.scale, c.scale * 0.72, c.scale, byaw);
       gl.uniformMatrix4fv(M.u.uModel, false, mModel);
       drawMesh(M, CLOUD_MESHES[c.meshIdx]);
     }
@@ -587,8 +632,15 @@
   }
   // Phase 10b wind: one shared breeze, per-boat phase. Sails wobble a few degrees around their
   // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
-  function sailSway(ph) { return Math.sin(clock * 1.7 + ph) * 0.07 + Math.sin(clock * 0.53 + ph * 0.7) * 0.025; }   // ±~5.5°
-  function sailBillow(ph) { return 1 + Math.sin(clock * 2.4 + ph * 1.9) * 0.045; }                                  // ±4.5% width
+  // Phase 19b PAPER FLUTTER: retuned from a slow heavy-cloth wobble to a crisper, higher-frequency
+  // flick with a smaller amplitude and an asymmetric SNAP (pow<1 on the sine spends less time near
+  // the zero-crossing and lingers at the extremes) — reads as stiff folded card catching a gust,
+  // not canvas billowing. Same signature/call sites (sails + the pennant flag below).
+  function sailSway(ph) {
+    var s = Math.sin(clock * 2.6 + ph), snap = Math.sign(s) * Math.pow(Math.abs(s), 0.6);
+    return snap * 0.05 + Math.sin(clock * 4.3 + ph * 1.4) * 0.014;
+  }   // was ±~5.5° slow cloth wobble (sin*1.7/0.53) — now a ±~3.6° crisp snap, higher frequency
+  function sailBillow(ph) { return 1 + Math.sin(clock * 3.6 + ph * 1.9) * 0.028; }   // was ±4.5%@2.4 — now ±2.8%@3.6, crisper card flex
   // Phase 16a: draw one SHIPYARD ship — hull (tint-ready, uBase = hullC), trim (baked real
   // colours: keel/planks/gunwale/rudder/bowsprit/masts/rigging/cabin/pennant/props — one call
   // with uVCol toggled to 1 so its own vertex colours win over uBase), then each sail as its own
@@ -599,13 +651,22 @@
     y -= S.meta.draft * scale;                    // ride IN the water: waterline ~1/3 up the hull
     gl.uniform3fv(M.u.uBase, hullC);
     composeRYS(mModel, x, y, z, scale, scale, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
-    gl.uniform1f(M.u.uVCol, 1); drawMesh(M, S.trim); gl.uniform1f(M.u.uVCol, 0);
+    gl.uniform1f(M.u.uVCol, 1); drawMesh(M, S.trim);
     for (var i = 0; i < S.sails.length; i++) {
       var sm = S.sails[i], ph = sm.phase + (phaseBase || 0), billow = scale * sailBillow(ph);
+      gl.uniform1f(M.u.uVCol, 0);
       gl.uniform3fv(M.u.uBase, Array.isArray(sailC[0]) ? (sailC[i] || sailC[0]) : sailC);   // nested array = per-sail colours; flat [r,g,b] = every sail
       composeRYS(mModel, x, y, z, billow, scale, scale, yaw + sailSway(ph));
       gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sm.mesh);
     }
+    // Phase 19b: the pennant flag — same crisp paper-flutter sway as the sails (own fixed phase so
+    // it never moves in lockstep with any sail), its own small vertex-coloured mesh.
+    if (S.pennant) {
+      gl.uniform1f(M.u.uVCol, 1);
+      composeRYS(mModel, x, y, z, scale, scale, scale, yaw + sailSway(phaseBase ? phaseBase + 5.3 : 5.3));
+      gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.pennant);
+    }
+    gl.uniform1f(M.u.uVCol, 0);
   }
   // Phase 17b: which fishing-ladder class an ambient boat flies right now — 'big' boats fly the
   // owned tier, the rest fly one tier below it (a live mix, not a fixed dinghy/sloop split), so
@@ -978,7 +1039,9 @@
     var hcy = mVP[1] * hpx + mVP[9] * hpz + mVP[13], hcw = mVP[3] * hpx + mVP[11] * hpz + mVP[15];
     gl.uniform1f(S.u.uHorizonY, clamp((hcy / (hcw || 1)) * 0.5 + 0.5, 0.04, 0.8));
     gl.uniform2fv(S.u.uSun, [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5]);
+    var md = moonDir(); gl.uniform2fv(S.u.uMoon, [0.5 + md[0] * 0.42, 0.32 + md[1] * 0.5]);   // Phase 19b: crescent moon card
     gl.uniform1f(S.u.uNight, en.night); gl.uniform1f(S.u.uTime, clock);   // night starfield
+    gl.uniform1f(S.u.uAspect, canvas.width / canvas.height);   // 19b: aspect-correct the sun/moon disc distance so they're circles, not ellipses
     gl.uniform1f(S.u.uGrain, GRAIN_SKY);   // paper-fibre grain (19a) — gentlest on the sky card
     drawMesh(S, E.quad); gl.depthMask(true); gl.enable(gl.CULL_FACE);
 
@@ -1020,7 +1083,7 @@
     gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uAlbedo, 0);
     // Phase 14b: drifting clouds — every biome/world, founded or wild, sky-layer only (no shadow,
     // no scene.blobs entry); same flat-colour program state the crane parts below reuse.
-    drawClouds(M, en);
+    drawClouds(M, en, ev);
     var pf = scene.port, pc = pf ? Math.cos(pf.yaw) : 1, psn = pf ? Math.sin(pf.yaw) : 0;
     for (i = 0; i < parts.length; i++) {
       var t = parts[i].t, lx = t[0], lz = t[2];
@@ -1458,8 +1521,22 @@
     if (!FX) return;
     for (var i = 0; i < 80; i++) FX.p.list.push({ x: Math.random() * CW, y: -12 - Math.random() * 70, vx: (Math.random() - 0.5) * 70, vy: 70 + Math.random() * 130, life: 2.0, max: 2.0, size: 5 + Math.random() * 4, color: ['#ff6b6b', '#ffd24a', '#4fd6c4', '#7fe0ff', '#c084fc', '#f2b35e'][(Math.random() * 6) | 0], gravity: 80, shape: 'rect' });
   }
-  // chimney smoke: soft grey puffs rising from the port, intensity scaling with how much you manufacture
+  // chimney smoke: paper curls rising from the port, intensity scaling with how much you manufacture.
+  // Phase 19b PAPERCRAFT: swapped from round grey puffs to small flat spiral/comma-shaped paper
+  // curls (Juice.Particles' 'curl' shape — a stroked arc, not a filled disc) with a slow rotation
+  // as they rise, so industry smoke reads as curling card rather than photographic smoke.
   var smokeT = 0;
+  function spawnSmokeCurl(sc, sizeLo, sizeSpread, lifeLo, lifeSpread, vyBase, vySpread) {
+    var g = 0.86 + Math.random() * 0.10;                   // pale paper-grey, not sooty
+    var wind = 8 + Math.sin(clock * 0.53) * 4;              // steady drift in the same shared breeze that sways the sails (+x, gently gusting)
+    FX.p.list.push({
+      x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: vyBase - Math.random() * vySpread,
+      life: lifeLo + Math.random() * lifeSpread, max: lifeLo + lifeSpread,
+      size: sizeLo + Math.random() * sizeSpread,
+      color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 248) | 0) + ',0.55)',
+      gravity: -6, shape: 'curl', rot: Math.random() * Math.PI * 2, vr: (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.6)
+    });
+  }
   function emitSmoke(dt) {
     if (!FX || !simReady() || cine || tradeOpen) return;
     var s = SIM.state(), facs = (s.counts && (s.counts.factory || 0)) + ((s.counts && s.counts.sawmill || 0)) * 0.5;
@@ -1468,13 +1545,10 @@
     while (smokeT >= every) {
       smokeT -= every;
       var pw = portWorld(); if (!pw) return; var sc = worldToScreen(pw.x - 18 + Math.random() * 36, pw.y + 8, pw.z - 4 + Math.random() * 8); if (!sc) continue;
-      var g = 0.55 + Math.random() * 0.2;
-      // steady drift in the same shared breeze that sways the sails (+x, gently gusting)
-      var wind = 8 + Math.sin(clock * 0.53) * 4;
-      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 6, vy: -22 - Math.random() * 16, life: 1.6 + Math.random() * 1.0, max: 2.6, size: 5 + Math.random() * 6, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.5)', gravity: -6, shape: 'circle' });
+      spawnSmokeCurl(sc, 5, 6, 1.6, 1.0, -22, 16);
     }
   }
-  // Phase 16a: steamer funnel smoke — the same soft grey puffs as the factory chimneys (above),
+  // Phase 16a: steamer funnel smoke — the same paper curls as the factory chimneys (above),
   // emitted from each SHIPYARD steamer's funnel top (meta.funnel local offset rotated by the
   // ship's current yaw, same position math as drawFleet). Gentle: one puff/sec per steamer.
   var funnelT = 0;
@@ -1491,8 +1565,7 @@
       var c = Math.cos(yaw), s = Math.sin(yaw);
       var sc = worldToScreen(x + fun[0] * c + fun[2] * s, fun[1], z - fun[0] * s + fun[2] * c);
       if (!sc) continue;
-      var g = 0.60 + Math.random() * 0.2, wind = 8 + Math.sin(clock * 0.53) * 4;   // same shared breeze as chimneys/sails
-      FX.p.list.push({ x: sc.x, y: sc.y, vx: wind + Math.random() * 4, vy: -16 - Math.random() * 10, life: 1.4 + Math.random() * 0.8, max: 2.2, size: 4 + Math.random() * 4, color: 'rgba(' + ((g * 255) | 0) + ',' + ((g * 255) | 0) + ',' + ((g * 245) | 0) + ',0.45)', gravity: -5, shape: 'circle' });
+      spawnSmokeCurl(sc, 4, 4, 1.4, 0.8, -16, 10);
     }
   }
 
@@ -3266,7 +3339,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v72';
+  var BUILD_TAG = 'v73';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3974,12 +4047,21 @@
   window.__harbor = {
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
+    stepClock: function (dt) { clock += (dt == null ? 0.5 : +dt); return clock; },   // 19b: deterministic time-step (no wall-clock sleeps) for water-band-slide/flutter tests
+
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
     post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail, outlines: postEnabled(), shadow: postEnabled() }; },   // Phase 14a: outlines + soft shadows ride the same quality gate — see render()
     // Phase 16b: vibrant-storybook debug hook — the live ToD-lit deep/shallow water colours + the
     // shore-band count F_WATER's gradient quantizes into, and the tuned outline width/threshold
     // (see OUTLINE_* above / F_POST in gl.js) so tests can assert the new look is actually wired.
-    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true }; },
+    // Phase 19b: paperBands/bandPhase document the layered-paper-sea rebuild — bandPhase[k] is the
+    // lateral slide phase of boundary k (mirrors F_WATER's per-band uTime*spd term, see
+    // waterBandPhase() above), sampled live off `clock` so a test can call stepClock() between two
+    // reads and assert the phases actually advance (deterministic, no wall-clock sleep needed).
+    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }) }; },
+    // Phase 19b: sun/moon screen-space UV tracks (F_SKY's uSun/uMoon uniforms mirror these exactly)
+    // + flags documenting the paper-sky rebuild (crisp cut-paper discs, static-size no-twinkle stars).
+    sky: function () { var en = env(), sd = sunDir(), md = moonDir(); return { sunUV: [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5], moonUV: [0.5 + md[0] * 0.42, 0.32 + md[1] * 0.5], night: en.night, cutPaperSun: true, starTwinkleOff: true }; },
     outlineTuning: function () { return { depthT: OUTLINE_DEPTH_T, normT: OUTLINE_NORM_T, width: OUTLINE_WIDTH, wobble: OUTLINE_WOBBLE, tint: outlineTint(env()) }; },
     // Phase 19a: papercraft debug hook — the live grade + the matte-flip contract in one place:
     // white rim tint, 2-step banding, per-pass fibre-grain amplitudes, sparkle authored 0, and
@@ -3996,6 +4078,18 @@
     forcePop: function () { triggerPop(); return window.__harbor.pop(); },
     setPopProgress: function (p) { popTestP = p == null ? null : Math.max(0, Math.min(1, +p)); return window.__harbor.pop(); },   // deterministic pop sampling: pin progress (null = live clock)
     smokeActive: function () { var s = SIM ? SIM.state() : null; var facs = s ? ((s.counts && s.counts.factory || 0) + (s.counts && s.counts.sawmill || 0) * 0.5) : 0; return facs >= 1; },
+    // Phase 19b: paper-curl smoke (test/debug hooks) — smokeStyle documents the shape swap away
+    // from round puffs; forceSmoke deterministically spawns curls without waiting on the real
+    // factory-count/timer gate (for tests + the before/after screenshot loop).
+    smokeStyle: function () { return 'curl'; },
+    forceSmoke: function (n) {
+      if (!FX) return 0; var pw = portWorld(); if (!pw) return 0;
+      var sc = worldToScreen(pw.x, pw.y + 14, pw.z); if (!sc) return 0;   // above the crane clutter, against open sky
+      for (var i = 0; i < (n || 6); i++) spawnSmokeCurl({ x: sc.x + (Math.random() - 0.5) * 44, y: sc.y + (Math.random() - 0.5) * 18 }, 6, 5, 2.2, 1.2, -22, 18);
+      return FX.p.list.length;
+    },
+    treeSample: function () { return HARBOR_MODELS ? HARBOR_MODELS.treeSample() : null; },   // 19b: first placed tree's world pos (screenshot/test close-up framing)
+    flutter: function (ph) { return { sway: sailSway(ph || 0), billow: sailBillow(ph || 0) }; },   // 19b: crisp paper-flutter tuning (test hook)
     shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
     debugShip: function (cls) { DEBUG_SHIP = (cls && getShip(cls)) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears); lazy-builds it if never seen before
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
@@ -4007,7 +4101,7 @@
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
     // Phase 14b: atmosphere (test/debug hooks) — drifting clouds, quay dock workers, night light pools
-    clouds: function () { return CLOUDS ? { count: CLOUDS.length, verts: CLOUD_MESH_VERTS, pos: CLOUDS.map(function (c) { return cloudWorldPos(c); }), tint: cloudTint(env()) } : { count: 0, verts: 0, pos: [] }; },
+    clouds: function () { return CLOUDS ? { count: CLOUDS.length, verts: CLOUD_MESH_VERTS, pos: CLOUDS.map(function (c) { return cloudWorldPos(c); }), tint: cloudTint(env()), flat: true } : { count: 0, verts: 0, pos: [], flat: true }; },
     workers: function () { if (scene.port && !ambient) buildAmbient(); var ws = (ambient && ambient.workers && scene.port) ? ambient.workers : []; return { count: ws.length, era: era, pos: ws.map(function (w) { var p = workerWorldPos(w); return [Math.round(p.x * 10) / 10, Math.round(p.z * 10) / 10]; }) }; },
     pools: function () { var en = env(); var on = en.night >= 0.05 && scene.lamps && scene.lamps.length > 0; return { count: on ? scene.lamps.length : 0, night: +en.night.toFixed(3) }; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },

@@ -1521,6 +1521,58 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('19a: legacy quality-off path renders the papercraft world clean (no outlines at all — ink is gone as a default)', errs.length === errsBefore19a);
   await page.evaluate(() => window.__harbor.setPost(true));
 
+  // Phase 19b: PAPER WORLD ELEMENTS — the sea rebuilt as layered, sliding paper bands; clouds/trees
+  // rebuilt as flat cutouts; the sky as a card gradient with a cut-paper sun disc + crescent moon;
+  // industry smoke as paper curls; sails/pennants retuned to a crisper flutter. Assertions pivot on
+  // the new __harbor.water()/sky()/clouds()/terrainStats().trees/smokeStyle()/forceSmoke()/flutter()
+  // debug hooks + the deterministic stepClock() time-step (no wall-clock sleeps for the band-slide
+  // or flutter checks).
+  const errsBefore19b = errs.length;
+  await page.evaluate(() => window.__harbor.setBiome('green'));
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  const water19bA = await page.evaluate(() => window.__harbor.water());
+  await page.evaluate(() => window.__harbor.stepClock(3.0));
+  const water19bB = await page.evaluate(() => window.__harbor.water());
+  ok('19b water: paper-band contract intact (gradientOn, 4 shore bands, paperBands flag) + every boundary\'s lateral phase advances after a deterministic time-step (no sleep)',
+    water19bA && water19bA.gradientOn === true && water19bA.shoreBands === 4 && water19bA.paperBands === true &&
+    water19bB.bandPhase.length === 4 && water19bB.bandPhase.every((p, i) => Math.abs(p - water19bA.bandPhase[i]) > 0.05));
+  const skyNoon19b = await page.evaluate(() => { window.__harbor.setTod(0.5); return window.__harbor.sky(); });
+  const skyDusk19b = await page.evaluate(() => { window.__harbor.setTod(0.755); return window.__harbor.sky(); });
+  const skyNight19b = await page.evaluate(() => { window.__harbor.setTod(0.0); return window.__harbor.sky(); });
+  ok('19b sky: paper sun disc UV tracks the ToD sun (position shifts noon->dusk) + moon UV present at night + cut-paper/no-twinkle flags armed',
+    Math.abs(skyNoon19b.sunUV[1] - skyDusk19b.sunUV[1]) > 0.02 && skyNight19b.moonUV.length === 2 &&
+    skyNight19b.night > 0.5 && skyNoon19b.cutPaperSun === true && skyNoon19b.starTwinkleOff === true);
+  const glSrc19b = await page.evaluate(() => fetch('gl.js').then(r => r.text()).catch(() => ''));
+  ok('19b sky: F_SKY source drops the old animated star-twinkle term (sin(uTime*2.0+h*30.0)) in favour of a static per-star size hash',
+    glSrc19b.length > 0 && !/sin\(uTime\*2\.0\+h\*30\.0\)/.test(glSrc19b) && /flecksize/.test(glSrc19b));
+  const clouds19b = await page.evaluate(() => window.__harbor.clouds());
+  ok('19b clouds: still 4-7 real-geometry drifting instances (14b contract preserved) + the new flat-cutout flag armed',
+    clouds19b.count >= 4 && clouds19b.count <= 7 && clouds19b.verts > 0 && clouds19b.flat === true);
+  const treesGreen19b = await page.evaluate(() => window.__harbor.terrainStats().trees);
+  const treesMtn19b = await page.evaluate(() => { window.__harbor.setBiome('mountain'); return window.__harbor.terrainStats().trees; });
+  const treesTropical19b = await page.evaluate(() => { window.__harbor.setBiome('tropical'); return window.__harbor.terrainStats().trees; });
+  await page.evaluate(() => window.__harbor.setBiome('green'));
+  const avgVerts19b = k => k.count > 0 ? k.verts / k.count : Infinity;
+  ok('19b trees: cross-plane cutout rebuild lands at/under the old cylinder-tree budgets (broadleaf<=101, pine<=128, palm<=176 verts/tree)',
+    treesGreen19b.broadleaf.count > 0 && avgVerts19b(treesGreen19b.broadleaf) <= 101 &&
+    treesMtn19b.pine.count > 0 && avgVerts19b(treesMtn19b.pine) <= 128 &&
+    treesTropical19b.palm.count > 0 && avgVerts19b(treesTropical19b.palm) <= 176);
+  const smokeStyle19b = await page.evaluate(() => window.__harbor.smokeStyle());
+  const fx19bBefore = await page.evaluate(() => window.__harbor.fxCount());
+  const fx19bAfter = await page.evaluate(() => window.__harbor.forceSmoke(6));
+  ok('19b smoke: style flag reports "curl" (flat paper spiral, not a round puff) and forceSmoke actually spawns particles',
+    smokeStyle19b === 'curl' && fx19bAfter >= fx19bBefore + 6);
+  const flut19bA = await page.evaluate(() => window.__harbor.flutter(0));
+  const flut19bB = await page.evaluate(() => { window.__harbor.stepClock(0.3); return window.__harbor.flutter(0); });
+  ok('19b flutter: retuned crisp paper sway/billow is bounded well under the old 16a cloth-wobble amplitude, and still animates between two time-steps',
+    Math.abs(flut19bA.sway) <= 0.07 && Math.abs(flut19bA.billow - 1) <= 0.035 &&
+    (flut19bA.sway !== flut19bB.sway || flut19bA.billow !== flut19bB.billow));
+  for (const t of [0.0, 0.15, 0.25, 0.34, 0.5, 0.66, 0.755, 0.9, 1.0]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(120); }
+  ok('19b: full ToD sweep with paper sea/sky/clouds/smoke all live → zero GL warnings/errors', errs.length === errsBefore19b);
+  await page.evaluate(() => { window.__harbor.setTod(0.5); window.__harbor.setPost(false); }); await sleep(300);
+  ok('19b: legacy quality-off path renders the paper world clean (no post pass, zero GL errors)', errs.length === errsBefore19b);
+  await page.evaluate(() => window.__harbor.setPost(true));
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
