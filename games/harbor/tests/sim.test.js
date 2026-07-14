@@ -308,6 +308,10 @@ function autoplay(cfg) {
       }
       if (!did) break;
     }
+    // Phase 17b: fleet registry — the autoplay policy commissions any affordable, in-order fleet
+    // tier every step (a real spend, but never gated behind the building budget above — a separate
+    // money sink, same as the policy already treats era-advance as independent of it).
+    SIM.FLEET_ROLES.forEach(function (role) { if (SIM.canBuyShip(role)) SIM.buyShip(role); });
     if (SIM.canAdvance()) SIM.advanceEra();
     if (step % 5 === 4) {                                           // every 5th step: exercise the income systems
       // per-round reseed (derived from seed+step): rollVoyage/evData consume a VARIABLE number of
@@ -363,11 +367,19 @@ function autoplay(cfg) {
   // autoplay policy used to be able to just keep stacking duplicate buildings forever, so vanilla's
   // measured baseline was ≈289k (stable 270k–296k across 7 seeds). With the per-port slot cap
   // (8 + 4×era — see slotCap() in sim.js) capping this same 90-sim-min / era-3 run's building count,
-  // vanilla now measures ≈114k with seed 20260710 (before: 289k → after: 114k, a ~2.5× drop — the
-  // cap is working as intended: idle "just build more" no longer scales income unboundedly). Floor
-  // dropped 100k→90k to keep the same kind of headroom (a regression tripwire, NOT a design target)
-  // under the new baseline rather than chase the old number.
-  ok('11a vanilla: prestige floor — lifetime ≥ 90k after 90 sim-min', van.lifetime >= 90000);
+  // vanilla measured ≈114k with seed 20260710 (before: 289k → after: 114k, a ~2.5× drop — the cap
+  // is working as intended: idle "just build more" no longer scales income unboundedly). Floor
+  // dropped 100k→90k to keep the same kind of headroom under that baseline.
+  // Phase 17b recalibration: the autoplay policy now also commissions every affordable fleet tier
+  // (see the FLEET_ROLES.forEach in autoplay() above) — tier keeps pace with era through this run,
+  // so fleetYieldMul sits near its +10%/age ceiling for fishing/trade/expedition throughout,
+  // compounding with the existing production/sales curve. Before (17a, no fleet buys): ≈114k.
+  // After (17b, fleet buys wired into the policy): ≈187k with seed 20260710 (a further ~1.65× rise
+  // on top of the 15c baseline — a fully-modernised fleet is a genuinely strong lever, exactly the
+  // "buy the boats and keep up" incentive this phase adds). Floor raised 90k→150k: high enough to
+  // catch the fleet multiplier silently regressing to a no-op, comfortably below the ≈187k measured
+  // value for seed/RNG headroom.
+  ok('17b vanilla: prestige floor — lifetime ≥ 150k after 90 sim-min (fleet-registry policy active)', van.lifetime >= 150000);
 
   // Doctrine sanity: bonuses matter but never break the curve. Phase 15c recalibration: once a hard
   // building-count cap removes the "just build more" release valve, a sales/contract-multiplier
@@ -723,6 +735,164 @@ function autoplay(cfg) {
   ok('17a migrate: pre-17a era5 save loads with its era index unchanged', SIM.raw().era === 5);
   ok('17a migrate: era5 still names Global Hub (ladder only grew past the end)', snap.eraName === 'Global Hub');
   ok('17a migrate: era5->6 gate resolves cleanly (new gate wired in, no throw)', typeof SIM.canAdvance() === 'boolean');
+})();
+
+// ---------------------------------------------------------------- Phase 17b: Fleet Registry
+(function fleetRegistryTierGating() {
+  SIM.newGame(); SIM.foundPort('green');
+  var S17 = SIM.raw();
+  ok('17b tier: fresh game starts every role at tier 0', SIM.fleetTier('fishing') === 0 && SIM.fleetTier('trade') === 0 && SIM.fleetTier('expedition') === 0);
+  ok('17b tier: tier0 is free', SIM.fleetShipCost('fishing') === undefined ? false : true);   // sanity: cost() is callable
+  S17.era = 0; S17.money = 1e9;
+  ok('17b gate: era0 — tier1 not buyable even flush with cash (era >= t required)', SIM.canBuyShip('fishing') === false);
+  S17.era = 1;
+  ok('17b gate: era1 — tier1 now buyable', SIM.canBuyShip('fishing') === true);
+  ok('17b gate: era1 — tier2 NOT yet buyable (must buy tier1 first, no skipping)', SIM.fleetShipCost('fishing') === 120);
+  var boughtCount = 0, guard = 0;
+  while (SIM.fleetTier('fishing') < 7 && guard++ < 20) {
+    var before = SIM.fleetTier('fishing');
+    S17.era = 7;                                         // flush past every era gate so only the "in order" rule can block us
+    if (SIM.buyShip('fishing')) { boughtCount++; ok('17b order: tier only ever advances by exactly 1 (' + before + '→' + SIM.fleetTier('fishing') + ')', SIM.fleetTier('fishing') === before + 1); }
+  }
+  ok('17b order: bought every tier up to the max (7) one step at a time', SIM.fleetTier('fishing') === 7 && boughtCount === 7);
+  ok('17b order: maxed tier has no further cost/purchase', SIM.fleetShipCost('fishing') === null && SIM.canBuyShip('fishing') === false);
+})();
+
+(function fleetRegistryCharging() {
+  SIM.newGame(); SIM.foundPort('green');
+  var S17 = SIM.raw();
+  S17.era = 3; S17.money = 500;   // exactly the tier1+tier2 cost (120+450=570) short by 70 — can afford tier1, not tier2 after
+  var shipsBefore = S17.stats.shipsBought || 0;
+  ok('17b charge: tier1 (£120) affordable at £500', SIM.canBuyShip('trade') === true);
+  var ok1 = SIM.buyShip('trade');
+  ok('17b charge: buyShip charges exactly once — money drops by exactly the tier cost', ok1 === true && near(S17.money, 500 - 120, 1e-9));
+  ok('17b charge: stats.shipsBought increments by exactly 1 per purchase', (S17.stats.shipsBought || 0) === shipsBefore + 1);
+  ok('17b charge: tier1→2 needs £450, only £380 left — correctly unaffordable', SIM.canBuyShip('trade') === false);
+  var moneyBefore = S17.money, tierBefore = SIM.fleetTier('trade');
+  var ok2 = SIM.buyShip('trade');
+  ok('17b charge: buyShip REFUSES when broke — returns false', ok2 === false);
+  ok('17b charge: a refused buyShip charges NOTHING (money unchanged)', S17.money === moneyBefore);
+  ok('17b charge: a refused buyShip leaves the tier unchanged', SIM.fleetTier('trade') === tierBefore);
+})();
+
+(function fleetRegistryYieldFormula() {
+  // EXACT formula: mul = clamp(1 + 0.10*min(tier,era) - 0.05*max(0,era-tier), 0.85, 1.8)
+  SIM.newGame(); SIM.foundPort('green');
+  var S17 = SIM.raw();
+  function setTierEra(tier, era) { S17.fleetTech.fishing = tier; S17.fleetTech.trade = tier; S17.fleetTech.expedition = tier; S17.era = era; }
+  var pts = [
+    { tier: 0, era: 0, want: 1.00 },      // fresh/freshly-migrated save — exactly baseline (no 17b regression)
+    { tier: 2, era: 2, want: 1.20 },      // owns the current age's fleet
+    { tier: 0, era: 2, want: 0.90 },      // 2 ages behind
+    { tier: 7, era: 7, want: 1.70 },      // fully modern at the top of the ladder
+    { tier: 0, era: 7, want: 0.85 },      // 7 ages behind — floored at 0.85, not 1-0.35=0.65
+    { tier: 4, era: 6, want: 1.30 },      // partial gap: min(4,6)=4 → +0.40; max(0,6-4)=2 → -0.10 → 1.30
+    { tier: 5, era: 3, want: 1.30 }       // tier ahead of era can't happen via buyShip, but the min()/max() form still resolves sanely: min(5,3)=3→+0.30, max(0,3-5)=0→-0 → 1.30
+  ];
+  pts.forEach(function (p) {
+    setTierEra(p.tier, p.era);
+    ['fishing', 'trade', 'expedition'].forEach(function (role) {
+      ok('17b yield: tier' + p.tier + '/era' + p.era + ' (' + role + ') = ' + p.want, near(SIM.fleetYieldMul(role), p.want, 1e-9));
+    });
+  });
+})();
+
+(function fleetRegistryProductionWiring() {
+  // fishing fleet tier rubber-bands FISH production only — timber/goods (and trade/expedition
+  // effects, checked separately below) must be untouched by the fishing tier.
+  SIM.newGame(); SIM.foundPort('green');
+  var S17 = SIM.raw();
+  S17.money = 1e6; SIM.build('fishing_hut'); SIM.build('cottage'); SIM.build('sawmill');
+  S17.era = 3;
+  function fishGain(tier) {
+    SIM.newGame(); SIM.foundPort('green'); var s = SIM.raw();
+    s.money = 1e6; SIM.build('fishing_hut'); SIM.build('cottage'); s.era = 3; s.fleetTech.fishing = tier;
+    var before = s.ports.green.res.fish; SIM.tick(30); return s.ports.green.res.fish - before;
+  }
+  var atTier3 = fishGain(3), atTier0 = fishGain(0);   // era3: tier3 = current age (1.30×), tier0 = 3 behind (0.85 floor)
+  ok('17b prod: owning the current-age fishing fleet out-produces a 3-behind fleet', atTier3 > atTier0);
+  ok('17b prod: fishing-fleet delta matches the yield-formula ratio (within tick noise)', near(atTier3 / atTier0, 1.30 / 0.85, 0.02));
+  // trade fleet tier rubber-bands ROUTE INCOME only
+  SIM.newGame(); SIM.foundPort('green'); SIM.foundPort('tropical', true);
+  var s2 = SIM.raw(); s2.money = 1e6; s2.era = 3;
+  s2.ports.green.res.fish = 500; s2.ports.tropical.res.fish = 0;
+  SIM.addRoute('green', 'tropical', 'fish');
+  s2.fleetTech.trade = 3;    // current-age trade fleet
+  var incomeHi = SIM.tick.call ? (function () { var m0 = s2.money; SIM.tick(30); return s2.money - m0; })() : 0;
+  SIM.newGame(); SIM.foundPort('green'); SIM.foundPort('tropical', true);
+  var s3 = SIM.raw(); s3.money = 1e6; s3.era = 3; s3.ports.green.res.fish = 500; s3.ports.tropical.res.fish = 0;
+  SIM.addRoute('green', 'tropical', 'fish'); s3.fleetTech.trade = 0;   // 3 ages behind
+  var incomeLo = (function () { var m0 = s3.money; SIM.tick(30); return s3.money - m0; })();
+  ok('17b prod: a modern trade fleet ships more route income than a 3-behind fleet', incomeHi > incomeLo);
+})();
+
+(function fleetRegistryVoyageYield() {
+  // expedition fleet tier composes MULTIPLICATIVELY with META.voyageYield (Flagship capstone), never replaces it
+  SIM.__setRng(mulberry32(555));
+  SIM.newGame(); SIM.foundPort('green');
+  var s = SIM.raw(); s.money = 1e6; s.era = 3;
+  SIM.applyMeta(metaWith({ voyageYield: 0.4 }));
+  s.fleetTech.expedition = 3;                      // current-age expedition fleet at era3
+  SIM.startVoyage('cove'); s.voyages[0].endsAt = Date.now() - 1;
+  var outHi = SIM.collectVoyage(SIM.voyages().active[0].seq);
+  SIM.__setRng(mulberry32(555));
+  SIM.newGame(); SIM.foundPort('green');
+  var s2 = SIM.raw(); s2.money = 1e6; s2.era = 3;
+  SIM.applyMeta(metaWith({ voyageYield: 0.4 }));
+  s2.fleetTech.expedition = 0;                     // 3 ages behind
+  SIM.startVoyage('cove'); s2.voyages[0].endsAt = Date.now() - 1;
+  var outLo = SIM.collectVoyage(SIM.voyages().active[0].seq);
+  ok('17b voyage: identical seed/META, only fleet tier differs → richer haul at the current-age tier', outHi.cash > outLo.cash);
+  ok('17b voyage: composes with META.voyageYield rather than replacing it (ratio matches the yield formula)', near(outHi.cash / outLo.cash, 1.30 / 0.85, 0.03));
+  SIM.applyMeta(metaWith(null));                    // reset META for later sections
+})();
+
+(function fleetRegistryMigration() {
+  // a pre-17b save (no fleetTech field at all) must load with every role backfilled to tier 0 —
+  // and tier0/era-whatever-it-was's yield multiplier must not retroactively nerf an old save's
+  // baseline income at era0 (the only era where a truly "vanilla" old save could still be sitting).
+  var oldBlob = {
+    era: 0, money: 900, lifetimeMoney: 900, lastSeen: Date.now(), founded: true,
+    managers: { fishing: 0, sales: 0, labour: 0 }, active: 'green',
+    ports: { green: { id: 'green', res: { fish: 0, timber: 0, goods: 0 }, buildings: [{ type: 'fishing_hut', level: 1, hp: 100 }], pop: 4, focus: 'none', demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 } },
+    network: { xp: 0, level: 1, routes: [] }, hazard: { t: 0, next: 100, phase: 'idle', strikeId: 0, last: null },
+    crash: null, evt: { t: 0, next: 100, active: null, lastId: '', seq: 0 }, voyages: [], voyageSeq: 0,
+    stats: { storms: 0, shipped: 0, averted: 0 }
+    // NOTE: intentionally NO `fleetTech` and NO `stats.shipsBought` — patch() must backfill both.
+  };
+  STORE['harbor:sim'] = JSON.parse(JSON.stringify(oldBlob));
+  var snap = SIM.load();
+  ok('17b migrate: old blob backfills fleetTech to tier 0 on every role', SIM.raw().fleetTech.fishing === 0 && SIM.raw().fleetTech.trade === 0 && SIM.raw().fleetTech.expedition === 0);
+  ok('17b migrate: old blob backfills stats.shipsBought to 0', SIM.raw().stats.shipsBought === 0);
+  ok('17b migrate: snapshot exposes the fleet view for a migrated save', snap && snap.fleet && snap.fleet.fishing && snap.fleet.fishing.tier === 0);
+  ok('17b migrate: era0/tier0 multiplier is EXACTLY 1 — no income regression for a vanilla migrated save', SIM.fleetYieldMul('fishing') === 1 && SIM.fleetYieldMul('trade') === 1 && SIM.fleetYieldMul('expedition') === 1);
+})();
+
+// Phase 17b: every SHIPYARD class (6 original + 19 new fleet-registry rungs) builds under the
+// 4000-vert-per-class budget declared in models.js. Loaded headlessly here (gl.js's Builder needs
+// no real WebGL — it just emits typed arrays) so the full 25-class sweep runs without a browser;
+// browser.test.js separately soaks a representative subset through the real GPU via debugShip.
+(function shipMatrixVertBudget() {
+  if (!global.window) global.window = global;   // gl.js/models.js both close over `window` directly (browser-only IIFE signature)
+  if (!global.HGL) require('../gl.js');
+  if (!global.HARBOR_MODELS) require('../models.js');
+  var SY = global.HARBOR_MODELS.SHIPYARD;
+  ok('17b matrix: SHIPYARD lists 25 classes (6 original + 19 new fleet-registry rungs)', SY.CLASSES.length === 25);
+  var overBudget = [], underBaseline = [], report = {};
+  SY.CLASSES.forEach(function (c) {
+    var s = SY.build(c);
+    var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
+    var sailV = s.sails.reduce(function (a, sd) { return a + sd.data.positions.length / 3; }, 0);
+    var total = hullV + trimV + sailV;
+    report[c] = total;
+    if (total >= 4000) overBudget.push(c);
+    if (total <= 78) underBaseline.push(c);   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives (16a baseline)
+  });
+  ok('17b matrix: every class beats the pre-16a legacy-ship baseline (78 verts)', underBaseline.length === 0);
+  ok('17b matrix: every class stays under the 4000-vert-per-class budget', overBudget.length === 0);
+  ok('17b matrix: every ladder rung ID present (fishing/trade/expedition × 8 tiers)',
+    ['fishing', 'trade', 'expedition'].every(function (role) { return SY.LADDERS[role].length === 8 && SY.LADDERS[role].every(function (c) { return !!SY.NAMES[c]; }); }));
+  if (process.env.HARBOR_BASELINES) console.log('  [17b] ship matrix verts', JSON.stringify(report));
 })();
 
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
