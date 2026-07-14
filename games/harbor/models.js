@@ -290,8 +290,13 @@
     grit.box(lx[0], h, z, 2.4, 2.4, 20, col); grit.box(lx[1], h, z, 2.4, 2.4, 20, col); grit.box(baseX, h, lz[0], 24, 2.4, 2.6, col); grit.box(baseX, h, lz[1], 24, 2.4, 2.6, col);
     grit.box(baseX, h + 2.1, z - 14, 30, 2.6, 3.0, col); grit.box(baseX, h + 2.1, z + 5, 30, 2.6, 3.0, col); grit.bbox(baseX - 7, h + 2.6, z, 7, 4.8, 9, [0.22, 0.24, 0.28], 0, 0.6);
   }
-  function props(grit, flat, rng, era) {
-    for (var mx = -56; mx <= 56; mx += 28) { grit.cyl(mx, 0, 12, 0.4, 12, 6, [0.3, 0.31, 0.33], 1); flat.box(mx, 12, 12, 2.4, 0.5, 0.8, [1.0, 0.95, 0.7], 0); }
+  // sc (optional, Phase 14b): the yard floodlight poles below ARE the quay's lampposts — each
+  // pole's ground position is recorded into sc.lamps so game.js can drop a warm night-time light
+  // pool decal under it (see drawNightPools/scene.lamps) without inventing new geometry. q:1
+  // marks a QUAY-MOUNTED lamp (the pool must sit on the concrete deck, 2.2 above the port base
+  // — concreteQuay's slab height) vs q:0 for ground-level anchors (warehouse doorways, on terrain).
+  function props(grit, flat, rng, era, sc) {
+    for (var mx = -56; mx <= 56; mx += 28) { grit.cyl(mx, 0, 12, 0.4, 12, 6, [0.3, 0.31, 0.33], 1); flat.box(mx, 12, 12, 2.4, 0.5, 0.8, [1.0, 0.95, 0.7], 0); if (sc) sc.lamps.push({ x: mx, z: 12, q: 1 }); }
     var ci = 0; for (var yx = 28; yx <= 28 + era * 8; yx += 5.4) for (var yz = 16; yz <= 22; yz += 5.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.bbox(yx, 0.4 + r * 2.4, yz, 5, 2.3, 5, CONT[(ci + r) % CONT.length], 0, 0.35); ci++; }
   }
   function lighthouse(grit, flat, x, z) {
@@ -838,9 +843,10 @@
 
   // assemble the port at LOCAL origin for the given era; returns local placements
   function assemblePort(L, biome, rng, era) {
-    var sc = { city: [], blobs: [], crane: era >= 2 };
+    var sc = { city: [], blobs: [], lamps: [], crane: era >= 2 };
     if (era === 0) {
-      // primitive wild village: a few shacks, one jetty, a fishing boat
+      // primitive wild village: a few shacks, one jetty, a fishing boat — no quay yet, so no
+      // lampposts/lit-window pools (Phase 14b night light pools start once a real quay exists)
       woodenJetty(L.flat, 0);
       var huts = 3 + (rng() * 2 | 0);
       for (var hI = 0; hI < huts; hI++) { var hx = -16 + rng() * 32, hz = 24 + rng() * 14; hut(L.flat, hx, hz, rng, biome); sc.blobs.push({ x: hx, z: hz, r: 5 }); }
@@ -848,13 +854,16 @@
     } else {
       concreteQuay(L.grit, L.flat, era); lighthouse(L.grit, L.flat, -70, 8); sc.blobs.push({ x: -70, z: 8, r: 6 });
       var whN = Math.min(6, 1 + era);
-      for (var w = 0; w < whN; w++) { var wx = -52 + w * 22; warehouse(L.grit, L.flat, wx, 26, 18, 13, rng, biome); sc.blobs.push({ x: wx, z: 26, r: 12 }); }
+      // Phase 14b: each warehouse's lit-window facade (the door/window slits carved into its front
+      // wall, see warehouse() above) becomes a second night-pool anchor — a soft glow spilling
+      // from the building onto the quay apron, alongside the floodlight poles from props() below.
+      for (var w = 0; w < whN; w++) { var wx = -52 + w * 22; warehouse(L.grit, L.flat, wx, 26, 18, 13, rng, biome); sc.blobs.push({ x: wx, z: 26, r: 12 }); sc.lamps.push({ x: wx, z: 32.5, q: 0 }); }
       var cityN = Math.min(16, 3 + era * 3);
       for (var cI = 0; cI < cityN; cI++) { var bx = -110 + rng() * 220; if (Math.abs(bx) > 150) continue; var bz = 50 + rng() * 60; sc.city.push({ x: bx, z: bz, s: 6.5 + rng() * 3.5, rot: (rng() * 4 | 0) * (Math.PI / 2), bi: (rng() * 8) | 0, tint: [1, 1, 1] }); sc.blobs.push({ x: bx, z: bz, r: 9 }); }
       if (era === 1) freighter(L.grit, L.flat, 0, -6, rng); else containerShip(L.grit, L.flat, 0, -6, rng, 1 + Math.min(0.5, (era - 2) * 0.18));
       sc.blobs.push({ x: 0, z: -6, r: 22 });
       if (era >= 2) { craneStatic(L.grit, 0, -6); sc.blobs.push({ x: 0, z: -6, r: 14 }); }
-      props(L.grit, L.flat, rng, era);
+      props(L.grit, L.flat, rng, era, sc);
       // Phase 17a: Automated Harbour (era6) / Neon Horizon (era7) get their OWN skyline — a small
       // cluster of tech-age towers east of the warehouse row (solarSpire's steel/glass silhouette at
       // era6, swapping to neonTower's glowing accent rings at era7) plus a drone landing pad by the
@@ -926,7 +935,7 @@
       var bx = -760 + rng() * 1520, bz = -210 + rng() * 760, byy = heightAt(bx, bz);
       if (byy > -3.2 && byy < -0.7) { dinghy(B.flat, bx, bz, rng); bk++; }
     }
-    var scene = { city: [], blobs: [], crane: false, era: era, founded: !!port, port: null };
+    var scene = { city: [], blobs: [], lamps: [], crane: false, era: era, founded: !!port, port: null };
     if (!port) return scene;                               // wild, unfounded — no structures
 
     var by = heightAt(port.x, port.z); if (by < 0.3) by = 0.3;
@@ -939,6 +948,7 @@
     function W(p) { return { x: p.x * c + p.z * s + port.x, z: -p.x * s + p.z * c + port.z }; }
     lsc.city.forEach(function (p) { var w = W(p); scene.city.push({ x: w.x, z: w.z, s: p.s, rot: p.rot + yaw, bi: p.bi, tint: p.tint }); });
     lsc.blobs.forEach(function (b) { var w = W(b); scene.blobs.push({ x: w.x, z: w.z, r: b.r }); });
+    lsc.lamps.forEach(function (l) { var w = W(l); scene.lamps.push({ x: w.x, z: w.z, q: l.q }); });   // Phase 14b: night light pool anchors (q=1: on the quay deck)
     scene.crane = lsc.crane;
     return scene;
   }

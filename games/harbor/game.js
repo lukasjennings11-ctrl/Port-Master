@@ -198,7 +198,7 @@
   var NAVY_LADDER = (window.HARBOR_MODELS && HARBOR_MODELS.SHIPYARD.NAVY) || ['patrol_cutter'];
   function navyClass(tier) { return tier > 0 ? NAVY_LADDER[Math.max(0, Math.min(NAVY_LADDER.length - 1, (tier | 0) - 1))] : null; }
   function navyTierOf() { return (SIM && simReady()) ? SIM.navyTier() : 0; }
-  var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
+  var era = 0, scene = { city: [], blobs: [], lamps: [], crane: false, era: 0, founded: false, port: null };
   var cityModels = null, atlasTex = null, blobTex = null, wakeTex = null;   // glTF buildings (async) + shared atlas + shadow decal + wake decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
   var sites = [], selSite = -1;                              // curated harbour candidates + selected index
@@ -218,7 +218,7 @@
     var rng = mulberry(hash('harbor:' + id + ':e' + era));
     var fac = new HGL.Builder(), grit = new HGL.Builder(), flat = new HGL.Builder();
     var port = founded[id] || null;
-    scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era, port) || { city: [], blobs: [], crane: false, era: era, founded: !!port, port: null };
+    scene = HARBOR_MODELS.buildStatic({ fac: fac, grit: grit, flat: flat }, biome, rng, era, port) || { city: [], blobs: [], lamps: [], crane: false, era: era, founded: !!port, port: null };
     geomStats = { fac: fac.P.length / 3, grit: grit.P.length / 3, flat: flat.P.length / 3,
       verts: (fac.P.length + grit.P.length + flat.P.length) / 3, indices: fac.I.length + grit.I.length + flat.I.length };   // vertex-budget guard (Phase 10b)
     meshFac = E.mesh(fac.data()); meshGrit = E.mesh(grit.data()); meshFlat = E.mesh(flat.data());
@@ -355,6 +355,80 @@
   // plum-grey by night so it still reads against the darker night grade instead of vanishing.
   function outlineTint(en) { return lerp3([0.20, 0.12, 0.08], [0.16, 0.11, 0.15], en.night); }
 
+  // ---- Phase 14b: drifting clouds — a handful of puffy cumulus meshes on a high world-space
+  // layer, built ONCE at boot (like gullMesh/boxMesh, not per-biome) and translated every frame.
+  // PLACEMENT IS A RING around the island over open sea (radius 560-950 from the island centre),
+  // drifting slowly around it: the camera's sky window is a narrow band just above the horizon
+  // (the orbit camera looks DOWN at the port — nothing high overhead is ever in frame, and the
+  // portrait FOV is narrow), so distant clouds ringing the horizon are the placement that
+  // actually shows up in play, whichever way the player orbits — an inland scatter left most
+  // framings cloudless. Clouds cast no shadows (never added to renderShadowMap's draw list or
+  // scene.blobs) and never intersect terrain/buildings: the 140-unit altitude floor was chosen
+  // by measuring the true max scene height (terrain + landform outcrops + era7 towers) across
+  // every biome x era combination with the game's real deterministic seeds — 127 at the massif
+  // summit, ~14 out at the ring over open water — so the floor clears everything worldwide with
+  // margin. Real 3D meshes at real world positions give parallax with the camera for free.
+  var CLOUD_RING_CX = 0, CLOUD_RING_CZ = 150;                    // island centre (models.js ISLAND)
+  var CLOUD_MESHES = null, CLOUDS = null, CLOUD_MESH_VERTS = 0;
+  // one puffy cluster: several overlapping chamfered-box "lumps" (house shape language — bbox is
+  // the same bevelled-box primitive trees/huts/warehouses use) scattered around a local origin so
+  // it reads as a soft, hand-placed cumulus rather than a single blocky box.
+  function buildCloudMesh(rng) {
+    var b = new HGL.Builder(), lumps = 4 + (rng() * 3 | 0), i, a, r, lx, lz, s;
+    for (i = 0; i < lumps; i++) {                                // base row: fat overlapping lumps
+      a = rng() * Math.PI * 2; r = rng() * 1.5;
+      lx = Math.cos(a) * r; lz = Math.sin(a) * r * 0.55;
+      s = 0.9 + rng() * 1.2;
+      b.bbox(lx, (rng() - 0.5) * 0.5, lz, s * 1.7, s * 1.05, s * 1.35, [1, 1, 1], rng() * 0.7, s * 0.42);
+    }
+    for (i = 0; i < 2; i++) {                                    // 2 smaller crown lumps riding on top — breaks the flat-loaf silhouette
+      a = rng() * Math.PI * 2; r = rng() * 0.9;
+      s = 0.6 + rng() * 0.6;
+      b.bbox(Math.cos(a) * r, 0.55 + rng() * 0.35, Math.sin(a) * r * 0.5, s * 1.5, s * 1.0, s * 1.25, [1, 1, 1], rng() * 0.7, s * 0.42);
+    }
+    return b.data();
+  }
+  function buildClouds() {
+    var rng = mulberry(hash('sky-clouds-v69'));                  // deterministic — same sky every boot
+    var datas = [0, 1, 2].map(function () { return buildCloudMesh(rng); });
+    CLOUD_MESH_VERTS = datas.reduce(function (a, d) { return a + d.positions.length / 3; }, 0);
+    CLOUD_MESHES = datas.map(function (d) { return E.mesh(d); });
+    CLOUDS = [];
+    var n = 6 + (rng() * 2 | 0);                                 // 6..7 instances (max ~51deg ring gap)
+    for (var i = 0; i < n; i++) {
+      CLOUDS.push({
+        a0: (i + rng() * 0.55) / n * Math.PI * 2,                // spread around the ring, jittered — never gridded
+        r0: 560 + rng() * 390, y: 140 + rng() * 40, scale: 16 + rng() * 14,
+        spd: (0.004 + rng() * 0.006) * (rng() < 0.25 ? -1 : 1),  // slow ring drift, mostly one prevailing direction
+        ph: rng() * 6.283, ry: rng() * 6.283, meshIdx: i % CLOUD_MESHES.length
+      });
+    }
+  }
+  // current world (x,z) for one cloud instance — a pure function of `clock` so drift is fully
+  // deterministic/reversible (and testable: sample twice at different clock values). Gentle
+  // radial breathing on top of the angular drift keeps the ring from reading as a rail.
+  function cloudWorldPos(c) {
+    var ang = c.a0 + clock * c.spd, r = c.r0 + Math.sin(clock * 0.03 + c.ph) * 26;
+    return [CLOUD_RING_CX + Math.cos(ang) * r, CLOUD_RING_CZ + Math.sin(ang) * r];
+  }
+  // ToD tint: crisp white at noon, warm pink through dawn/dusk twilight, dark slate by night —
+  // reuses env()'s existing day/night factors (no new todKeys() entries needed).
+  function cloudTint(en) {
+    var duskT = clamp(1 - en.day - en.night, 0, 1);
+    var t = lerp3([1.0, 1.0, 1.0], [1.0, 0.74, 0.72], duskT);
+    return lerp3(t, [0.36, 0.38, 0.48], en.night);
+  }
+  function drawClouds(M, en) {
+    if (!CLOUDS) return;
+    gl.uniform3fv(M.u.uBase, cloudTint(en)); gl.uniform1f(M.u.uRough, 0.9);   // matte/chalky, no shiny highlight
+    for (var i = 0; i < CLOUDS.length; i++) {
+      var c = CLOUDS[i], p = cloudWorldPos(c);
+      composeRYS(mModel, p[0], c.y, p[1], c.scale, c.scale * 0.72, c.scale, c.ry);
+      gl.uniformMatrix4fv(M.u.uModel, false, mModel);
+      drawMesh(M, CLOUD_MESHES[c.meshIdx]);
+    }
+  }
+
   // ---- matrices ----
   var mView = mat4 && mat4.create(), mProj = mat4 && mat4.create(), mVP = mat4 && mat4.create(),
     mLV = mat4 && mat4.create(), mLP = mat4 && mat4.create(), mLVP = mat4 && mat4.create(), mModel = mat4 && mat4.create(), mI = mat4 && mat4.create();
@@ -402,6 +476,30 @@
     gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
   }
 
+  // Phase 14b: night light pools — warm soft ground discs under the quay's lampposts (the yard
+  // floodlight poles from models.js props()) and each warehouse's lit-window facade (scene.lamps —
+  // see buildStatic's Phase 14b comments). Reuses the SAME P_blob decal quad pipeline as the
+  // contact shadows above and the wake trails below (battle-tested, zero new shader plumbing) but
+  // with an ADDITIVE warm tint instead of alpha-darkening, so the glow lifts the ground rather than
+  // punching a dark hole in it. Strength is en.night-gated (never at day/dusk) and there's simply
+  // nothing to draw before a real quay exists (scene.lamps is empty at era0 and on any wild world).
+  function drawNightPools(en) {
+    if (!blobTex || en.night < 0.05 || !scene.lamps || !scene.lamps.length) return;
+    var Bp = E.P_blob; gl.useProgram(Bp.p); gl.uniformMatrix4fv(Bp.u.uVP, false, mVP);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blobTex); gl.uniform1i(Bp.u.uTex, 1);
+    gl.uniform3fv(Bp.u.uTint, [1.0, 0.74, 0.38]);                       // warm lamplight (uTint is shared state — always set explicitly)
+    gl.uniform1f(Bp.u.uStr, 0.78 * en.night);                            // fades in with night, gone by day (additive, so still soft — never a hotspot)
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE); gl.depthMask(false); gl.disable(gl.CULL_FACE);   // additive glow, not a dark decal
+    var deckY = scene.port ? scene.port.by + 2.25 : 2.25;                // concrete quay deck top (see concreteQuay in models.js)
+    for (var i = 0; i < scene.lamps.length; i++) {
+      var l = scene.lamps[i], y = l.q ? deckY : HARBOR_MODELS.heightAt(l.x, l.z) + 0.05;   // quay-mounted lamps pool on the DECK, not the terrain buried beneath it
+      var pulse = 0.92 + 0.08 * Math.sin(clock * 1.4 + i * 1.7);         // gentle flicker, echoes F_MAIN's window flicker
+      composeRY(mModel, l.x, y, l.z, 4.6 * pulse, 0); gl.uniformMatrix4fv(Bp.u.uModel, false, mModel);
+      drawMesh(Bp, E.blobQuad);
+    }
+    gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE);
+  }
+
   // ---- crane dynamic parts ----
   function craneParts() {
     var h = 32, z = -6, ph = (clock * 0.16) % 1, carry = ph > 0.30 && ph < 0.86, tx, drop;
@@ -422,7 +520,7 @@
   // ---- ambient port life (boats sailing the bay, gulls wheeling above) ----
   // Built once per founded scene; population scales with era so the port feels busier as it grows.
   function buildAmbient() {
-    var p = scene.port; if (!p) { ambient = { boats: [], gulls: [], cx: 0, cz: 0 }; return; }
+    var p = scene.port; if (!p) { ambient = { boats: [], gulls: [], workers: [], cx: 0, cz: 0 }; return; }
     // find the deepest water offshore to anchor the boat traffic so they never sail over land
     var bestA = 0, bestDepth = 1e9;
     for (var a = 0; a < Math.PI * 2; a += Math.PI / 12) {
@@ -447,7 +545,19 @@
     for (i = 0; i < nGulls; i++) {
       gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
     }
-    ambient = { boats: boats, gulls: gulls, cx: cx, cz: cz, dev: dev };
+    // Phase 14b: quay life — 2..6 tiny dock workers (scaling with era, capped at 6), walking a
+    // short back-and-forth lane along the harbour apron (jetty/beach at era0, quay apron once a
+    // real quay exists) so the port feels staffed even before the fleet grows. Cap colour varies
+    // per worker; a few carry a crate.
+    var nWork = clamp(2 + era, 2, 6), workers = [];
+    var wz0 = era >= 1 ? 14 : 20, wSpan = Math.min(58, 26 + era * 5);   // era>=1: the quay apron; era0: the beach strip between jetty and huts
+    var CAP_HUES = [[0.86, 0.22, 0.20], [0.95, 0.78, 0.18], [0.24, 0.55, 0.86], [0.30, 0.72, 0.36], [0.94, 0.50, 0.20], [0.70, 0.32, 0.80]];
+    for (i = 0; i < nWork; i++) {
+      var lane = wz0 + ((i % 2) ? 3.2 : -3.2) + rng() * 2.4, mid = (rng() - 0.5) * wSpan * 0.7, half = 6 + rng() * 9;
+      workers.push({ x0: mid - half, x1: mid + half, z: lane, spd: 0.30 + rng() * 0.22, ph: rng() * 6.283, bobPh: rng() * 6.283,
+        cap: CAP_HUES[i % CAP_HUES.length], carry: rng() < 0.42 });
+    }
+    ambient = { boats: boats, gulls: gulls, workers: workers, cx: cx, cz: cz, dev: dev };
   }
   // Phase 10b wind: one shared breeze, per-boat phase. Sails wobble a few degrees around their
   // heading and 'billow' a few % — readable but calm. Chimney smoke drifts the same way (+x).
@@ -495,6 +605,42 @@
       var gy = by + g.h + Math.sin(clock * 2 + g.bob) * 3;
       var flap = 0.7 + Math.sin(clock * 9 + g.bob) * 0.4;                  // wing-flap: stretch the little V
       composeRYS(mModel, x, gy, z, 1.9 * flap, 0.5, 0.7, ga + clock * 0.6); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, gullMesh);
+    }
+  }
+  // Phase 14b: tiny blocky dock workers — reuses the shared unit boxMesh (like crane parts /
+  // founding beacons) for a body slab + a head/cap slab [+ a small carried crate], zero new static
+  // geometry. Each walks a short lane back and forth (eased by a sine, so it settles at both ends
+  // rather than bouncing off a hard wall) with a quick walking bob; the figure's THIN local axis is
+  // pointed along its walking direction so it reads as a simple flat cartoon silhouette from any
+  // angle, like the rest of the flat-colour prop kit. Assumes the same program state as
+  // drawAmbient/crane parts (uVCol=0, uTexMix=0, uAlbedo=0).
+  // one worker's current world position + ground height + heading — pure function of `clock`
+  // (same pattern as cloudWorldPos), shared by drawWorkers and the __harbor.workers() hook.
+  // Ground: era>=1 workers pace the CONCRETE QUAY DECK, whose top sits 2.2 above the port base
+  // (concreteQuay's slab in models.js); era0 workers pace the beach strip on raw terrain.
+  function workerWorldPos(w) {
+    var p = scene.port, pc = Math.cos(p.yaw), psn = Math.sin(p.yaw), ang = clock * w.spd + w.ph;
+    var t = (Math.sin(ang) + 1) / 2, lx = w.x0 + (w.x1 - w.x0) * t, lz = w.z;
+    var facing = Math.cos(ang) >= 0 ? 1 : -1;
+    var x = lx * pc + lz * psn + p.x, z = -lx * psn + lz * pc + p.z;
+    var gy = scene.era >= 1 ? p.by + 2.2 : Math.max(HARBOR_MODELS.heightAt(x, z), p.by);
+    return { x: x, z: z, y: gy, yaw: p.yaw + facing * Math.PI * 0.5 };
+  }
+  function drawWorkers(M) {
+    if (!ambient || !ambient.workers || !ambient.workers.length || !scene.port) return;
+    for (var i = 0; i < ambient.workers.length; i++) {
+      var w = ambient.workers[i], pos = workerWorldPos(w);
+      var wx = pos.x, wz = pos.z, yaw = pos.yaw;
+      var bob = pos.y + Math.abs(Math.sin(clock * 7.5 + w.bobPh)) * 0.09;
+      gl.uniform3fv(M.u.uBase, [0.32, 0.42, 0.56]);   // work-shirt blue-grey body
+      composeRYS(mModel, wx, bob + 0.26, wz, 0.46, 0.52, 0.22, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      gl.uniform3fv(M.u.uBase, w.cap);                 // head + cap, one slab, cap's own colour
+      composeRYS(mModel, wx, bob + 0.60, wz, 0.26, 0.24, 0.26, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      if (w.carry) {
+        gl.uniform3fv(M.u.uBase, [0.62, 0.42, 0.24]);   // small carried crate, tucked at chest height
+        composeRYS(mModel, wx + Math.sin(yaw) * 0.30, bob + 0.38, wz + Math.cos(yaw) * 0.30, 0.18, 0.16, 0.18, yaw);
+        gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      }
     }
   }
 
@@ -797,14 +943,18 @@
     gl.uniform1f(M.u.uTexMix, 0); drawCity(M);
     // dynamic crane parts (flat colour) — transformed to the founded port frame
     gl.uniform1f(M.u.uVCol, 0); gl.uniform1f(M.u.uTexMix, 0); gl.uniform1f(M.u.uAlbedo, 0); gl.uniform1f(M.u.uRough, 0.5);
+    // Phase 14b: drifting clouds — every biome/world, founded or wild, sky-layer only (no shadow,
+    // no scene.blobs entry); same flat-colour program state the crane parts below reuse.
+    drawClouds(M, en);
+    gl.uniform1f(M.u.uRough, 0.5);
     var pf = scene.port, pc = pf ? Math.cos(pf.yaw) : 1, psn = pf ? Math.sin(pf.yaw) : 0;
     for (i = 0; i < parts.length; i++) {
       var t = parts[i].t, lx = t[0], lz = t[2];
       var wx = pf ? lx * pc + lz * psn + pf.x : lx, wz = pf ? -lx * psn + lz * pc + pf.z : lz, wy = t[1] + (pf ? pf.by : 0);
       gl.uniform3fv(M.u.uBase, parts[i].c); composeRYS(mModel, wx, wy, wz, parts[i].s[0], parts[i].s[1], parts[i].s[2], pf ? pf.yaw : 0); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
     }
-    // living port: sailing boats + wheeling gulls (flat-colour, same program state as crane parts)
-    if (scene.port) { drawAmbient(M); drawFleet(M); }
+    // living port: sailing boats + wheeling gulls + dock workers (flat-colour, same program state as crane parts)
+    if (scene.port) { drawAmbient(M); drawFleet(M); drawWorkers(M); }
     if (DEBUG_SHIP) drawDebugShip(M);   // Phase 16a test-only: forced close-up ship (works founded or wild)
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
@@ -826,6 +976,8 @@
 
     // soft contact shadows
     drawBlobs(sd);
+    // Phase 14b: warm night light pools under lampposts + lit windows (night-gated, no-op by day)
+    drawNightPools(en);
 
     // water
     var W = E.P_water; gl.useProgram(W.p); gl.uniformMatrix4fv(W.u.uVP, false, mVP); gl.uniform1f(W.u.uTime, clock);
@@ -3038,7 +3190,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v68';
+  var BUILD_TAG = 'v69';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3673,6 +3825,7 @@
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
     gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
+    buildClouds();   // Phase 14b: sky-layer clouds — built once, independent of biome/founding
     // Phase 16a/17b: SHIPYARD — 25 real ship-class meshes across three fleet-tier ladders (see
     // HARBOR_MODELS.SHIPYARD.LADDERS); built LAZILY via getShip() above (first actual use uploads +
     // caches), so shipStats starts empty and fills in as classes are actually drawn.
@@ -3764,6 +3917,10 @@
     sites: function () { return sites.slice(); }, selectSite: function (i) { if (E) selectSite(i); }, groundAt: function (sx, sy) { return screenToGround(sx, sy); },
     unlockWorld: function (id) { unlockWorld(id); },
     ambient: function () { if (scene.port && !ambient) buildAmbient(); return ambient ? { boats: ambient.boats.length, gulls: ambient.gulls.length, cx: Math.round(ambient.cx), cz: Math.round(ambient.cz), seaH: Math.round(HARBOR_MODELS.heightAt(ambient.cx, ambient.cz) * 10) / 10 } : null; },
+    // Phase 14b: atmosphere (test/debug hooks) — drifting clouds, quay dock workers, night light pools
+    clouds: function () { return CLOUDS ? { count: CLOUDS.length, verts: CLOUD_MESH_VERTS, pos: CLOUDS.map(function (c) { return cloudWorldPos(c); }), tint: cloudTint(env()) } : { count: 0, verts: 0, pos: [] }; },
+    workers: function () { if (scene.port && !ambient) buildAmbient(); var ws = (ambient && ambient.workers && scene.port) ? ambient.workers : []; return { count: ws.length, era: era, pos: ws.map(function (w) { var p = workerWorldPos(w); return [Math.round(p.x * 10) / 10, Math.round(p.z * 10) / 10]; }) }; },
+    pools: function () { var en = env(); var on = en.night >= 0.05 && scene.lamps && scene.lamps.length > 0; return { count: on ? scene.lamps.length : 0, night: +en.night.toFixed(3) }; },
     goal: function () { return { i: goalIdx, total: GOALS.length, text: curGoal().t, shown: goalBanner ? goalBanner.classList.contains('show') : false }; },
     goalAt: function (i) { return (i < GOALS.length ? GOALS[i] : genGoal(i)).t; },
     goalOkAt: function (i) { return !!(i < GOALS.length ? GOALS[i] : genGoal(i)).ok(SIM.state()); },   // test hook: evaluate any ladder goal's ok() without needing goalIdx to be there yet
