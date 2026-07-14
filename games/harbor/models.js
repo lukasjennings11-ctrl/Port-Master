@@ -15,7 +15,7 @@
   function jit(c, k, rng) { return [c[0] + (rng() - 0.5) * k, c[1] + (rng() - 0.5) * k, c[2] + (rng() - 0.5) * k]; }
   function pick(a, rng) { return a[(rng() * a.length) | 0]; }
   function hashStr(s) { var h = 2166136261 >>> 0; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
-  var CONT = [[0.95, 0.32, 0.26], [0.20, 0.62, 0.86], [1.0, 0.78, 0.24], [0.28, 0.76, 0.48], [0.64, 0.42, 0.82], [0.98, 0.54, 0.64], [0.96, 0.96, 0.98]];
+  var CONT = [[0.74, 0.42, 0.34], [0.40, 0.54, 0.64], [0.80, 0.66, 0.40], [0.46, 0.58, 0.44], [0.58, 0.48, 0.62], [0.76, 0.56, 0.54], [0.88, 0.86, 0.82]];  // Phase 19a: dyed card, not candy
 
   // ---------------- value-noise heightfield ----------------
   var WORLD = { W: 2400, z0: -130, z1: 430, cell: 5 };
@@ -146,7 +146,7 @@
   function buildFieldMesh(flat, biome) {
     var nx = FIELD.nx, nz = FIELD.nz, H = FIELD.H, RM = FIELD.RM;
     var sand = biome.beach || [0.88, 0.80, 0.55], grass = biome.ground, deep = [0.40, 0.46, 0.40];
-    var mrock = mixc(biome.hill, [0.40, 0.38, 0.43], 0.62), river = [0.13, 0.42, 0.52], snow = [0.96, 0.97, 1.0];
+    var mrock = mixc(biome.hill, [0.40, 0.38, 0.43], 0.62), river = [0.30, 0.42, 0.46], snow = [0.93, 0.93, 0.92];   // 19a: card river, warm-grey snow
     var snowLine = 45;
     function faceColor(i, j, yavg) {
       var idx = j * nx + i;
@@ -199,12 +199,12 @@
   // cone — the #1 silhouette most on-screen (green isles' default world).
   function tree(flat, x, z, rng, kind, by) {
     var hy = by + 0.4;
-    if (kind === 'palm') { var th = 5 + rng() * 3; flat.cyl(x, hy, z, 0.40, th, 6, [0.48, 0.36, 0.22], 0.7); for (var f = 0; f < 6; f++) flat.box(x, hy + th, z, 5.4, 0.34, 1.3, [0.14, 0.56, 0.20], f / 6 * TAU, 0.30); }
-    else if (kind === 'pine') { flat.cyl(x, hy, z, 0.56, 2.2, 6, [0.38, 0.28, 0.17], 1); for (var c = 0; c < 3; c++) flat.cyl(x, hy + 1.6 + c * 2.5, z, 3.7 - c * 0.95, 3.1, 6, [0.10, 0.40, 0.20], 0.04); }
+    if (kind === 'palm') { var th = 5 + rng() * 3; flat.cyl(x, hy, z, 0.40, th, 6, [0.52, 0.42, 0.30], 0.7); for (var f = 0; f < 6; f++) flat.box(x, hy + th, z, 5.4, 0.34, 1.3, [0.32, 0.50, 0.28], f / 6 * TAU, 0.30); }
+    else if (kind === 'pine') { flat.cyl(x, hy, z, 0.56, 2.2, 6, [0.42, 0.33, 0.23], 1); for (var c = 0; c < 3; c++) flat.cyl(x, hy + 1.6 + c * 2.5, z, 3.7 - c * 0.95, 3.1, 6, [0.28, 0.42, 0.28], 0.04); }
     else { // broadleaf: trunk + two chunky canopy tiers (bigger base, smaller lumpy top)
-      flat.cyl(x, hy, z, 0.66, 2.5, 6, [0.40, 0.28, 0.17], 0.92);
-      flat.cyl(x, hy + 2.3, z, 3.6, 4.4, 7, [0.16, 0.52, 0.20], 0.28);
-      flat.cyl(x, hy + 5.6, z, 2.15, 2.6, 6, [0.24, 0.62, 0.22], 0.30);
+      flat.cyl(x, hy, z, 0.66, 2.5, 6, [0.44, 0.33, 0.23], 0.92);
+      flat.cyl(x, hy + 2.3, z, 3.6, 4.4, 7, [0.34, 0.48, 0.28], 0.28);
+      flat.cyl(x, hy + 5.6, z, 2.15, 2.6, 6, [0.42, 0.54, 0.32], 0.30);
     }
   }
   // Phase 16b: cheap static lushness — small bushes + flower dots scattered on the grass near a
@@ -213,10 +213,10 @@
   // bush — far cheaper than another tree, but enough colour confetti to read as a storybook
   // meadow rather than bare grass right around the harbour.
   function bush(flat, x, z, rng, y) {
-    var g = jit([0.18, 0.54, 0.20], 0.07, rng);
+    var g = jit([0.34, 0.47, 0.28], 0.07, rng);
     flat.cyl(x, y + 0.02, z, 0.85 + rng() * 0.55, 0.9 + rng() * 0.5, 6, g, 0.5);
   }
-  var FLOWER_HUES = [[0.97, 0.28, 0.40], [0.99, 0.82, 0.16], [0.94, 0.94, 0.99], [0.66, 0.32, 0.90], [1.0, 0.56, 0.20]];
+  var FLOWER_HUES = [[0.80, 0.42, 0.46], [0.84, 0.72, 0.38], [0.88, 0.87, 0.84], [0.62, 0.44, 0.72], [0.82, 0.56, 0.36]];   // 19a: felt petals
   function flower(flat, x, z, rng) {
     var y = heightAt(x, z), petal = pick(FLOWER_HUES, rng);
     flat.box(x, y + 0.32, z, 0.46, 0.64, 0.46, petal, rng() * TAU);
@@ -243,12 +243,12 @@
         var px = (rng() - 0.5) * spread, pz = (rng() - 0.5) * spread * 0.6;
         var h = (44 + rng() * 50) * s * (0.7 + 0.5 * rng()), r = (16 + rng() * 12) * s;
         out.cyl(px, 0, pz, r * 1.15, h * 0.34, 6, dark, 0.55); out.cyl(px, h * 0.30, pz, r, h * 0.7, 5, rock, 0.04);
-        if (b.snow) out.cyl(px, h * 0.60, pz, r * 0.5, h * 0.44, 5, [0.97, 0.98, 1.0], 0.05);
+        if (b.snow) out.cyl(px, h * 0.60, pz, r * 0.5, h * 0.44, 5, [0.93, 0.94, 0.94], 0.05);
       }
     } else if (b.hillType === 'cliff') {
       var crock = jit(b.hill, 0.04, rng), steps = 4 + (rng() * 3 | 0), bw = (40 + rng() * 30) * s, bd = (26 + rng() * 18) * s, sh = (12 + rng() * 9) * s, y = 0;
       for (var st = 0; st < steps; st++) { var t = st / steps; out.box(0, y + sh / 2, 0, bw * (1 - t * 0.55), sh, bd * (1 - t * 0.55), mul(crock, st % 2 ? 0.98 : 0.84), rng() * 0.25); y += sh; }
-      out.box(0, y + 0.6, 0, bw * 0.5, 1.2, bd * 0.5, b.snow ? [0.93, 0.95, 1.0] : mul(b.ground, 1.1), 0);
+      out.box(0, y + 0.6, 0, bw * 0.5, 1.2, bd * 0.5, b.snow ? [0.91, 0.92, 0.93] : mul(b.ground, 1.1), 0);
       out.cyl(0, -2, 0, bw * 0.65, sh * 0.7, 7, mul(crock, 0.78), 0.6);
     } else if (b.hillType === 'mesa') {
       var sand = jit(b.hill, 0.05, rng), layers = 4 + (rng() * 2 | 0), br = (24 + rng() * 16) * s, lh = (10 + rng() * 7) * s, my = 0;
@@ -306,7 +306,7 @@
     if (rng() < 0.4) flat.bbox(x + s * 0.6, s * 0.7, z - s * 0.4, s * 0.7, s * 0.5, s * 0.6, mul(rock, 0.9), rng() * TAU, s * 0.2);
   }
   function bigLeafPlant(flat, x, z, rng, y) {                        // broad-leaf tropical understory plant
-    var stalk = [0.20, 0.42, 0.18], leaf = jit([0.14, 0.52, 0.18], 0.08, rng), n = 3 + (rng() * 2 | 0);
+    var stalk = [0.32, 0.42, 0.26], leaf = jit([0.32, 0.48, 0.26], 0.08, rng), n = 3 + (rng() * 2 | 0);
     for (var i = 0; i < n; i++) {
       var a = i / n * TAU + rng() * 0.6, r = 1.0 + rng() * 0.6;
       flat.box(x + Math.cos(a) * r * 0.5, y + 0.85 + rng() * 0.4, z + Math.sin(a) * r * 0.5, 2.1 + rng() * 0.8, 0.10, 0.8 + rng() * 0.3, leaf, a, 0.25);
@@ -468,7 +468,7 @@
     B.box(x, y, z + 0.035, w, h, 0.08, glassTone, 0);
     B.box(x, y - h * 0.62, z + 0.05, w * 1.35, 0.12, 0.26, frameTone, 0);
   }
-  var FLOWERBOX_HUES = [[0.97, 0.28, 0.40], [0.99, 0.82, 0.16], [0.66, 0.32, 0.90], [1.0, 0.56, 0.20]];
+  var FLOWERBOX_HUES = [[0.80, 0.42, 0.46], [0.84, 0.72, 0.38], [0.62, 0.44, 0.72], [0.82, 0.56, 0.36]];   // 19a: felt petals
   function windowFlowerBox(B, x, y, z, rng) {
     B.box(x, y, z, 0.9, 0.16, 0.34, [0.42, 0.30, 0.18], 0);
     for (var i = 0; i < 3; i++) B.box(x - 0.3 + i * 0.3, y + 0.15, z, 0.18, 0.22, 0.18, pick(FLOWERBOX_HUES, rng), (rng() - 0.5) * 0.6);
@@ -502,7 +502,7 @@
     timberFrame(flat, x, 0, z, w, h, d, mul(trim, 0.5));
     var peak = roofKit(flat, x, h, z, w, d, roof, trim, bd.roofStyle, 0.85, 0.62);
     doorSlab(flat, x, 0, z + d * 0.5 + 0.08, w * 0.30, h * 0.62, mul(wood, 0.5), trim);
-    windowInset(flat, x - w * 0.30, h * 0.58, z + d * 0.5 + 0.05, 0.55, 0.55, trim, [0.55, 0.72, 0.80]);
+    windowInset(flat, x - w * 0.30, h * 0.58, z + d * 0.5 + 0.05, 0.55, 0.55, trim, [0.58, 0.66, 0.70]);
     if (rng() < 0.5) chimneyPot(flat, x + w * 0.28, h, z - d * 0.15, 1.5 + rng() * 0.6, mul(wood, 0.65));
     return peak;
   }
@@ -516,8 +516,8 @@
     timberFrame(flat, x, 0, z, w, h, d, mul(trim, 0.55));
     var peak = roofKit(flat, x, h, z, w, d, roof, trim, bd.roofStyle, 1.0, 0.68);
     doorSlab(flat, x, 0, z + d * 0.5 + 0.08, w * 0.24, h * 0.60, mul(wall, 0.45), trim);
-    windowInset(flat, x - w * 0.28, h * 0.60, z + d * 0.5 + 0.05, 0.5, 0.5, trim, [0.55, 0.72, 0.80]);
-    windowInset(flat, x + w * 0.28, h * 0.60, z + d * 0.5 + 0.05, 0.5, 0.5, trim, [0.55, 0.72, 0.80]);
+    windowInset(flat, x - w * 0.28, h * 0.60, z + d * 0.5 + 0.05, 0.5, 0.5, trim, [0.58, 0.66, 0.70]);
+    windowInset(flat, x + w * 0.28, h * 0.60, z + d * 0.5 + 0.05, 0.5, 0.5, trim, [0.58, 0.66, 0.70]);
     windowFlowerBox(flat, x - w * 0.28, h * 0.34, z + d * 0.5 + 0.22, rng);
     windowFlowerBox(flat, x + w * 0.28, h * 0.34, z + d * 0.5 + 0.22, rng);
     chimneyPot(flat, x - w * 0.30, h, z - d * 0.18, 1.7 + rng() * 0.5, mul(wall, 0.6));
@@ -541,12 +541,12 @@
   function freighter(grit, flat, x, z, rng) {
     var L = 38, B = 11, deck = 1.8, hb = -2.6, hull = [0.30, 0.34, 0.42];
     grit.bbox(x, hb + 2.2, z, L * 0.76, 4.4, B, hull, 0, 1.0, 3); grit.bbox(x - L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.66, hull, 0.2, 0.8); grit.bbox(x + L * 0.42, hb + 2.2, z, L * 0.14, 4.4, B * 0.82, hull, -0.13, 0.8);
-    flat.box(x, hb + 0.4, z, L * 0.9, 0.7, B + 0.2, [0.82, 0.26, 0.2], 0);
+    flat.box(x, hb + 0.4, z, L * 0.9, 0.7, B + 0.2, [0.68, 0.38, 0.30], 0);
     var ci = 0; for (var cx = -10; cx <= 8; cx += 4.6) { var stk = 1 + (rng() * 2 | 0); for (var r = 0; r < stk; r++) flat.bbox(x + cx, deck + 0.9 + r * 2.0, z, 4.2, 1.9, B - 1.5, CONT[(ci + r) % CONT.length], 0, 0.3); ci++; }
     grit.bbox(x + L * 0.36, deck + 3.0, z, 5, 5.5, B * 0.8, [0.9, 0.92, 0.95], 0, 0.6, 2); flat.cyl(x + L * 0.36 + 1.5, deck + 6, z, 1.3, 3.2, 9, [0.2, 0.22, 0.26], 1);
   }
   function containerShip(grit, flat, x, z, rng, scale) {
-    var s = scale || 1, L = 72 * s, B = 18 * s, deck = 2.4, hb = -4.0, hull = [0.12, 0.16, 0.24], accent = [0.90, 0.24, 0.18];
+    var s = scale || 1, L = 72 * s, B = 18 * s, deck = 2.4, hb = -4.0, hull = [0.16, 0.19, 0.26], accent = [0.70, 0.38, 0.30];
     grit.bbox(x, hb + 3.2, z, L * 0.72, 6.4, B, hull, 0, 1.2, 3); grit.bbox(x - L * 0.41, hb + 3.4, z, L * 0.16, 6.0, B * 0.66, hull, 0.2, 1.0); grit.bbox(x + L * 0.42, hb + 3.2, z, L * 0.14, 6.4, B * 0.86, hull, -0.12, 1.0);
     flat.cyl(x - L * 0.5, hb + 1.0, z, 1.8, B * 0.5, 8, mul(hull, 1.2), 0.5);
     flat.box(x, hb + 0.6, z, L * 0.94, 1.0, B + 0.3, accent, 0); flat.box(x, deck + 0.05, z, L * 0.9, 0.3, B - 0.5, [0.18, 0.2, 0.24], 0);
@@ -585,7 +585,7 @@
     var peak = roofKit(flat, x, h, z, w, d, awn, trim, bd.roofStyle, 0.9, 0.5);
     shopAwning(flat, x, h * 0.62, z + d / 2 + 0.7, w * 0.86, z + d / 2 + 0.05, awn, mul(awn, 1.3));
     doorSlab(flat, x, 0, z + d / 2 + 0.08, w * 0.28, h * 0.62, mul(wall, 0.5), trim);
-    hangingSign(flat, x + w * 0.32, h * 0.72, z + d / 2, mul(trim, 0.5), [0.86, 0.24, 0.20]);
+    hangingSign(flat, x + w * 0.32, h * 0.72, z + d / 2, mul(trim, 0.5), [0.68, 0.34, 0.28]);
     groundBarrel(flat, x - w * 0.40, z + d / 2 + 1.6, mul(wall, 0.65));
     groundCrate(flat, x - w * 0.40 + 1.1, z + d / 2 + 1.7, rng() * 0.5, trim);
     groundBarrel(flat, x + w * 0.42, z + d / 2 + 1.7, mul(trim, 0.7));
@@ -637,7 +637,7 @@
     var peak = flatRoof(flat, x, h, z, w, d, bd.roof, trim, 0.7);
     doorSlab(flat, x, 0, z + d / 2 + 0.06, w * 0.34, h * 0.66, [0.20, 0.21, 0.24], trim);
     windowInset(flat, x + w * 0.28, h * 0.62, z + d / 2 + 0.05, 0.6, 0.6, trim, [0.42, 0.55, 0.62]);
-    hangingSign(flat, x - w * 0.34, h * 0.9, z + d / 2, mul(trim, 0.5), [0.20, 0.45, 0.75]);
+    hangingSign(flat, x - w * 0.34, h * 0.9, z + d / 2, mul(trim, 0.5), [0.32, 0.44, 0.58]);
     groundCrate(flat, x + w * 0.5 + 1.0, z, rng() * 0.5, [0.62, 0.46, 0.28]);
     groundBarrel(flat, x + w * 0.5 + 1.0, z + 1.2, mul(wall, 0.6));
     lanternBracket(flat, x - w / 2 - 0.1, h * 0.7, z - d / 2, trim);
@@ -652,10 +652,10 @@
     var peak = roofKit(flat, x, h, z, w, d, bd.roof, trim, bd.roofStyle, 1.05, 0.55);
     shopAwning(flat, x, h * 0.58, z + d / 2 + 0.7, w * 0.7, z + d / 2 + 0.05, trim, mul(trim, 0.6));
     doorSlab(flat, x, 0, z + d / 2 + 0.08, w * 0.26, h * 0.60, mul(wall, 0.5), trim);
-    windowInset(flat, x - w * 0.32, h * 0.6, z + d / 2 + 0.05, 0.55, 0.55, trim, [0.55, 0.72, 0.80]);
-    hangingSign(flat, x + w * 0.36, h * 0.78, z + d / 2, mul(trim, 0.5), [0.86, 0.70, 0.24]);
+    windowInset(flat, x - w * 0.32, h * 0.6, z + d / 2 + 0.05, 0.55, 0.55, trim, [0.58, 0.66, 0.70]);
+    hangingSign(flat, x + w * 0.36, h * 0.78, z + d / 2, mul(trim, 0.5), [0.74, 0.63, 0.40]);
     flat.cyl(x - w * 0.5 - 0.3, h, z - d * 0.2, 0.06, 2.0, 5, mul(trim, 0.5), 0.9);            // flagpole
-    flat.box(x - w * 0.5 + 0.02, h + 1.7, z - d * 0.2, 0.5, 0.34, 0.05, [0.86, 0.24, 0.20], 0);  // pennant
+    flat.box(x - w * 0.5 + 0.02, h + 1.7, z - d * 0.2, 0.5, 0.34, 0.05, [0.68, 0.34, 0.28], 0);  // pennant
     groundCrate(flat, x + w * 0.5 + 0.9, z + d * 0.3, rng() * 0.4, trim);
     groundBarrel(flat, x - w * 0.5 - 0.9, z + d * 0.3, mul(wall, 0.65));
     return peak;
@@ -672,7 +672,7 @@
     return h;
   }
   function craneStatic(grit, baseX, z) {
-    var col = [1.0, 0.78, 0.08], h = 32, lx = [baseX - 11, baseX + 11], lz = [z + 9, z - 9];
+    var col = [0.72, 0.58, 0.30], h = 32, lx = [baseX - 11, baseX + 11], lz = [z + 9, z - 9];
     for (var a = 0; a < 2; a++) for (var bI = 0; bI < 2; bI++) { grit.box(lx[a], h / 2, lz[bI], 2.2, h, 2.2, col); grit.box(lx[a], h * 0.5, lz[bI], 1.1, h * 0.9, 1.1, mul(col, 0.92), 0, (a ? -0.5 : 0.5)); }
     grit.box(lx[0], h, z, 2.4, 2.4, 20, col); grit.box(lx[1], h, z, 2.4, 2.4, 20, col); grit.box(baseX, h, lz[0], 24, 2.4, 2.6, col); grit.box(baseX, h, lz[1], 24, 2.4, 2.6, col);
     grit.box(baseX, h + 2.1, z - 14, 30, 2.6, 3.0, col); grit.box(baseX, h + 2.1, z + 5, 30, 2.6, 3.0, col); grit.bbox(baseX - 7, h + 2.6, z, 7, 4.8, 9, [0.22, 0.24, 0.28], 0, 0.6);
@@ -691,7 +691,7 @@
   // conical roof, and a bright beacon finial — the alternating red/white bands read as the
   // lighthouse's signature spiral stripe as the tower tapers past them.
   function lighthouse(grit, flat, x, z) {
-    var stone = [0.30, 0.31, 0.33], stripe1 = [0.97, 0.97, 0.98], stripe2 = [0.90, 0.18, 0.15];
+    var stone = [0.30, 0.31, 0.33], stripe1 = [0.93, 0.92, 0.89], stripe2 = [0.72, 0.34, 0.28];   // 19a: paper white / brick card
     var plinthR = 5.0, botR = 3.6, topR = 1.7, segs = 6, segH = 3.2;
     grit.cyl(x, 0, z, plinthR, 2.4, 10, stone, botR / plinthR);            // flared stone plinth
     var y = 2.4, i;
@@ -704,9 +704,9 @@
     for (i = 0; i < 12; i++) { var a = i / 12 * TAU, px = x + Math.cos(a) * (topR + 0.85), pz = z + Math.sin(a) * (topR + 0.85); flat.cyl(px, y + 0.5, pz, 0.06, 0.9, 4, [0.85, 0.86, 0.88], 0.95); }
     y += 0.5;
     grit.cyl(x, y, z, topR * 0.85, 2.6, 10, [0.20, 0.20, 0.22], 0.92);     // lamp housing frame
-    flat.cyl(x, y + 0.3, z, topR * 0.72, 2.0, 10, [0.68, 0.86, 0.92], 0.9);   // glazing band
+    flat.cyl(x, y + 0.3, z, topR * 0.72, 2.0, 10, [0.66, 0.76, 0.79], 0.9);   // glazing band
     y += 2.6;
-    flat.cyl(x, y, z, topR * 0.95, 1.6, 10, [0.86, 0.18, 0.15], 0.06);     // conical lamp roof
+    flat.cyl(x, y, z, topR * 0.95, 1.6, 10, [0.68, 0.32, 0.27], 0.06);     // conical lamp roof
     y += 1.6;
     flat.box(x, y + 0.35, z, 0.5, 0.5, 0.5, [1.6, 1.35, 0.6]);             // beacon finial
     doorSlab(flat, x, 0, z + botR * 0.72, 1.2, 2.0, [0.20, 0.20, 0.22], stripe1);
@@ -717,8 +717,8 @@
   // Same shared-kit approach as the rest of the port (chamfered boxes + cylinders, no new asset
   // pipeline) but a deliberately different palette — glassy blues + steel instead of wood/brick —
   // so era6/7 read as a distinct skyline the moment the outline pass (14a) picks out their silhouette.
-  var GLASS_STEEL = [0.72, 0.75, 0.80], GLASS_PANE = [0.55, 0.78, 0.92], SOLAR_BLUE = [0.20, 0.55, 0.85];
-  var NEON_HUES = [[0.35, 0.85, 0.95], [0.95, 0.45, 0.85], [0.55, 0.95, 0.65]];
+  var GLASS_STEEL = [0.72, 0.74, 0.77], GLASS_PANE = [0.58, 0.72, 0.80], SOLAR_BLUE = [0.32, 0.48, 0.64];   // 19a: matte card, no glow
+  var NEON_HUES = [[0.46, 0.72, 0.78], [0.76, 0.50, 0.70], [0.54, 0.74, 0.58]];   // 19a: dyed-card accents, not neon
   // Automated Harbour: a slim steel-framed tower with a stack of glass curtain-wall bands and a
   // tilted rooftop solar array — the age's signature silhouette (also SIM.BT's Solar Spire flavour).
   // Phase 18b: kept its futuristic identity but gained diorama craft — vertical panel-seam trim
@@ -738,7 +738,7 @@
   // three tints rotate through a port so a Neon Horizon skyline never reads as one repeated block.
   // Phase 18b: corner panel-seam trim lines + a second short antenna cluster.
   function neonTower(grit, flat, x, z, rng) {
-    var h = 32 + rng() * 16, accent = pick(NEON_HUES, rng), glass = [0.28, 0.34, 0.48];
+    var h = 32 + rng() * 16, accent = pick(NEON_HUES, rng), glass = [0.30, 0.35, 0.45];
     grit.bbox(x, h * 0.42, z, 7.6, h * 0.84, 7.6, glass, 0, 0.5, 3);
     grit.bbox(x, h * 0.94, z, 5.2, h * 0.20, 5.2, mul(glass, 1.15), 0, 0.5, 2);
     for (var b = 0; b < 3; b++) flat.box(x, h * (0.24 + b * 0.28), z, 7.9, 0.28, 7.9, accent, 0, 0, 0.5);
@@ -896,7 +896,7 @@
   // keeps up with the times" reads as the SAME future as the skyline behind it.
   function funnelPart(trim, x, z, base, h, r, bandC) {
     trim.cyl(x, base, z, r, h, 9, [0.14, 0.14, 0.16], 0.88);
-    trim.cyl(x, base + h * 0.78, z, r * 0.94, h * 0.22, 9, bandC || [0.62, 0.16, 0.14], 0.94);
+    trim.cyl(x, base + h * 0.78, z, r * 0.94, h * 0.22, 9, bandC || [0.58, 0.30, 0.25], 0.94);
   }
   function containerBlock(trim, x, y, z, ci) { trim.bbox(x, y, z, 2.2, 1.7, 2.1, CONT[ci % CONT.length], 0, 0.22); }
   function radarMastPart(trim, x, z, base, top, tone) {
@@ -908,7 +908,7 @@
     strutS(trim, Bm * 0.32, H * 1.0, -L * 0.40, 0, H * 2.0, -L * 0.28, 0.15, [0.55, 0.56, 0.58]);
     trim.cyl(0, H * 0.98, -L * 0.41, 0.30, 0.5, 7, [0.28, 0.29, 0.30], 0.92);
   }
-  function paddleBoxPart(trim, x, H, Bm) { trim.bbox(x, H * 0.88, 0, 1.5, H * 1.5, Bm * 0.46, [0.86, 0.20, 0.16], 0, 0.3); }
+  function paddleBoxPart(trim, x, H, Bm) { trim.bbox(x, H * 0.88, 0, 1.5, H * 1.5, Bm * 0.46, [0.68, 0.34, 0.28], 0, 0.3); }
   // strut + foil blade kept ABOVE the local waterline (draft ≈ H*0.40 — hullTint/drawShip subtracts
   // draft from the whole ship's world Y, so anything below local y≈0.4*H sits under the opaque sea
   // and simply never renders) and angled OUTBOARD past the hull's beam, so it reads as a distinct
@@ -949,7 +949,7 @@
     n = n || 5;
     for (var i = 0; i < n; i++) { var x = -Bm * 0.40 + Bm * 0.80 * (n === 1 ? 0.5 : i / (n - 1)); trim.bbox(x, y, 0, 0.55, 0.5, len, tone, 0, 0.22); }
   }
-  var STEEL = [0.60, 0.62, 0.66], WHITE_HULL = [0.90, 0.90, 0.87], SAFETY = [0.90, 0.42, 0.14], WICKER = [0.58, 0.44, 0.24];
+  var STEEL = [0.60, 0.62, 0.66], WHITE_HULL = [0.89, 0.87, 0.82], SAFETY = [0.78, 0.50, 0.30], WICKER = [0.58, 0.44, 0.24];   // 19a: paper hull, brick-orange safety
   var SHIP_SPECS = {
     dinghy: {   // tiny open boat: bench, bare mast (no standing rigging), one small sail
       L: 6.4, Bm: 2.5, H: 1.1, n: 5, bowLift: 0.45, gunwale: true, rudder: true, bench: true, rig: false,
@@ -959,20 +959,20 @@
       L: 10.5, Bm: 3.6, H: 1.6, n: 7, bowLift: 0.70, gunwale: true, rudder: true, bowspritLen: 1.9,
       masts: [{ z: -0.5, top: 9.4, boom: 4.6 }],
       sails: [{ shape: 'tri', mast: 0, base: 5.0, h: 7.2 }, { shape: 'tri', mast: 'bowsprit', base: 2.2, h: 3.4 }],
-      pennant: { c: [0.85, 0.22, 0.20] }, props: [{ k: 'barrel', x: -0.9, z: -4.2 }]
+      pennant: { c: [0.70, 0.36, 0.30] }, props: [{ k: 'barrel', x: -0.9, z: -4.2 }]
     },
     brig: {     // beamy two-master, SQUARE sails hung high on yards — the workhorse silhouette
       L: 20, Bm: 6.0, H: 2.6, n: 7, bowLift: 1.1, gunwale: true, rudder: true, bowspritLen: 2.6, cabin: true,
       masts: [{ z: 4.0, top: 14.0 }, { z: -3.2, top: 15.0 }],
       sails: [{ shape: 'square', mast: 0, base: 7.2, h: 7.6, y0: 3.4 }, { shape: 'square', mast: 1, base: 7.8, h: 8.4, y0: 3.6 }],
-      pennant: { c: [0.30, 0.34, 0.55] }, props: [{ k: 'barrel', x: 1.6, z: 0.4 }, { k: 'crate', x: -1.6, z: 0.6 }]
+      pennant: { c: [0.36, 0.40, 0.54] }, props: [{ k: 'barrel', x: 1.6, z: 0.4 }, { k: 'crate', x: -1.6, z: 0.6 }]
     },
     schooner: { // long elegant two-master, tall fore-and-aft sails + jib, gilded rail, stern lantern
-      L: 23, Bm: 5.2, H: 2.35, n: 7, bowLift: 1.05, gunwale: true, gunwaleTone: [0.82, 0.64, 0.28], rudder: true,
+      L: 23, Bm: 5.2, H: 2.35, n: 7, bowLift: 1.05, gunwale: true, gunwaleTone: [0.74, 0.60, 0.38], rudder: true,
       bowspritLen: 3.2, cabin: true, lantern: true, deckTone: [0.84, 0.80, 0.70],
       masts: [{ z: 5.0, top: 13.0, boom: 6.0 }, { z: -3.6, top: 15.5, boom: 7.0 }],
       sails: [{ shape: 'tri', mast: 0, base: 6.4, h: 9.6 }, { shape: 'tri', mast: 1, base: 7.4, h: 11.4 }, { shape: 'tri', mast: 'bowsprit', base: 2.6, h: 4.2 }],
-      pennant: { c: [0.86, 0.68, 0.24] }
+      pennant: { c: [0.76, 0.64, 0.38] }
     },
     steamer: {  // no sails: fat funnel amidships, white bridge house aft, container rows forward
       L: 25, Bm: 6.4, H: 2.9, n: 7, bowLift: 0.5, gunwale: true, gunwaleTone: [0.55, 0.56, 0.60], rudder: true,
@@ -980,7 +980,7 @@
       extra: function (trim, L2, Bm2, H2) {
         var fz = 1.2, fh = H2 * 2.2;
         trim.cyl(0, H2, fz, 0.95, fh, 10, [0.14, 0.14, 0.16], 0.88);                                     // fat funnel shaft
-        trim.cyl(0, H2 + fh * 0.80, fz, 0.90, fh * 0.20, 10, [0.62, 0.16, 0.14], 0.94);                  // red-band top
+        trim.cyl(0, H2 + fh * 0.80, fz, 0.90, fh * 0.20, 10, [0.58, 0.30, 0.25], 0.94);                  // red-band top
         trim.bbox(0, H2 * 1.55, -L2 * 0.26, Bm2 * 0.62, H2 * 1.1, L2 * 0.20, [0.90, 0.89, 0.84], 0, 0.3); // bridge house
         trim.box(0, H2 * 1.80, -L2 * 0.26 + L2 * 0.104, Bm2 * 0.48, 0.7, 0.12, [0.16, 0.22, 0.30], 0);   // bridge window band
         var ci = 0;                                                                                      // two container rows on the foredeck
@@ -1014,7 +1014,7 @@
     steam_trawler: {  // tier4: stubby steel trawler, small funnel, stern trawl gantry
       L: 14, Bm: 4.6, H: 2.0, n: 6, bowLift: 0.5, gunwale: true, gunwaleTone: STEEL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
       deckTone: [0.30, 0.31, 0.34],
-      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, L2 * 0.06, H2, H2 * 1.5, 0.55, [0.62, 0.16, 0.14]); sternCraneRig(trim, L2, Bm2, H2); barrelProp(trim, Bm2 * 0.32, L2 * 0.3, H2); }
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, L2 * 0.06, H2, H2 * 1.5, 0.55, [0.58, 0.30, 0.25]); sternCraneRig(trim, L2, Bm2, H2); barrelProp(trim, Bm2 * 0.32, L2 * 0.3, H2); }
     },
     modern_trawler: {  // tier5: bigger steel trawler, twin outrigger trawl booms + radar mast
       L: 17, Bm: 5.4, H: 2.3, n: 6, bowLift: 0.4, gunwale: true, gunwaleTone: STEEL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
@@ -1046,27 +1046,27 @@
       L: 13, Bm: 5.0, H: 2.2, n: 6, bowLift: 0.9, gunwale: true, rudder: true, cabin: true, deckTone: PLANK,
       masts: [{ z: 0, top: 11.0 }],
       sails: [{ shape: 'square', mast: 0, base: 6.5, h: 6.0, y0: 3.0 }],
-      pennant: { c: [0.75, 0.18, 0.16] },
+      pennant: { c: [0.64, 0.34, 0.28] },
       extra: function (trim, L2, Bm2, H2) { trim.bbox(0, H2 * 1.5, L2 * 0.40, Bm2 * 0.55, H2 * 0.6, L2 * 0.14, WOOD_LIGHT, 0, 0.2); }
     },
     // brig = tier2 (existing)
     clipper: {  // tier3: tall three-masted fast trader, lots of canvas, sharp sleek hull
-      L: 26, Bm: 5.6, H: 2.5, n: 7, bowLift: 1.3, gunwale: true, gunwaleTone: [0.80, 0.62, 0.24], rudder: true,
+      L: 26, Bm: 5.6, H: 2.5, n: 7, bowLift: 1.3, gunwale: true, gunwaleTone: [0.72, 0.58, 0.36], rudder: true,
       bowspritLen: 3.6, cabin: true, deckTone: [0.72, 0.62, 0.46],
       masts: [{ z: 6.5, top: 16.0, boom: 5.4 }, { z: 0, top: 18.0, boom: 6.2 }, { z: -6.5, top: 15.6, boom: 5.2 }],
       sails: [{ shape: 'tri', mast: 0, base: 6.0, h: 9.0 }, { shape: 'tri', mast: 1, base: 6.6, h: 10.4 }, { shape: 'tri', mast: 2, base: 5.6, h: 8.4 }, { shape: 'tri', mast: 'bowsprit', base: 2.6, h: 4.0 }],
-      pennant: { c: [0.85, 0.68, 0.22] }
+      pennant: { c: [0.76, 0.64, 0.38] }
     },
     paddle_steamer: {  // tier4: white coastal steamer, side paddle boxes, single tall funnel
       L: 20, Bm: 6.2, H: 2.4, n: 6, bowLift: 0.5, gunwale: true, gunwaleTone: WHITE_HULL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
       deckTone: [0.80, 0.78, 0.72],
-      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.4, H2, H2 * 2.0, 0.75, [0.85, 0.20, 0.16]); paddleBoxPart(trim, Bm2 * 0.62, H2, Bm2); paddleBoxPart(trim, -Bm2 * 0.62, H2, Bm2); }
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.4, H2, H2 * 2.0, 0.75, [0.68, 0.34, 0.28]); paddleBoxPart(trim, Bm2 * 0.62, H2, Bm2); paddleBoxPart(trim, -Bm2 * 0.62, H2, Bm2); }
     },
     // steamer = tier5 (existing, "Steam Freighter")
     container_ship: {  // tier6: long modern boxship, three container rows stacked high, aft funnel
       L: 30, Bm: 7.5, H: 3.1, n: 7, bowLift: 0.4, gunwale: true, gunwaleTone: STEEL, rudder: true, deckTone: [0.20, 0.21, 0.24],
       extra: function (trim, L2, Bm2, H2) {
-        funnelPart(trim, 0, -L2 * 0.40, H2, H2 * 1.6, 0.85, [0.20, 0.40, 0.75]);
+        funnelPart(trim, 0, -L2 * 0.40, H2, H2 * 1.6, 0.85, [0.34, 0.44, 0.58]);
         trim.bbox(0, H2 * 1.55, -L2 * 0.40, Bm2 * 0.60, H2 * 1.0, L2 * 0.14, WHITE_HULL, 0, 0.25);
         var ci = 0; for (var cz = -L2 * 0.24; cz <= L2 * 0.42; cz += 3.4) { for (var row = -1; row <= 1; row++) { var stk = 2 + (ci + row + 3) % 3; for (var r = 0; r < stk; r++) containerBlock(trim, row * 2.4, H2 * 1.30 + r * 1.9, cz, ci + r); } ci++; }
       }
@@ -1090,19 +1090,19 @@
       L: 13, Bm: 4.4, H: 2.1, n: 6, bowLift: 0.8, gunwale: true, rudder: true, cabin: true, bowspritLen: 1.8, deckTone: PLANK,
       masts: [{ z: 3.0, top: 10.0 }, { z: -3.2, top: 11.0 }],
       sails: [{ shape: 'tri', mast: 0, base: 4.6, h: 6.6 }, { shape: 'tri', mast: 1, base: 5.2, h: 7.4 }, { shape: 'tri', mast: 'bowsprit', base: 2.0, h: 3.2 }],
-      pennant: { c: [0.75, 0.20, 0.18] }
+      pennant: { c: [0.64, 0.34, 0.28] }
     },
     // schooner = tier2 (existing)
     barque: {  // tier3: three-masted tall ship, mixed rig — square fore/main, fore-and-aft mizzen
       L: 24, Bm: 5.8, H: 2.6, n: 7, bowLift: 1.0, gunwale: true, rudder: true, bowspritLen: 3.0, cabin: true, deckTone: [0.68, 0.58, 0.42],
       masts: [{ z: 6.0, top: 15.0 }, { z: 0, top: 16.0 }, { z: -6.0, top: 13.0, boom: 5.0 }],
       sails: [{ shape: 'square', mast: 0, base: 6.6, h: 6.6, y0: 3.2 }, { shape: 'square', mast: 1, base: 7.2, h: 7.4, y0: 3.4 }, { shape: 'tri', mast: 2, base: 5.4, h: 6.8 }, { shape: 'tri', mast: 'bowsprit', base: 2.4, h: 3.8 }],
-      pennant: { c: [0.30, 0.34, 0.55] }
+      pennant: { c: [0.36, 0.40, 0.54] }
     },
     steam_yacht: {  // tier4: elegant white private steamer, thin funnel, stern awning, no sails
-      L: 16, Bm: 4.0, H: 2.0, n: 6, bowLift: 0.9, gunwale: true, gunwaleTone: [0.80, 0.66, 0.30], rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      L: 16, Bm: 4.0, H: 2.0, n: 6, bowLift: 0.9, gunwale: true, gunwaleTone: [0.72, 0.60, 0.38], rudder: true, cabin: true, cabinTone: WHITE_HULL,
       deckTone: [0.82, 0.80, 0.74],
-      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.2, H2, H2 * 1.9, 0.45, [0.16, 0.16, 0.18]); trim.box(0, H2 * 1.9, -L2 * 0.32, Bm2 * 0.5, 0.10, L2 * 0.16, [0.85, 0.30, 0.28], 0, 0.1); }
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.2, H2, H2 * 1.9, 0.45, [0.16, 0.16, 0.18]); trim.box(0, H2 * 1.9, -L2 * 0.32, Bm2 * 0.5, 0.10, L2 * 0.16, [0.70, 0.42, 0.36], 0, 0.1); }
     },
     research_vessel: {  // tier5: modern boxy research ship, radar lattice mast, stern A-frame crane
       L: 19, Bm: 5.6, H: 2.5, n: 6, bowLift: 0.35, gunwale: true, gunwaleTone: SAFETY, rudder: true, cabin: true, cabinTone: WHITE_HULL,
@@ -1133,7 +1133,7 @@
   // — no cannons, turrets or missiles anywhere in the kit, only stylised deck fixtures (a signal
   // lamp, a ram-bow spur, funnels, a bridge tower, two tiny hovering drone "satellites" baked into
   // the futuristic capstone's own trim mesh).
-  var NAVY_BLUE = [0.10, 0.16, 0.32], NAVY_TRIM = [0.14, 0.22, 0.42], GOLD_TRIM = [0.85, 0.68, 0.26];
+  var NAVY_BLUE = [0.18, 0.22, 0.34], NAVY_TRIM = [0.24, 0.28, 0.42], GOLD_TRIM = [0.76, 0.64, 0.38];   // 19a: denim + matte brass
   // a painted horizontal band around the hull at a given height fraction (y, 0=waterline..1=deck) —
   // reuses the SAME hullW/hullLift profile every hull ring samples, so the stripe always hugs the
   // real silhouette instead of floating off a straight-line approximation.
