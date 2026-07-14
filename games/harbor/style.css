@@ -381,22 +381,32 @@ html, body {
 #welcomemodal .wm-btn { width: 100%; padding: 13px; border: 0; border-radius: 13px; font-family: 'Lilita', cursive; font-weight: 400; font-size: 18px; letter-spacing: .02em; color: #20140a; background: linear-gradient(180deg, #ffd98a, var(--brass)); cursor: pointer; box-shadow: 0 6px 22px rgba(242,179,94,.35); }
 
 /* manage panel (compact bottom sheet) */
-#managepanel, #settingspanel, #exppanel {
+#managepanel, #settingspanel, #exppanel, #registrypanel {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(52px + env(safe-area-inset-bottom));
   display: none; flex-direction: column; gap: 4px; width: min(330px, calc(100% - 16px)); max-height: 44%;
   overflow-y: auto; z-index: 9; background: rgba(8,18,24,.93); border: 1px solid rgba(255,255,255,.16);
   border-radius: 12px; padding: 8px 10px; backdrop-filter: blur(8px);
 }
-#managepanel.show, #settingspanel.show, #exppanel.show { display: flex; }
+#managepanel.show, #settingspanel.show, #exppanel.show, #registrypanel.show { display: flex; }
 /* wide screens: dock the sheets to the right so the port (and the building you just
    bought) stays visible while you shop — mobile keeps the thumb-reachable bottom sheet */
 @media (min-width: 700px) {
-  #managepanel, #settingspanel, #exppanel {
+  #managepanel, #settingspanel, #exppanel, #registrypanel {
     left: auto; right: 12px; transform: none;
     bottom: calc(56px + env(safe-area-inset-bottom));
     width: 340px; max-height: min(74vh, 660px);
   }
 }
+/* Phase 17b: Harbour Registry — one card per role, a real mesh portrait (canvas, painted by
+   paintShipPortrait in game.js) beside the name/age/yield + Commission button. */
+#registrybtn { border-color: rgba(124,224,214,.5); }
+.reg-card { display: flex; align-items: center; gap: 9px; padding: 6px; border-radius: 10px; background: rgba(255,255,255,.04); }
+.reg-portrait { width: 64px; height: 64px; border-radius: 8px; background: rgba(4,10,14,.6); flex: 0 0 auto; }
+.reg-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.reg-name { font-family: 'Lilita', cursive; font-weight: 400; font-size: 14px; color: var(--text); }
+.reg-age { font-family: 'Fredoka', sans-serif; font-size: 10px; color: var(--muted); }
+.reg-max { font-family: 'Fredoka', sans-serif; font-size: 10.5px; font-weight: 800; color: #8ef0a8; }
+.mp-item.reg-buy { grid-column: unset; display: block; width: 100%; text-align: left; font-size: 11px; font-weight: 800; color: var(--brass); background: rgba(214,178,94,.14); border-color: rgba(214,178,94,.4); padding: 7px 10px; }
 .ex-slots { margin-left: auto; margin-right: 8px; font-family: 'Fredoka',sans-serif; font-size: 10px; font-weight: 800; color: var(--teal); }
 .mp-item.ex-go { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; background: rgba(124,224,214,.08); border-color: rgba(124,224,214,.24); }
 .mp-item.ex-go .mi-n { flex: 1; }

@@ -155,27 +155,93 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('fleet: empty baseline', await page.evaluate(() => { var f = window.__harbor.fleet(); return f.expedition === 0 && f.route === 0 && f.rival === 0; }));
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.startVoyage('reef'); });
   ok('fleet: expedition ship at sea while voyage active', await page.evaluate(() => window.__harbor.fleet().expedition === 1));
-  // Phase 16a SHIPYARD: expedition kind maps to the schooner class while the voyage is at sea
-  ok('16a fleet: expedition ships map to the schooner class', await page.evaluate(() => window.__harbor.fleet().expClass === 'schooner'));
+  // Phase 17b: expedition kind maps to the expedition-LADDER class at the OWNED tier (supersedes
+  // 16a's fixed 'schooner') — tier0 (no purchase yet) is 'outrigger'; setting the raw tier to 2
+  // (Registry purchases already covered end-to-end by sim.test.js's fleetRegistry* sections) swaps
+  // the sailing ship to 'schooner', the same class 16a always showed.
+  ok('17b fleet: expedition ships default to the tier0 ladder class (outrigger)', await page.evaluate(() => window.__harbor.fleet().expClass === 'outrigger'));
+  await page.evaluate(() => { window.HARBOR_SIM.raw().fleetTech.expedition = 2; });
+  ok('17b fleet: expedition ships map to schooner once tier2 is owned', await page.evaluate(() => window.__harbor.fleet().expClass === 'schooner'));
   await page.evaluate(() => { window.HARBOR_SIM.raw().voyages[0].endsAt = Date.now() - 1; var v = window.__harbor.voyages().active[0]; window.__harbor.collectVoyage(v.seq); });
   ok('fleet: expedition ship gone after collect', await page.evaluate(() => window.__harbor.fleet().expedition === 0));
   // living fleet: a route touching the active port spawns a shuttling cargo ship
   await page.evaluate(() => { var S = window.HARBOR_SIM; S.foundPort('tropical'); S.setActive('green'); S.raw().money = 1e6; S.addRoute('green', 'tropical', 'fish'); });
   ok('fleet: cargo ship shuttles the active-port route', await page.evaluate(() => window.__harbor.fleet().route === 1));
-  // Phase 16a SHIPYARD: the route freighter's class is era-gated — sail (brig) before the
-  // Industrial Port era, funnel (steamer) from era 2 on. Era is captured from the SIM (the
-  // authority — an earlier block set it via SIM.setEra, which game.js's own era var hasn't
-  // synced yet) and restored through __harbor.setEra so both stay consistent for the 15c
-  // assertions that follow (they rely on era 4 keeping Mountain Fjord's unlockEra(1) cleared).
-  const f16 = await page.evaluate(() => {
-    var H = window.__harbor, out = { era0: window.HARBOR_SIM.raw().era };
-    H.setEra(1); out.pre = H.fleet().routeClass;
-    H.setEra(2); out.post = H.fleet().routeClass;
-    H.setEra(out.era0);
+  // Phase 17b: the route freighter's class now follows the OWNED trade-fleet tier (Registry
+  // purchases) — supersedes 16a's era>=2 auto-swap to brig/steamer. Setting raw fleetTech.trade
+  // directly (not through __harbor.setEra) isolates the DISPLAY mapping from both era AND the
+  // purchase economy, so this is a no-op on era — nothing downstream needs restoring.
+  const f17 = await page.evaluate(() => {
+    var H = window.__harbor, S = window.HARBOR_SIM.raw(), tierBefore = S.fleetTech.trade, out = {};
+    S.fleetTech.trade = 0; out.tier0 = H.fleet().routeClass;
+    S.fleetTech.trade = 2; out.tier2 = H.fleet().routeClass;
+    S.fleetTech.trade = 5; out.tier5 = H.fleet().routeClass;
+    S.fleetTech.trade = tierBefore;
     return out;
   });
-  ok('16a fleet: route ships sail as brigs pre-industrial and steamers from era 2 (era restored)',
-    f16.pre === 'brig' && f16.post === 'steamer' && await page.evaluate(() => window.HARBOR_SIM.raw().era) === f16.era0);
+  ok('17b fleet: route ships sail the OWNED trade tier (log_barge@0, brig@2, steamer@5)',
+    f17.tier0 === 'log_barge' && f17.tier2 === 'brig' && f17.tier5 === 'steamer');
+
+  // ---- Phase 17b: the Harbour Registry panel — commission fleet-tier upgrades ----
+  const errsBeforeReg = errs.length;
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(4); window.HARBOR_SIM.raw().money = 1e7; });
+  await page.evaluate(() => window.__harbor.forceHUD());
+  const regBtnVisible = await page.evaluate(() => document.getElementById('registrybtn').style.display !== 'none');
+  ok('17b registry: era>=1 reveals the "🚢 Registry" action-bar button', regBtnVisible);
+  await page.evaluate(() => window.__harbor.openRegistry());
+  await sleep(150);
+  const reg1 = await page.evaluate(() => ({
+    shown: document.getElementById('registrypanel').classList.contains('show'),
+    cards: document.querySelectorAll('#registrypanel .reg-card').length,
+    portraits: document.querySelectorAll('#registrypanel canvas.reg-portrait').length,
+    buyBtns: document.querySelectorAll('#registrypanel [data-buy]').length
+  }));
+  ok('17b registry: panel renders 3 role cards, each with a mesh portrait + a Commission button (flush with cash + era4)',
+    reg1.shown && reg1.cards === 3 && reg1.portraits === 3 && reg1.buyBtns === 3);
+  // ghosted "Need £X" state: broke, but era-eligible for tier1
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 0; window.__harbor.openRegistry(); });
+  await sleep(120);
+  const reg2 = await page.evaluate(() => {
+    var btn = document.querySelector('#registrypanel [data-buy="fishing"]');
+    return { text: btn ? btn.textContent : null, ghosted: btn ? btn.classList.contains('ghosted') : null };
+  });
+  ok('17b registry: broke → ghosted "Need £X" Commission button', /^Need £/.test(reg2.text || '') && reg2.ghosted === true);
+  // ghosted "Requires [Age]" state: flush with cash, but the NEXT tier needs a higher era than owned
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e7; window.HARBOR_SIM.setEra(0); window.__harbor.openRegistry(); });
+  await sleep(120);
+  const reg3 = await page.evaluate(() => {
+    var btn = document.querySelector('#registrypanel [data-buy="fishing"]');
+    return { text: btn ? btn.textContent : null, ghosted: btn ? btn.classList.contains('ghosted') : null };
+  });
+  ok('17b registry: era0 + flush with cash → ghosted "Requires [Age]" Commission button (tier1 needs era>=1)',
+    /^Requires /.test(reg3.text || '') && reg3.ghosted === true);
+  // affordable + era-eligible → real Commission button; clicking it charges once, bumps the tier,
+  // repaints the portrait to the new class, and latches the "First Commission" achievement
+  await page.evaluate(() => {
+    window.HARBOR_SIM.setEra(4); window.HARBOR_SIM.raw().money = 1e7;
+    var a = window.Retention.get('harbor', 'ach', {}); delete a.ship1; window.Retention.set('harbor', 'ach', a);   // clear ONLY ship1 — other achievements earned earlier in this run must survive
+    window.__harbor.openRegistry();
+  });
+  await sleep(120);
+  const preBuy = await page.evaluate(() => ({ tier: window.__harbor.fleetTier('fishing'), money: window.HARBOR_SIM.raw().money }));
+  await page.evaluate(() => { var b = document.querySelector('#registrypanel [data-buy="fishing"]'); if (b) b.click(); });
+  await sleep(150);
+  const postBuy = await page.evaluate(() => ({
+    tier: window.__harbor.fleetTier('fishing'), money: window.HARBOR_SIM.raw().money,
+    ach: (window.Retention.get('harbor', 'ach', {}) || {}).ship1 === 1,
+    cardName: document.querySelector('#registrypanel .reg-name') ? document.querySelector('#registrypanel .reg-name').textContent : null
+  }));
+  ok('17b registry: Commission charges exactly the tier cost and bumps the tier by 1',
+    postBuy.tier === preBuy.tier + 1 && Math.abs(postBuy.money - (preBuy.money - 120)) < 50);   // tolerance: the live economy still ticks a few £ during the 150ms settle window
+  ok('17b registry: first-ever commission latches the "First Commission" achievement', postBuy.ach === true);
+  ok('17b registry: the fishing card repaints to the newly-commissioned class name (Coracle)', postBuy.cardName === 'Coracle');
+  // max out a ladder → "Fleet complete ✓" replaces the Commission button
+  await page.evaluate(() => { for (var i = 0; i < 10; i++) { window.HARBOR_SIM.setEra(7); window.HARBOR_SIM.raw().money = 1e7; window.__harbor.buyShip('expedition'); } window.__harbor.openRegistry(); });
+  await sleep(120);
+  const reg4 = await page.evaluate(() => ({ tier: window.__harbor.fleetTier('expedition'), hasMax: !!document.querySelector('#registrypanel .reg-max') }));
+  ok('17b registry: maxing a ladder (tier7) shows "Fleet complete ✓" instead of a Commission button', reg4.tier === 7 && reg4.hasMax);
+  await page.evaluate(() => window.__harbor.closeRegistry());
+  ok('17b registry: panel flows produced zero new console/GL errors', errs.length === errsBeforeReg);
 
   // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
   await page.evaluate(() => window.__harbor.openTrade());
@@ -436,13 +502,21 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   const gs14 = await page.evaluate(() => window.__harbor.geomStats());
   ok('14a: geomStats still within the existing vertex budget (no geometry cost added)', gs14 && gs14.verts > 10000 && gs14.verts < 250000);
 
-  // Phase 16a: SHIPYARD — six real ship classes (models.js HARBOR_MODELS.SHIPYARD), each a
-  // static hull/trim/sails mesh set built once at boot. Budget: every class must beat the old
-  // single-primitive ship (78 verts: 12-gon hull 61 + tri sail 17) yet stay under a deliberate
-  // 4000-vert class ceiling (actual max is corsair ~1302 — headroom is for the planned future
-  // class ladders, not slack for this six). Render soak drives every class through the
-  // test-only debugShip hook so each hull+trim+sails set actually hits the GPU.
+  // Phase 16a/17b: SHIPYARD — 25 real ship classes across three fleet-tier ladders (models.js
+  // HARBOR_MODELS.SHIPYARD), each a hull/trim/sails mesh set. Budget: every class must beat the
+  // old single-primitive ship (78 verts: 12-gon hull 61 + tri sail 17) yet stay under a deliberate
+  // 4000-vert class ceiling (actual max across all 25 is container_ship ~3214 — see
+  // shipMatrixVertBudget in sim.test.js for the full 25-class sweep). Phase 17b made builds LAZY
+  // (getShip() in game.js) — a class only uploads to the GPU on first real use — so this render
+  // soak drives the original six through debugShip FIRST (forcing their lazy build) before reading
+  // shipStats(), instead of relying on ambient/fleet traffic to have already shown them (ambient
+  // fishing traffic now follows the owned fleet tier, which defaults to 'raft' on a fresh save).
   const errsBefore16a = errs.length;
+  for (const c of ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair']) {
+    await page.evaluate(cc => window.__harbor.debugShip(cc), c); await sleep(180);
+  }
+  await page.evaluate(() => window.__harbor.debugShip(null));
+  ok('16a shipyard: all six classes render several frames with zero GL warnings/errors', errs.length === errsBefore16a);
   const ss16 = await page.evaluate(() => window.__harbor.shipStats());
   ok('16a shipyard: all six classes build bigger than the old ship and under the 4000-vert class budget',
     ss16 && ss16.oldShipBaseline === 78 && ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'].every(c => {
@@ -454,14 +528,25 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
       SY.CLASSES.forEach(c => { n[c] = SY.build(c).sails.length; });
       return n.dinghy === 1 && n.sloop === 2 && n.brig === 2 && n.schooner === 3 && n.steamer === 0 && n.corsair === 2;
     }));
-  for (const c of ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair']) {
-    await page.evaluate(cc => window.__harbor.debugShip(cc), c); await sleep(180);
-  }
-  await page.evaluate(() => window.__harbor.debugShip(null));
-  ok('16a shipyard: all six classes render several frames with zero GL warnings/errors', errs.length === errsBefore16a);
   await page.evaluate(() => { window.__harbor.debugShip('brig'); window.__harbor.setPost(false); }); await sleep(350);
   ok('16a shipyard: legacy quality path (post off) renders the new fleet clean', errs.length === errsBefore16a);
   await page.evaluate(() => { window.__harbor.debugShip(null); window.__harbor.setPost(true); });
+
+  // Phase 17b: lazy build — a class not yet shown must be absent from shipStats(), and a fresh
+  // save's ambient fishing traffic must default to the tier0 class (raft), not the old fixed
+  // dinghy/sloop mix (confirms ambientBoatClass() is reading the live fishing tier every frame).
+  ok('17b lazy: an unseen class is absent from shipStats() until first drawn', await page.evaluate(() => {
+    var s = window.__harbor.shipStats(); return s && !s.classes.hover_freighter;
+  }));
+  await page.evaluate(() => window.__harbor.debugShip('hover_freighter')); await sleep(150);
+  ok('17b lazy: debugShip() force-builds a never-seen class on demand', await page.evaluate(() => {
+    var s = window.__harbor.shipStats(); return s && s.classes.hover_freighter && s.classes.hover_freighter.total > 0 && s.classes.hover_freighter.total < 4000;
+  }));
+  await page.evaluate(() => window.__harbor.debugShip(null));
+  ok('17b lazy: a fresh save\'s ambient fishing traffic defaults to the tier0 class (raft)', await page.evaluate(() => {
+    window.HARBOR_SIM.raw().fleetTech.fishing = 0;
+    return window.__harbor.ladderClass('fishing', window.__harbor.fleetTier('fishing')) === 'raft';
+  }));
   ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
     await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
 
@@ -1067,6 +1152,55 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     return ['container_terminal', 'drone_bay', 'robo_crane', 'logistics_hub', 'solar_spire', 'holo_market', 'fusion_dock', 'sky_beacon'].every(t => (c[t] || 0) >= 1);
   }));
   ok('17a era7: rendering the Neon Horizon panorama produced zero new console/GL errors', errs.length === errsBefore17a);
+
+  // Phase 17b: tip rule "fleetBehind" — fires when any fleet ladder sits 2+ ages behind the
+  // current era. Run LAST (after every other test that depends on this run's accumulated state —
+  // ports, unlocks, achievements) on a completely fresh save (localStorage cleared + reload) so no
+  // leftover state (legacy balance, crates, contracts, port focus…) can outrank it — fleetBehind is
+  // deliberately the LOWEST-priority rule in TIPS.
+  const errsBeforeFleetTip = errs.length;
+  await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  await page.evaluate(() => {
+    var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click();
+    var wm = document.getElementById('welcomemodal'); if (wm) wm.remove();   // tipsBlocked() checks mere DOM presence — the click handler's own removal is on a 320ms exit-animation timeout, too slow for this synchronous setup
+    window.__harbor.autoFound();
+    window.__harbor.pause(true);
+    window.__harbor.resetAnnounce();   // founding a fresh port queues the "Expeditions" announce card — tips correctly refuse to fire over it, so clear it (same pattern the 15d block uses for the rival modal)
+    // belt-and-braces: a stray save() from the PRE-reload page can land in localStorage in the
+    // narrow window between localStorage.clear() and the navigation actually taking effect —
+    // force-zero the two Retention counters with their own higher-priority tip rules so a race
+    // like that can't outrank fleetBehind (era/money below are the load-bearing state either way).
+    window.Retention.set('harbor', 'legacyBal', 0); window.Retention.set('harbor', 'crates', 0);
+    var raw = window.HARBOR_SIM.raw();
+    raw.era = 3;      // fresh save → every fleet ladder is still at tier0 → 3 ages behind (past the 2+ threshold)
+    raw.money = 50;   // low enough that no higher-priority rule (eraReady/voyageIdle/idleGold/storageFull/unchartedReady) can also be true
+    window.__harbor.resetTipRateLimit();
+  });
+  const tipIntro = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('17b tips: fresh save fires the once-only "intro" tip first, as always', tipIntro.lastId === 'intro');
+  await page.evaluate(() => { window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit(); });
+  const tipFleet = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('17b tips: 2+ ages behind on every ladder fires "fleetBehind" (all higher-priority rules suppressed)',
+    tipFleet.lastId === 'fleetBehind' && /falling behind the times/i.test(tipFleet.text) && /Registry/.test(tipFleet.text));
+  // buying just ONE ladder up to keep pace must not clear the rule while the OTHER two are still behind
+  await page.evaluate(() => { window.HARBOR_SIM.raw().fleetTech.fishing = 3; window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit(); });
+  const tipFleet2 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  ok('17b tips: still fires while trade/expedition remain 2+ ages behind, even after fixing fishing', tipFleet2.lastId === 'fleetBehind');
+  // catching every ladder up clears the rule entirely. Every OTHER rule is still deliberately
+  // suppressed by this isolated state (see the setup above), so the correct signal isn't "some
+  // other rule's id now shows" (tips().lastId sticks at the last rule that actually fired if
+  // nothing new matches this round) — it's that the toast stays hidden (nothing fired) AND the
+  // underlying fleetBehind predicate itself now reads false straight from the sim state.
+  await page.evaluate(() => { var raw = window.HARBOR_SIM.raw(); raw.fleetTech.trade = 3; raw.fleetTech.expedition = 3; window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit(); });
+  const tipFleet3 = await page.evaluate(() => window.__harbor.forceTipCheck());
+  const fleetCaughtUp = await page.evaluate(() => { var s = window.HARBOR_SIM.state(); return ['fishing', 'trade', 'expedition'].every(r => (s.era - s.fleet[r].tier) < 2); });
+  ok('17b tips: modernising every ladder clears the fleetBehind condition — no rule fires, toast stays hidden',
+    fleetCaughtUp && tipFleet3.showing === false);
+  ok('17b tips: fleetBehind flows produced zero new console/GL errors', errs.length === errsBeforeFleetTip);
+  await page.evaluate(() => window.__harbor.pause(false));
 
   // live ticking after everything — no late errors
   await sleep(2000);

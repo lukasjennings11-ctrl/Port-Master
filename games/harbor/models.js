@@ -444,6 +444,73 @@
     var T = new g.HGL.Builder(); T.cyl(mx, deckY + h * 0.02, mz - halfBase * 0.55, halfBase * 0.45, h * 0.34, 3, [1, 1, 1], 0.4);
     B.add(squashX(T, mx, 0.38));
   }
+
+  // ---------------- Phase 17b: FLEET REGISTRY — three 8-tier ladders (fishing/trade/expedition)
+  // layered on the SAME assembleShip()/SPEC-table kit as 16a's six classes (three of which are
+  // reused in place as ladder rungs: dinghy=fishing2, sloop=fishing3, brig=trade2, steamer=trade5,
+  // schooner=expedition2 — corsair stays the rival's own thing, off every ladder). Sail-era rungs
+  // differ by proportion + rig (mast count, tri/square/mixed sails); powered/futuristic rungs differ
+  // via the `extra` hook below — funnels, paddle boxes, containers, radar, hydrofoil struts, solar
+  // decking, glow trim — a handful of small shared part-builders, never bespoke per-class geometry.
+  // Futuristic tiers deliberately borrow the 17a Automated Harbour/Neon Horizon palette (GLASS_STEEL/
+  // GLASS_PANE/SOLAR_BLUE/NEON_HUES, defined earlier in this file) so "the harbourmaster's fleet
+  // keeps up with the times" reads as the SAME future as the skyline behind it.
+  function funnelPart(trim, x, z, base, h, r, bandC) {
+    trim.cyl(x, base, z, r, h, 9, [0.14, 0.14, 0.16], 0.88);
+    trim.cyl(x, base + h * 0.78, z, r * 0.94, h * 0.22, 9, bandC || [0.62, 0.16, 0.14], 0.94);
+  }
+  function containerBlock(trim, x, y, z, ci) { trim.bbox(x, y, z, 2.2, 1.7, 2.1, CONT[ci % CONT.length], 0, 0.22); }
+  function radarMastPart(trim, x, z, base, top, tone) {
+    trim.cyl(x, base, z, 0.09, top - base, 6, tone || [0.55, 0.57, 0.60], 0.9);
+    trim.box(x, top, z, 1.1, 0.42, 0.10, tone || [0.55, 0.57, 0.60], 0.4);
+  }
+  function sternCraneRig(trim, L, Bm, H) {
+    strutS(trim, -Bm * 0.32, H * 1.0, -L * 0.40, 0, H * 2.0, -L * 0.28, 0.15, [0.55, 0.56, 0.58]);
+    strutS(trim, Bm * 0.32, H * 1.0, -L * 0.40, 0, H * 2.0, -L * 0.28, 0.15, [0.55, 0.56, 0.58]);
+    trim.cyl(0, H * 0.98, -L * 0.41, 0.30, 0.5, 7, [0.28, 0.29, 0.30], 0.92);
+  }
+  function paddleBoxPart(trim, x, H, Bm) { trim.bbox(x, H * 0.88, 0, 1.5, H * 1.5, Bm * 0.46, [0.86, 0.20, 0.16], 0, 0.3); }
+  // strut + foil blade kept ABOVE the local waterline (draft ≈ H*0.40 — hullTint/drawShip subtracts
+  // draft from the whole ship's world Y, so anything below local y≈0.4*H sits under the opaque sea
+  // and simply never renders) and angled OUTBOARD past the hull's beam, so it reads as a distinct
+  // silhouette poking out to the side instead of a "strut" that vanishes straight down underwater.
+  function hydrofoilStruts(trim, Bm, H, zc) {
+    [-1, 1].forEach(function (s) {
+      strutS(trim, s * Bm * 0.30, H * 0.82, zc, s * Bm * 1.05, H * 0.44, zc, 0.13, [0.60, 0.62, 0.66]);
+      trim.box(s * Bm * 1.05, H * 0.42, zc, 1.5, 0.12, 0.46, [0.52, 0.54, 0.58], 0);
+    });
+  }
+  function solarDeckPart(trim, Bm, H, z0, z1, tone) {
+    for (var z = z0; z <= z1; z += 2.3) trim.box(0, H * 1.02, z, Bm * 0.74, 0.08, 2.0, tone || SOLAR_BLUE, 0, 0, 0.1);
+  }
+  function glowTrimPart(trim, L, Bm, H, n, bowLift, tone) {
+    n = n || 6;
+    for (var i = 0; i < n; i++) {
+      var t = (i + 0.5) / n, w = hullW(Bm, t), lift = hullLift(bowLift, t), z = -L / 2 + L * (i + 0.5) / n, len = L / n * 1.05;
+      trim.box(w / 2 + 0.03, H * 0.5 + lift, z, 0.08, 0.10, len, tone || NEON_HUES[0], 0);
+      trim.box(-w / 2 - 0.03, H * 0.5 + lift, z, 0.08, 0.10, len, tone || NEON_HUES[0], 0);
+    }
+  }
+  // a small tapered pontoon merged in at a beam offset — catamaran/trimaran outer hulls. Real baked
+  // colour (not tint-ready): expedition-role ships already draw with a fixed EXP_HULL tint, so a
+  // pontoon's own tone reads consistently without needing to match the runtime uBase.
+  function pontoonHullPart(trim, len, bm, h, x, tone) {
+    var mini = new g.HGL.Builder(), n = 4;
+    for (var i = 0; i < n; i++) {
+      var t = (i + 0.5) / n, w = bm * (1 - Math.pow(Math.abs(t - 0.5) * 2, 1.7)) + bm * 0.16, segZ = -len / 2 + len * (i + 0.5) / n, segLen = len / n * 1.08;
+      mini.bbox(0, h / 2, segZ, segLen, h, w, tone, 0, Math.min(segLen, w) * 0.2);
+    }
+    trim.addXform(mini, x, 0, 0, 0);
+  }
+  // a row of parallel "bound log" boxes running FORE-AFT (long axis on Z, the ship's length),
+  // offset across the beam (X) — log_barge cargo + raft hull texture. bbox's sx is the BEAM
+  // dimension here and sz the fore-aft length, so each log lies along the hull instead of
+  // crossing it corner-to-corner.
+  function logBundlePart(trim, Bm, y, len, tone, n) {
+    n = n || 5;
+    for (var i = 0; i < n; i++) { var x = -Bm * 0.40 + Bm * 0.80 * (n === 1 ? 0.5 : i / (n - 1)); trim.bbox(x, y, 0, 0.55, 0.5, len, tone, 0, 0.22); }
+  }
+  var STEEL = [0.60, 0.62, 0.66], WHITE_HULL = [0.90, 0.90, 0.87], SAFETY = [0.90, 0.42, 0.14], WICKER = [0.58, 0.44, 0.24];
   var SHIP_SPECS = {
     dinghy: {   // tiny open boat: bench, bare mast (no standing rigging), one small sail
       L: 6.4, Bm: 2.5, H: 1.1, n: 5, bowLift: 0.45, gunwale: true, rudder: true, bench: true, rig: false,
@@ -491,6 +558,131 @@
       masts: [{ z: 4.2, top: 13.6, boom: 6.2 }, { z: -3.0, top: 14.8, boom: 7.0 }],
       sails: [{ shape: 'tri', mast: 0, base: 7.0, h: 10.0, tatter: true }, { shape: 'tri', mast: 1, base: 7.8, h: 11.0, tatter: true }],
       pennant: { c: [0.08, 0.08, 0.09], accent: [0.92, 0.90, 0.86] }
+    },
+
+    // ---- FISHING ladder (dinghy=tier2, sloop=tier3 already above) ------------------------------
+    raft: {     // tier0: no proper hull at all — bound logs, paddled, no mast
+      L: 5.2, Bm: 2.4, H: 0.5, n: 3, bowLift: 0.05, gunwale: false, rudder: false, rig: false,
+      deckTone: WOOD_DARK,
+      extra: function (trim, L2, Bm2, H2) { logBundlePart(trim, Bm2, H2 * 1.05, L2 * 0.94, WOOD_LIGHT, 5); trim.box(Bm2 * 0.55, H2 * 1.3, -L2 * 0.3, 0.14, 2.4, 0.14, WOOD_DARK, 0.5, 0.6); }
+    },
+    coracle: {  // tier1: tiny round wicker tub, paddled
+      L: 3.4, Bm: 3.0, H: 0.85, n: 5, bowLift: 0.10, gunwale: true, gunwaleTone: WICKER, rudder: false, rig: false,
+      deckTone: WICKER,
+      extra: function (trim, L2, Bm2, H2) { trim.box(0, H2 * 1.1, L2 * 0.1, 0.12, 2.0, 0.12, WOOD_DARK, 0.6, 0.5); }
+    },
+    // dinghy = tier2 (existing), sloop = tier3 (existing)
+    steam_trawler: {  // tier4: stubby steel trawler, small funnel, stern trawl gantry
+      L: 14, Bm: 4.6, H: 2.0, n: 6, bowLift: 0.5, gunwale: true, gunwaleTone: STEEL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      deckTone: [0.30, 0.31, 0.34],
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, L2 * 0.06, H2, H2 * 1.5, 0.55, [0.62, 0.16, 0.14]); sternCraneRig(trim, L2, Bm2, H2); barrelProp(trim, Bm2 * 0.32, L2 * 0.3, H2); }
+    },
+    modern_trawler: {  // tier5: bigger steel trawler, twin outrigger trawl booms + radar mast
+      L: 17, Bm: 5.4, H: 2.3, n: 6, bowLift: 0.4, gunwale: true, gunwaleTone: STEEL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      deckTone: [0.28, 0.29, 0.32],
+      extra: function (trim, L2, Bm2, H2) {
+        funnelPart(trim, -0.6, -L2 * 0.20, H2, H2 * 1.3, 0.42, [0.20, 0.22, 0.26]); radarMastPart(trim, 0.6, -L2 * 0.22, H2, H2 * 3.0, STEEL);
+        strutS(trim, 0, H2 * 1.4, L2 * 0.05, Bm2 * 1.3, H2 * 0.4, L2 * 0.05, 0.13, STEEL); strutS(trim, 0, H2 * 1.4, L2 * 0.05, -Bm2 * 1.3, H2 * 0.4, L2 * 0.05, 0.13, STEEL);
+        sternCraneRig(trim, L2, Bm2, H2);
+      }
+    },
+    hydrofoil_skiff: {  // tier6: sleek skiff lifted on hydrofoil struts, no mast
+      L: 9, Bm: 2.6, H: 1.0, n: 5, bowLift: 0.30, gunwale: true, gunwaleTone: GLASS_STEEL, rudder: true, rig: false,
+      deckTone: GLASS_STEEL,
+      extra: function (trim, L2, Bm2, H2) { hydrofoilStruts(trim, Bm2, H2, L2 * 0.10); hydrofoilStruts(trim, Bm2 * 0.7, H2, -L2 * 0.32); trim.bbox(0, H2 * 1.5, L2 * 0.30, 1.6, 0.9, 1.4, GLASS_PANE, 0, 0.2); }
+    },
+    solar_skimmer: {  // tier7: flat solar-decked drone skiff, glow trim, no mast/gunwale
+      L: 10, Bm: 3.6, H: 0.75, n: 5, bowLift: 0.12, gunwale: false, rudder: false, rig: false,
+      deckTone: SOLAR_BLUE,
+      extra: function (trim, L2, Bm2, H2) { solarDeckPart(trim, Bm2, H2, -L2 * 0.36, L2 * 0.36, SOLAR_BLUE); glowTrimPart(trim, L2, Bm2, H2, 5, 0.12, NEON_HUES[0]); trim.cyl(0, H2 * 0.9, -L2 * 0.46, 0.34, 0.6, 8, GLASS_STEEL, 0.85); }
+    },
+
+    // ---- TRADE ladder (brig=tier2, steamer=tier5 already above) --------------------------------
+    log_barge: {  // tier0: blunt flat barge stacked with timber, poled/towed
+      L: 16, Bm: 6.5, H: 1.1, n: 5, bowLift: 0.15, gunwale: true, gunwaleTone: WOOD_DARK, rudder: true, rig: false,
+      deckTone: WOOD_DARK,
+      extra: function (trim, L2, Bm2, H2) { logBundlePart(trim, Bm2, H2 * 1.3, L2 * 0.68, WOOD_LIGHT, 6); logBundlePart(trim, Bm2 * 0.7, H2 * 1.75, L2 * 0.5, WOOD_LIGHT, 4); }
+    },
+    cog: {  // tier1: round-bellied medieval trader, one square sail, high stern castle
+      L: 13, Bm: 5.0, H: 2.2, n: 6, bowLift: 0.9, gunwale: true, rudder: true, cabin: true, deckTone: PLANK,
+      masts: [{ z: 0, top: 11.0 }],
+      sails: [{ shape: 'square', mast: 0, base: 6.5, h: 6.0, y0: 3.0 }],
+      pennant: { c: [0.75, 0.18, 0.16] },
+      extra: function (trim, L2, Bm2, H2) { trim.bbox(0, H2 * 1.5, L2 * 0.40, Bm2 * 0.55, H2 * 0.6, L2 * 0.14, WOOD_LIGHT, 0, 0.2); }
+    },
+    // brig = tier2 (existing)
+    clipper: {  // tier3: tall three-masted fast trader, lots of canvas, sharp sleek hull
+      L: 26, Bm: 5.6, H: 2.5, n: 7, bowLift: 1.3, gunwale: true, gunwaleTone: [0.80, 0.62, 0.24], rudder: true,
+      bowspritLen: 3.6, cabin: true, deckTone: [0.72, 0.62, 0.46],
+      masts: [{ z: 6.5, top: 16.0, boom: 5.4 }, { z: 0, top: 18.0, boom: 6.2 }, { z: -6.5, top: 15.6, boom: 5.2 }],
+      sails: [{ shape: 'tri', mast: 0, base: 6.0, h: 9.0 }, { shape: 'tri', mast: 1, base: 6.6, h: 10.4 }, { shape: 'tri', mast: 2, base: 5.6, h: 8.4 }, { shape: 'tri', mast: 'bowsprit', base: 2.6, h: 4.0 }],
+      pennant: { c: [0.85, 0.68, 0.22] }
+    },
+    paddle_steamer: {  // tier4: white coastal steamer, side paddle boxes, single tall funnel
+      L: 20, Bm: 6.2, H: 2.4, n: 6, bowLift: 0.5, gunwale: true, gunwaleTone: WHITE_HULL, rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      deckTone: [0.80, 0.78, 0.72],
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.4, H2, H2 * 2.0, 0.75, [0.85, 0.20, 0.16]); paddleBoxPart(trim, Bm2 * 0.62, H2, Bm2); paddleBoxPart(trim, -Bm2 * 0.62, H2, Bm2); }
+    },
+    // steamer = tier5 (existing, "Steam Freighter")
+    container_ship: {  // tier6: long modern boxship, three container rows stacked high, aft funnel
+      L: 30, Bm: 7.5, H: 3.1, n: 7, bowLift: 0.4, gunwale: true, gunwaleTone: STEEL, rudder: true, deckTone: [0.20, 0.21, 0.24],
+      extra: function (trim, L2, Bm2, H2) {
+        funnelPart(trim, 0, -L2 * 0.40, H2, H2 * 1.6, 0.85, [0.20, 0.40, 0.75]);
+        trim.bbox(0, H2 * 1.55, -L2 * 0.40, Bm2 * 0.60, H2 * 1.0, L2 * 0.14, WHITE_HULL, 0, 0.25);
+        var ci = 0; for (var cz = -L2 * 0.24; cz <= L2 * 0.42; cz += 3.4) { for (var row = -1; row <= 1; row++) { var stk = 2 + (ci + row + 3) % 3; for (var r = 0; r < stk; r++) containerBlock(trim, row * 2.4, H2 * 1.30 + r * 1.9, cz, ci + r); } ci++; }
+      }
+    },
+    hover_freighter: {  // tier7: sleek hull, glow skirt, thruster pods, no gunwale/mast
+      L: 24, Bm: 6.8, H: 2.2, n: 6, bowLift: 0.30, gunwale: false, rudder: false, rig: false, deckTone: GLASS_STEEL,
+      extra: function (trim, L2, Bm2, H2) {
+        glowTrimPart(trim, L2, Bm2, H2, 7, 0.30, SOLAR_BLUE);
+        var ci = 0; for (var cz = -L2 * 0.2; cz <= L2 * 0.34; cz += 3.4) { trim.bbox(0, H2 * 1.35, cz, 3.2, 1.6, Bm2 * 0.58, mixc(GLASS_PANE, [1, 1, 1], 0.15), 0, 0.3); ci++; }
+        trim.cyl(Bm2 * 0.5, H2 * 0.5, -L2 * 0.46, 0.5, 0.9, 8, GLASS_STEEL, 0.8); trim.cyl(-Bm2 * 0.5, H2 * 0.5, -L2 * 0.46, 0.5, 0.9, 8, GLASS_STEEL, 0.8);
+      }
+    },
+
+    // ---- EXPEDITION ladder (schooner=tier2 already above) ---------------------------------------
+    outrigger: {  // tier0: slender canoe + a single small outrigger float on struts
+      L: 8, Bm: 1.8, H: 0.8, n: 5, bowLift: 0.5, gunwale: false, rudder: false,
+      masts: [{ z: 0, top: 5.5 }], sails: [{ shape: 'tri', mast: 0, base: 2.0, h: 3.0 }],
+      extra: function (trim, L2, Bm2, H2) { pontoonHullPart(trim, L2 * 0.7, Bm2 * 0.5, H2 * 0.7, Bm2 * 2.1, WOOD_DARK); strutS(trim, 0, H2 * 0.3, L2 * 0.2, Bm2 * 2.1, H2 * 0.3, L2 * 0.2, 0.10, WOOD_LIGHT); strutS(trim, 0, H2 * 0.3, -L2 * 0.2, Bm2 * 2.1, H2 * 0.3, -L2 * 0.2, 0.10, WOOD_LIGHT); }
+    },
+    caravel: {  // tier1: compact age-of-exploration ship, raked lateen-style sails, tall aftcastle
+      L: 13, Bm: 4.4, H: 2.1, n: 6, bowLift: 0.8, gunwale: true, rudder: true, cabin: true, bowspritLen: 1.8, deckTone: PLANK,
+      masts: [{ z: 3.0, top: 10.0 }, { z: -3.2, top: 11.0 }],
+      sails: [{ shape: 'tri', mast: 0, base: 4.6, h: 6.6 }, { shape: 'tri', mast: 1, base: 5.2, h: 7.4 }, { shape: 'tri', mast: 'bowsprit', base: 2.0, h: 3.2 }],
+      pennant: { c: [0.75, 0.20, 0.18] }
+    },
+    // schooner = tier2 (existing)
+    barque: {  // tier3: three-masted tall ship, mixed rig — square fore/main, fore-and-aft mizzen
+      L: 24, Bm: 5.8, H: 2.6, n: 7, bowLift: 1.0, gunwale: true, rudder: true, bowspritLen: 3.0, cabin: true, deckTone: [0.68, 0.58, 0.42],
+      masts: [{ z: 6.0, top: 15.0 }, { z: 0, top: 16.0 }, { z: -6.0, top: 13.0, boom: 5.0 }],
+      sails: [{ shape: 'square', mast: 0, base: 6.6, h: 6.6, y0: 3.2 }, { shape: 'square', mast: 1, base: 7.2, h: 7.4, y0: 3.4 }, { shape: 'tri', mast: 2, base: 5.4, h: 6.8 }, { shape: 'tri', mast: 'bowsprit', base: 2.4, h: 3.8 }],
+      pennant: { c: [0.30, 0.34, 0.55] }
+    },
+    steam_yacht: {  // tier4: elegant white private steamer, thin funnel, stern awning, no sails
+      L: 16, Bm: 4.0, H: 2.0, n: 6, bowLift: 0.9, gunwale: true, gunwaleTone: [0.80, 0.66, 0.30], rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      deckTone: [0.82, 0.80, 0.74],
+      extra: function (trim, L2, Bm2, H2) { funnelPart(trim, 0, -0.2, H2, H2 * 1.9, 0.45, [0.16, 0.16, 0.18]); trim.box(0, H2 * 1.9, -L2 * 0.32, Bm2 * 0.5, 0.10, L2 * 0.16, [0.85, 0.30, 0.28], 0, 0.1); }
+    },
+    research_vessel: {  // tier5: modern boxy research ship, radar lattice mast, stern A-frame crane
+      L: 19, Bm: 5.6, H: 2.5, n: 6, bowLift: 0.35, gunwale: true, gunwaleTone: SAFETY, rudder: true, cabin: true, cabinTone: WHITE_HULL,
+      deckTone: [0.30, 0.31, 0.34],
+      extra: function (trim, L2, Bm2, H2) { radarMastPart(trim, 0, -L2 * 0.20, H2, H2 * 3.4, SAFETY); sternCraneRig(trim, L2, Bm2, H2); crateProp(trim, -Bm2 * 0.3, L2 * 0.24, H2, SAFETY); crateProp(trim, Bm2 * 0.3, L2 * 0.24, H2, WHITE_HULL); }
+    },
+    expedition_catamaran: {  // tier6: twin-hull cruiser — slim central bridge deck + two pontoons
+      L: 18, Bm: 2.0, H: 0.9, n: 5, bowLift: 0.4, gunwale: false, rudder: false, deckTone: WHITE_HULL,
+      masts: [{ z: -1.0, top: 11.0 }], sails: [{ shape: 'tri', mast: 0, base: 4.4, h: 8.0 }],
+      extra: function (trim, L2, Bm2, H2) { pontoonHullPart(trim, L2 * 0.94, Bm2 * 1.1, H2 * 1.1, Bm2 * 1.9, WHITE_HULL); pontoonHullPart(trim, L2 * 0.94, Bm2 * 1.1, H2 * 1.1, -Bm2 * 1.9, WHITE_HULL); trim.box(0, H2 * 1.1, 0, Bm2 * 4.2, 0.16, L2 * 0.5, WHITE_HULL, 0, 0.1); }
+    },
+    solar_trimaran: {  // tier7: solar-decked central hull + two slender glowing amas, no mast
+      L: 17, Bm: 2.2, H: 0.85, n: 5, bowLift: 0.35, gunwale: false, rudder: false, rig: false, deckTone: SOLAR_BLUE,
+      extra: function (trim, L2, Bm2, H2) {
+        solarDeckPart(trim, Bm2, H2, -L2 * 0.32, L2 * 0.32, SOLAR_BLUE); glowTrimPart(trim, L2, Bm2, H2, 5, 0.35, NEON_HUES[2]);
+        pontoonHullPart(trim, L2 * 0.55, Bm2 * 0.55, H2 * 0.8, Bm2 * 1.7, mixc(GLASS_STEEL, NEON_HUES[2], 0.2));
+        pontoonHullPart(trim, L2 * 0.55, Bm2 * 0.55, H2 * 0.8, -Bm2 * 1.7, mixc(GLASS_STEEL, NEON_HUES[2], 0.2));
+        trim.cyl(0, H2 * 0.9, -L2 * 0.44, 0.32, 0.6, 8, GLASS_STEEL, 0.85);
+      }
     }
   };
   function assembleShip(spec) {
@@ -541,8 +733,23 @@
     // water (waterline ~1/3 up the hull) instead of floating on top of it.
     return { hull: hullB.data(), trim: trim.data(), sails: sails, meta: { len: L, beam: Bm, draft: H * 0.40, funnel: spec.funnel || null } };
   }
+  // Phase 17b: the three 8-rung ladders — index === fleetTier() from sim.js (HARBOR_SIM.fleetTier),
+  // so game.js just indexes straight in. Display names for the Registry panel + tips sit alongside.
+  var FLEET_LADDERS = {
+    fishing: ['raft', 'coracle', 'dinghy', 'sloop', 'steam_trawler', 'modern_trawler', 'hydrofoil_skiff', 'solar_skimmer'],
+    trade: ['log_barge', 'cog', 'brig', 'clipper', 'paddle_steamer', 'steamer', 'container_ship', 'hover_freighter'],
+    expedition: ['outrigger', 'caravel', 'schooner', 'barque', 'steam_yacht', 'research_vessel', 'expedition_catamaran', 'solar_trimaran']
+  };
+  var SHIP_NAMES = {
+    dinghy: 'Dinghy', sloop: 'Sloop', brig: 'Brig', schooner: 'Schooner', steamer: 'Steam Freighter', corsair: 'Corsair',
+    raft: 'Raft', coracle: 'Coracle', steam_trawler: 'Steam Trawler', modern_trawler: 'Modern Trawler', hydrofoil_skiff: 'Hydrofoil Skiff', solar_skimmer: 'Solar Skimmer',
+    log_barge: 'Log Barge', cog: 'Cog', clipper: 'Clipper', paddle_steamer: 'Paddle Steamer', container_ship: 'Container Ship', hover_freighter: 'Hover-Freighter',
+    outrigger: 'Outrigger', caravel: 'Caravel', barque: 'Barque', steam_yacht: 'Steam Yacht', research_vessel: 'Research Vessel', expedition_catamaran: 'Expedition Catamaran', solar_trimaran: 'Solar Trimaran'
+  };
   var SHIPYARD = {
-    CLASSES: ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'],
+    CLASSES: ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'].concat(
+      FLEET_LADDERS.fishing, FLEET_LADDERS.trade, FLEET_LADDERS.expedition).filter(function (c, i, a) { return a.indexOf(c) === i; }),
+    LADDERS: FLEET_LADDERS, NAMES: SHIP_NAMES,
     build: function (cls) { return assembleShip(SHIP_SPECS[cls] || SHIP_SPECS.dinghy); }
   };
 

@@ -171,6 +171,62 @@
     return { money: Math.round(lastMoney * Math.pow(ERA_TAIL_MUL, n - (ERA_REQ.length - 1))) };
   }
 
+  // ---- Phase 17b: FLEET REGISTRY — three empire-wide ship-tier ladders (fishing/trade/expedition),
+  // one tier index 0-7 each, aligned 1:1 with the age ladder (ERAS[0..7] above): tier t needs
+  // era >= t and tiers must be bought IN ORDER (t = current+1 only, no skipping) — you can't own a
+  // Neon Horizon hull without ever having modernised the eras before it. Purely a money sink + a
+  // production/income rubber-band (fleetYieldMul below); it never blocks play, and models.js/game.js
+  // read the tier to pick which SHIPYARD class silhouette actually sails the harbour.
+  //
+  // Cost table: tier0 is free (the starting village already has boats). Tiers 3-7 are exactly
+  // eraReq(t-1).money / 4 — the era-up gate one step earlier, quartered, so a fleet upgrade always
+  // reads as "a meaningful fraction of what it took to reach this age", never a throwaway tap. Tiers
+  // 1-2 are nudged ABOVE their raw quarter (250/4=62.5, 1500/4=375) to £120/£450 — early game money
+  // moves fast enough that a sub-£100 upgrade would feel free; £120/£450 keep them felt without
+  // being a wall. Table: [0, 120, 450, 2000, 10000, 50000, 75000, 500000].
+  var FLEET_ROLES = ['fishing', 'trade', 'expedition'];
+  var FLEET_COST = [0, 120, 450, 2000, 10000, 50000, 75000, 500000];
+  var FLEET_MAX_TIER = FLEET_COST.length - 1;   // 7 — matches ERAS.length-1 (Neon Horizon)
+  function fleetTier(role) { return (S && S.fleetTech && S.fleetTech[role]) || 0; }
+  function fleetShipCost(role) {
+    var t = fleetTier(role);
+    return t >= FLEET_MAX_TIER ? null : FLEET_COST[t + 1];
+  }
+  function fleetEraGated(role) { var t = fleetTier(role); return t < FLEET_MAX_TIER && (S.era || 0) < t + 1; }
+  function canBuyShip(role) {
+    if (!S || FLEET_ROLES.indexOf(role) < 0) return false;
+    var t = fleetTier(role);
+    return t < FLEET_MAX_TIER && (S.era || 0) >= t + 1 && S.money >= FLEET_COST[t + 1];
+  }
+  function buyShip(role) {
+    if (!canBuyShip(role)) return false;
+    var t = fleetTier(role);
+    S.money -= FLEET_COST[t + 1];
+    S.fleetTech[role] = t + 1;
+    S.stats.shipsBought = (S.stats.shipsBought || 0) + 1;
+    save(); return true;
+  }
+  // Phase 17b yield formula — a gentle rubber-band, never a hard block: owning the current age's
+  // fleet (tier === era) is worth +10%/age above baseline; falling behind costs -5%/age behind,
+  // floored so an old fleet never cripples you outright. tier is always <= era (tiers require
+  // era >= t to buy) so min(tier,era)=tier and max(0,era-tier) is simply the "ages behind" count —
+  // written with the min/max form anyway so the formula stays correct even if that invariant is
+  // ever relaxed. EXACT formula (asserted in tests/sim.test.js):
+  //   mul = clamp(1 + 0.10 * min(tier, era) - 0.05 * max(0, era - tier), 0.85, 1.8)
+  // e.g. era2/tier2 (current) = 1.20; era2/tier0 (2 ages behind) = 0.90 → owning the current age's
+  // fleet is +33% relative to being 2 ages behind, matching the "+25-35%" target across the ladder;
+  // era0/tier0 (a fresh or freshly-migrated save) = 1.00 exactly — no regression vs pre-17b income.
+  var FLEET_MUL_MIN = 0.85, FLEET_MUL_MAX = 1.8;
+  function fleetYieldMul(role) {
+    if (!S) return 1;
+    var tier = fleetTier(role), erax = S.era || 0;
+    var v = 1 + 0.10 * Math.min(tier, erax) - 0.05 * Math.max(0, erax - tier);
+    return clamp(v, FLEET_MUL_MIN, FLEET_MUL_MAX);
+  }
+  // fishing fleet only rubber-bands FISH extraction (a modern trawler catches more fish; it doesn't
+  // make a sawmill saw faster) — every other resource's production multiplier stays 1.
+  function fleetProdMul(res) { return res === 'fish' ? fleetYieldMul('fishing') : 1; }
+
   // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
   // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
   var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
@@ -206,7 +262,8 @@
       hazard: { t: 0, next: hzRand(70, 150), phase: 'idle', strikeId: 0, last: null }, crash: null,
       evt: { t: 0, next: evRand(60, 130), active: null, lastId: '', seq: 0 },
       voyages: [], voyageSeq: 0,
-      stats: { storms: 0, shipped: 0, averted: 0 }
+      fleetTech: { fishing: 0, trade: 0, expedition: 0 },     // Phase 17b: fleet registry tiers
+      stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0 }
     };
   }
   function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
@@ -250,6 +307,9 @@
     if (!S.stats) S.stats = { storms: 0 };
     if (typeof S.stats.shipped !== 'number') S.stats.shipped = 0;
     if (typeof S.stats.averted !== 'number') S.stats.averted = 0;   // Phase 15b: additive backfill — old saves load fine
+    if (typeof S.stats.shipsBought !== 'number') S.stats.shipsBought = 0;   // Phase 17b: additive backfill
+    if (!S.fleetTech) S.fleetTech = { fishing: 0, trade: 0, expedition: 0 };   // Phase 17b: old saves start every ladder at tier 0
+    else FLEET_ROLES.forEach(function (r) { if (typeof S.fleetTech[r] !== 'number') S.fleetTech[r] = 0; });
     setActive(S.active);
   }
 
@@ -370,7 +430,7 @@
       shipped += amt; income += amt * routeTariff(r.res);
     }
     if (shipped > 0) { addNetXP(shipped * NET_XP_PER_UNIT); if (S.stats) S.stats.shipped = (S.stats.shipped || 0) + shipped; }
-    return income;
+    return income * fleetYieldMul('trade');   // Phase 17b: trade fleet tier rubber-bands route income
   }
   function networkView() {
     return {
@@ -581,7 +641,9 @@
   function voyageReady(v) { return now() >= v.endsAt; }
   function rollVoyage(d) {
     var era = S.era || 0, cost = voyageCost(d), out = { cash: 0, res: null, crate: 0, relic: 0 };
-    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)));   // Flagship capstone: richer hauls
+    // Flagship capstone (META.voyageYield) and the Phase 17b expedition fleet tier COMPOSE
+    // multiplicatively (both are "richer hauls" levers, from different systems — prestige vs. spend).
+    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)) * fleetYieldMul('expedition'));
     if (_rng() < 0.5) { var r = ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)]; out.res = {}; out.res[r] = Math.round(20 * d.tier * (1 + era * 0.4)); }
     if (_rng() < 0.12 * d.tier) out.crate = 1;
     if (_rng() < 0.05 * d.tier) out.relic = 1;                  // relics wired up in Phase 7c
@@ -666,7 +728,7 @@
     for (var i = 0; i < port.buildings.length; i++) {
       var b = port.buildings[i], t = BT[b.type]; if (t.cat === 'defense') continue;
       var m = lvlMul(t, b.level) * (bhp(b) / 100);                   // storm-damaged buildings produce less (wrecked = 0)
-      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * focusProdMul(focus, r) * sp[r] * taper[r] * dt;
+      if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * focusProdMul(focus, r) * fleetProdMul(r) * sp[r] * taper[r] * dt;
       if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * focusProdMul(focus, t.convert.to) * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
       if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sold = Math.min(have, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
       if (t.money) money += t.money * m * labor * salesMul * dt;
@@ -789,6 +851,18 @@
     for (var id in S.ports) { var pt = S.ports[id]; out.push({ id: id, hint: spec(id).hint, buildings: pt.buildings.length, res: { fish: Math.floor(pt.res.fish), timber: Math.floor(pt.res.timber), goods: Math.floor(pt.res.goods) } }); }
     return out;
   }
+  // Phase 17b: per-role fleet-registry view — tier owned, next-tier cost (null once maxed), the
+  // live yield multiplier, and the two independent reasons a purchase can be unavailable (can't
+  // afford vs. era not reached yet) so game.js's Registry panel can tell "Need £X" from "Requires
+  // [Age]" without re-deriving the gating logic itself.
+  function fleetView() {
+    var out = {};
+    FLEET_ROLES.forEach(function (role) {
+      var tier = fleetTier(role), cost = fleetShipCost(role);
+      out[role] = { tier: tier, cost: cost, mul: +fleetYieldMul(role).toFixed(3), can: canBuyShip(role), eraGated: fleetEraGated(role), maxed: cost == null, nextEra: cost == null ? null : eraName(tier + 1) };
+    });
+    return out;
+  }
   function snapshot(id) {
     if (!S) return null;
     var pid = id || S.active, port = S.ports[pid] || null, prev = CUR;
@@ -801,12 +875,12 @@
       canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
-      network: networkView(),
+      network: networkView(), fleet: fleetView(),
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null, avertCost: avertCost() } : { phase: 'idle', strikeId: 0, last: null, avertCost: avertCost() },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
       event: (S.evt && S.evt.active) ? { id: S.evt.active.id, name: S.evt.active.name, kind: S.evt.active.kind, seq: S.evt.active.seq, ttl: Math.max(0, Math.ceil(S.evt.active.ttl)), data: S.evt.active.data } : null,
       voyages: voyageState(),
-      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, ports: Object.keys(S.ports).length },
+      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, shipsBought: (S.stats && S.stats.shipsBought) || 0, ports: Object.keys(S.ports).length },
       ports: portList()
     };
     if (port) {
@@ -844,6 +918,10 @@
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },
+    // Phase 17b: fleet registry — buy/query the three ship-tier ladders
+    FLEET_ROLES: FLEET_ROLES, FLEET_COST: FLEET_COST,
+    fleetTier: fleetTier, fleetShipCost: fleetShipCost, canBuyShip: canBuyShip, buyShip: buyShip,
+    fleetYieldMul: fleetYieldMul, fleet: fleetView,
     strikePort: function (id) { if (S) { strike(id || S.active); save(); } },   // debug/test: force a storm strike now
     avertCost: function () { return S ? avertCost() : 0; }, avertHazard: avertHazard, avertCrash: avertCrash,
     forceWarn: forceWarn,                                           // debug/test: jump straight to the warn (avert-able) phase
