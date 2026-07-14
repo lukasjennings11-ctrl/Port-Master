@@ -338,9 +338,15 @@
     float bandIdx=floor(bandsW);
     float bandFrac=fract(bandsW);
     vec3 water=mix(uDeep,uShallow,bandIdx/3.0);
+    // Phase 19c: the band CONTRAST fades with distance too (not just the wobble) — once wobFade has
+    // straightened the boundaries into razor lines at grazing/far views, the tone step itself is
+    // what reads as a hard seam across the horizon. bandFarFlat eases the whole far field toward
+    // one mid card-blue so the distant sea settles into a single flat sheet, no visible band line.
+    float bandFarFlat=smoothstep(220.0,760.0,dist);
+    water=mix(water,mix(uDeep,uShallow,0.30),bandFarFlat*0.85);
     // thin white scissor-cut rim right at each band boundary — wobbly, like the 19a paper edges
     float edgeDist=min(bandFrac,1.0-bandFrac);
-    float rim=(1.0-smoothstep(0.0,0.05,edgeDist))*wobFade;
+    float rim=(1.0-smoothstep(0.0,0.05,edgeDist))*wobFade*(1.0-bandFarFlat);
     water=mix(water,vec3(0.97,0.99,1.0),rim*0.85);
     // a whisper of the sky's colour bleeds in at grazing view angles only (postcard horizon fade) —
     // paper is matte, so this stays gentle; N is now constant, so this is purely a camera-angle term.

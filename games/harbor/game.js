@@ -506,6 +506,18 @@
   function compose(o, tx, ty, tz, sx, sy, sz) { o[0] = sx; o[1] = 0; o[2] = 0; o[3] = 0; o[4] = 0; o[5] = sy; o[6] = 0; o[7] = 0; o[8] = 0; o[9] = 0; o[10] = sz; o[11] = 0; o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1; }
   function composeRY(o, tx, ty, tz, s, ry) { var c = Math.cos(ry), sn = Math.sin(ry); o[0] = c * s; o[1] = 0; o[2] = -sn * s; o[3] = 0; o[4] = 0; o[5] = s; o[6] = 0; o[7] = 0; o[8] = sn * s; o[9] = 0; o[10] = c * s; o[11] = 0; o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1; }
   function composeRYS(o, tx, ty, tz, sx, sy, sz, ry) { var c = Math.cos(ry), sn = Math.sin(ry); o[0] = c * sx; o[1] = 0; o[2] = -sn * sx; o[3] = 0; o[4] = 0; o[5] = sy; o[6] = 0; o[7] = 0; o[8] = sn * sz; o[9] = 0; o[10] = c * sz; o[11] = 0; o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1; }
+  // Phase 19c: composeRYS + one extra rotation — rx pitches the mesh about its OWN local X axis
+  // (applied in local space, before the yaw), rides on top of the per-axis scale. This is the
+  // "unfold hinge": at rx=0 it's bit-identical to composeRYS (verified below), so every existing
+  // composeRYS caller is untouched; only the building-pop draw path (which now needs the hinge)
+  // switches to this. Derivation: M = Ry(ry) * Rx(rx) * S(sx,sy,sz), columns worked out by hand.
+  function composeHingeRYS(o, tx, ty, tz, sx, sy, sz, ry, rx) {
+    var cy = Math.cos(ry), sny = Math.sin(ry), cx = Math.cos(rx), snx = Math.sin(rx);
+    o[0] = cy * sx; o[1] = 0; o[2] = -sny * sx; o[3] = 0;
+    o[4] = sny * snx * sy; o[5] = cx * sy; o[6] = cy * snx * sy; o[7] = 0;
+    o[8] = sny * cx * sz; o[9] = -snx * sz; o[10] = cy * cx * sz; o[11] = 0;
+    o[12] = tx; o[13] = ty; o[14] = tz; o[15] = 1;
+  }
   function eye() { var ce = Math.cos(C.el), se = Math.sin(C.el); return [C.tx + C.dist * ce * Math.sin(C.az), C.ty + C.dist * se, C.tz + C.dist * ce * Math.cos(C.az)]; }
 
   // draw the modern skyline (glTF buildings) — textured prim uses the shared atlas, flat "lit" prims use baseColor
@@ -872,30 +884,39 @@
     drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
   }
 
-  // ---- Phase 18b: squash-and-stretch pop + per-frame building draw --------------------------
-  // A quick scale keyframe on the port's building meshes: y-squash for the first ~35% of the
-  // window, then an ease-out overshoot back to rest — fired on build complete, upgrade and
-  // voyage-collect (the game's "collect tap"). Pure draw-transform juice: no state in the save,
-  // no geometry rebuild, resets itself by the clock.
-  // popTestP: test-only pinned progress (0..1) — when non-null the pop samples EXACTLY that point
-  // of its window instead of the game clock, so the suite can assert mid-squash/settle values with
-  // zero wall-clock dependence (precedent: 15b/15d synchronous forced checks, no sleeps).
-  var POP_DUR = 0.35, popT0 = -10, popTestP = null;
+  // ---- Phase 19c: paper UNFOLD pop + page-flutter + per-frame building draw -------------------
+  // The 18b squash-and-stretch SHAPE is replaced with a pop-up-book unfold: on build/upgrade the
+  // building cluster rises as if folding up from flat — y-scale 0 -> ~1.10 overshoot -> exactly 1
+  // on one easeOutBack curve, with a slight forward hinge (rotation about local X, like a pop-up
+  // page still swinging upright) during the first 40% of the window. xz counter-scales a touch
+  // (thin card conserving no real volume, just enough to read as a fold, not a stretch).
+  // ALL 18b triggers + the deterministic popTestP/setPopProgress hook contract are kept verbatim:
+  // popTestP pins progress (0..1) so the suite asserts EXACT curve values with zero sleeps.
+  var POP_DUR = 0.45, popT0 = -10, popTestP = null;
   function triggerPop() { popT0 = clock; }
   function popNow() { return popTestP != null ? popTestP * POP_DUR : clock - popT0; }
+  var UNFOLD_C1 = 1.70158, HINGE_MAX = 0.22, HINGE_END = 0.4;   // easeOutBack constant / max forward hinge (rad) / hinge dies at 40% of the window
   function popScaleFor() {
     var t = popNow();
-    if (t < 0 || t >= POP_DUR) return { x: 1, y: 1, z: 1 };
-    var k = t / POP_DUR, sy, sxz;
-    if (k < 0.35) {                                      // squash in: y down, xz out (volume-ish)
-      var q = k / 0.35;
-      sy = 1 - 0.30 * q; sxz = 1 + 0.14 * q;
-    } else {                                             // overshoot + ease-out settle to exactly 1
-      var q2 = (k - 0.35) / 0.65, c1 = 1.70158, c3 = c1 + 1, u = q2 - 1;
-      var f = 1 + c3 * u * u * u + c1 * u * u;           // easeOutBack: 0 -> ~1.1 -> 1
-      sy = 0.70 + 0.30 * f; sxz = 1.14 - 0.14 * f;
-    }
-    return { x: sxz, y: sy, z: sxz };
+    if (t < 0 || t >= POP_DUR) return { x: 1, y: 1, z: 1, hinge: 0 };
+    var k = t / POP_DUR, c3 = UNFOLD_C1 + 1, u = k - 1;
+    var f = 1 + c3 * u * u * u + UNFOLD_C1 * u * u;              // easeOutBack: 0 -> ~1.10 -> exactly 1
+    var sy = f, sxz = 1 - 0.10 * (f - 1);                        // rise from flat; card counter-flex on the overshoot
+    var hinge = k < HINGE_END ? HINGE_MAX * Math.sin(Math.PI * (k / HINGE_END)) : 0;   // early forward tip, settles before the overshoot peaks
+    return { x: sxz, y: sy, z: sxz, hinge: hinge };
+  }
+  // Collect tap = page-flutter: a brief rotation wobble about the same local-X hinge (a page
+  // riffled by a thumb), ~0.25s, three decaying half-waves, exactly 0 at both ends. No scale
+  // change at all — collecting shouldn't re-play the "just built" unfold. Same deterministic
+  // pinned-progress contract as the pop (flutTestP / setFlutterProgress).
+  var FLUT_DUR = 0.25, FLUT_MAX = 0.10, flutT0 = -10, flutTestP = null;
+  function triggerFlutter() { flutT0 = clock; }
+  function flutNow() { return flutTestP != null ? flutTestP * FLUT_DUR : clock - flutT0; }
+  function flutterAngleFor() {
+    var t = flutNow();
+    if (t < 0 || t >= FLUT_DUR) return 0;
+    var k = t / FLUT_DUR;
+    return FLUT_MAX * Math.sin(k * Math.PI * 3.0) * (1 - k);
   }
   // The buildings render with the SAME program state as the baked scene meshes (uVCol=1, toon sun)
   // — only the model matrix differs: composeRYS at the founded port frame (identical maths to the
@@ -903,7 +924,7 @@
   function drawPortBuildings(M) {
     if (!scene.port || !meshBldgFlat) return;
     var p = scene.port, pk = popScaleFor();
-    composeRYS(mModel, p.x, p.by, p.z, pk.x, pk.y, pk.z, p.yaw);
+    composeHingeRYS(mModel, p.x, p.by, p.z, pk.x, pk.y, pk.z, p.yaw, pk.hinge + flutterAngleFor());
     gl.uniformMatrix4fv(M.u.uModel, false, mModel);
     gl.uniform1f(M.u.uTexMix, 0); drawMesh(M, meshBldgFlat);
     gl.bindTexture(gl.TEXTURE_2D, gritTex); gl.uniform1f(M.u.uTexMix, 0.5); drawMesh(M, meshBldgGrit);
@@ -928,11 +949,11 @@
     var Dp = E.P_depth; gl.useProgram(Dp.p); gl.uniformMatrix4fv(Dp.u.uLightVP, false, mLVP);
     gl.uniformMatrix4fv(Dp.u.uModel, false, mI);
     drawMesh(Dp, meshFlat); drawMesh(Dp, meshGrit); drawMesh(Dp, meshFac);
-    // Phase 18b: buildings cast shadows from their runtime transform (same composeRYS as the
-    // colour pass, so the shadow squashes with the pop too)
+    // Phase 18b/19c: buildings cast shadows from their runtime transform (same composeHingeRYS as
+    // the colour pass, so the shadow unfolds/flutters with the pop too)
     if (scene.port && meshBldgFlat) {
       var pk = popScaleFor();
-      composeRYS(mModel, scene.port.x, scene.port.by, scene.port.z, pk.x, pk.y, pk.z, scene.port.yaw);
+      composeHingeRYS(mModel, scene.port.x, scene.port.by, scene.port.z, pk.x, pk.y, pk.z, scene.port.yaw, pk.hinge + flutterAngleFor());
       gl.uniformMatrix4fv(Dp.u.uModel, false, mModel);
       drawMesh(Dp, meshBldgFlat); drawMesh(Dp, meshBldgGrit);
       gl.uniformMatrix4fv(Dp.u.uModel, false, mI);
@@ -2502,7 +2523,7 @@
   }
   function collectVoyageUI(seq) {
     var out = SIM.collectVoyage(seq); if (!out) return;
-    triggerPop();   // Phase 18b: collect tap — the settlement gives a happy squash-and-stretch pop
+    triggerFlutter();   // Phase 19c: collect tap — a brief page-flutter riffle, not the full build unfold
     // Phase 15c: a discovery voyage doesn't pay cash/res — it unlocks the next coast. Handle it as
     // its own celebration path rather than folding it into the normal reward-collect flow below.
     if (out.discover) {
@@ -3339,7 +3360,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v73';
+  var BUILD_TAG = 'v74';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4058,7 +4079,7 @@
     // lateral slide phase of boundary k (mirrors F_WATER's per-band uTime*spd term, see
     // waterBandPhase() above), sampled live off `clock` so a test can call stepClock() between two
     // reads and assert the phases actually advance (deterministic, no wall-clock sleep needed).
-    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }) }; },
+    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandFarFade: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }) }; },
     // Phase 19b: sun/moon screen-space UV tracks (F_SKY's uSun/uMoon uniforms mirror these exactly)
     // + flags documenting the paper-sky rebuild (crisp cut-paper discs, static-size no-twinkle stars).
     sky: function () { var en = env(), sd = sunDir(), md = moonDir(); return { sunUV: [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5], moonUV: [0.5 + md[0] * 0.42, 0.32 + md[1] * 0.5], night: en.night, cutPaperSun: true, starTwinkleOff: true }; },
@@ -4074,9 +4095,13 @@
     // state, and a smoke-emitter sanity check (industry smoke keys off factory/sawmill counts).
     buildingStats: function (kind, biome) { return HARBOR_MODELS && HARBOR_MODELS.buildingStats ? HARBOR_MODELS.buildingStats(kind, biome) : null; },
     buildingKinds: function () { return HARBOR_MODELS && HARBOR_MODELS.BLDG_KINDS ? HARBOR_MODELS.BLDG_KINDS.slice() : []; },
-    pop: function () { var t = popNow(); return { active: t >= 0 && t < POP_DUR, scale: popScaleFor(), dur: POP_DUR }; },
+    pop: function () { var t = popNow(); var s = popScaleFor(); return { active: t >= 0 && t < POP_DUR, scale: { x: s.x, y: s.y, z: s.z }, hinge: s.hinge, style: 'unfold', dur: POP_DUR }; },
     forcePop: function () { triggerPop(); return window.__harbor.pop(); },
     setPopProgress: function (p) { popTestP = p == null ? null : Math.max(0, Math.min(1, +p)); return window.__harbor.pop(); },   // deterministic pop sampling: pin progress (null = live clock)
+    // Phase 19c: page-flutter on collect — same deterministic pinned-progress contract as the pop
+    collectFlutter: function () { var t = flutNow(); return { active: t >= 0 && t < FLUT_DUR, angle: flutterAngleFor(), style: 'page-flutter', dur: FLUT_DUR }; },
+    forceFlutter: function () { triggerFlutter(); return window.__harbor.collectFlutter(); },
+    setFlutterProgress: function (p) { flutTestP = p == null ? null : Math.max(0, Math.min(1, +p)); return window.__harbor.collectFlutter(); },
     smokeActive: function () { var s = SIM ? SIM.state() : null; var facs = s ? ((s.counts && s.counts.factory || 0) + (s.counts && s.counts.sawmill || 0) * 0.5) : 0; return facs >= 1; },
     // Phase 19b: paper-curl smoke (test/debug hooks) — smokeStyle documents the shape swap away
     // from round puffs; forceSmoke deterministically spawns curls without waiting on the real
