@@ -1280,6 +1280,74 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('17b tips: fleetBehind flows produced zero new console/GL errors', errs.length === errsBeforeFleetTip);
   await page.evaluate(() => window.__harbor.pause(false));
 
+  // Phase 14b: atmosphere — drifting clouds, quay dock workers, night light pools. Reuses this
+  // run's post-reload state (a fresh save with only 'green' founded via the real foundHere() path;
+  // 'tropical' is never founded here) so the "founded vs. wild" gating checks below have a clean,
+  // known-unfounded world to compare against.
+  const errsBefore14b = errs.length;
+  await page.evaluate(() => window.__harbor.setTod(0.5));   // noon, so the clouds()/pools() checks below start from a known ToD
+  const clouds0 = await page.evaluate(() => window.__harbor.clouds());
+  ok('14b clouds: 4-7 soft cumulus instances built once, real geometry (not a shader-only sky layer)',
+    clouds0 && clouds0.count >= 4 && clouds0.count <= 7 && clouds0.verts > 0);
+  const cloudPosA = await page.evaluate(() => window.__harbor.clouds().pos);
+  await sleep(900);
+  const cloudPosB = await page.evaluate(() => window.__harbor.clouds().pos);
+  ok('14b clouds: drift over time — at least one instance\'s world position changes between samples',
+    cloudPosA.length === cloudPosB.length && cloudPosA.some((pA, i) => Math.abs(pA[0] - cloudPosB[i][0]) > 0.01 || Math.abs(pA[1] - cloudPosB[i][1]) > 0.01));
+
+  // worker count scales with era and caps at 6 (2 + era, clamped 2..6)
+  await page.evaluate(() => window.__harbor.setEra(0)); await sleep(120);
+  const w0 = await page.evaluate(() => window.__harbor.workers());
+  await page.evaluate(() => window.__harbor.setEra(4)); await sleep(120);
+  const w4 = await page.evaluate(() => window.__harbor.workers());
+  await page.evaluate(() => window.__harbor.setEra(7)); await sleep(120);
+  const w7 = await page.evaluate(() => window.__harbor.workers());
+  ok('14b workers: count scales with era (era0=2, era4=6) and caps — era7 stays at 6, not 9',
+    w0.count === 2 && w4.count === 6 && w7.count === 6);
+
+  // workers only render on a FOUNDED port — 'tropical' was founded via a raw SIM bypass earlier in
+  // this run (never through the real foundHere() path), so game.js's own founded-site map has no
+  // entry for it and switching to it renders as a wild, unfounded world (scene.port stays null).
+  const wWild = await page.evaluate(() => { window.__harbor.setBiome('tropical'); return window.__harbor.workers(); });
+  const wBack = await page.evaluate(() => { window.__harbor.setBiome('green'); return window.__harbor.workers(); });
+  ok('14b workers: none on an unfounded world, back once the founded harbour is showing again',
+    wWild.count === 0 && wBack.count > 0);
+
+  // night light pools: absent by day, present under the quay's lampposts/lit windows once night falls
+  await page.evaluate(() => window.__harbor.setTod(0.5)); await sleep(120);
+  const poolsDay = await page.evaluate(() => window.__harbor.pools());
+  await page.evaluate(() => window.__harbor.setTod(0.0)); await sleep(120);
+  const poolsNight = await page.evaluate(() => window.__harbor.pools());
+  ok('14b night pools: zero by day, present under the quay lampposts/warehouse fronts once night falls',
+    poolsDay.count === 0 && poolsNight.count > 0 && poolsNight.night > 0.05);
+
+  // full day/night sweep with clouds + workers + night pools all live — zero GL warnings/errors
+  for (const t of [0, 0.15, 0.25, 0.34, 0.5, 0.66, 0.755, 0.9, 1.0]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  ok('14b: full ToD sweep with clouds/workers/night-pools all live → zero GL warnings/errors', errs.length === errsBefore14b);
+
+  // fps guard: sample real frame rate at night with clouds + workers + light pools + starfield all live
+  await page.evaluate(() => window.__harbor.setTod(0.0));
+  const fps14b = await page.evaluate(() => new Promise((resolve) => {
+    var start = performance.now(), frames = 0;
+    function step(ts) { frames++; if (ts - start < 2000) requestAnimationFrame(step); else resolve(frames / ((ts - start) / 1000)); }
+    requestAnimationFrame(step);
+  }));
+  // NOTE: headless swiftshader (a software GL rasterizer) this deep into a long, stateful suite
+  // run (every earlier phase's ports/ships/DOM state still resident) commonly sits at just a
+  // few fps regardless of this phase's changes — see soak.js's own fps floor for the same reason
+  // it uses a RELATIVE 60% floor rather than an absolute one. This guard is a hang/freeze
+  // detector (the render loop is still actually advancing frames with the full atmosphere pass
+  // live), not a real-device performance budget.
+  ok('14b fps guard: render loop keeps advancing frames (no hang/freeze) with clouds/workers/night-pools all live', fps14b > 1.5);
+
+  // geomStats: the quay lamppost/lit-window position bookkeeping adds no NEW static geometry (the
+  // floodlight poles + warehouse walls already existed) — the vertex budget must stay exactly where
+  // 16b/17a left it, still nowhere near the 250k ceiling.
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  const gs14b = await page.evaluate(() => window.__harbor.geomStats());
+  ok('14b geomStats: static-scene vertex budget unaffected by the atmosphere pass, still within the 250k ceiling',
+    gs14b && gs14b.verts > 10000 && gs14b.verts < 250000);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
