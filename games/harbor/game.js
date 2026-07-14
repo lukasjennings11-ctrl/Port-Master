@@ -160,12 +160,38 @@
 
   // ---- scene ----
   var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, gullMesh;
-  // Phase 16a: SHIPYARD — six real ship-class meshes (models.js HARBOR_MODELS.SHIPYARD), built
-  // once in boot() and reused every frame via compose transforms — replaces the old single
-  // hull-box + triangle-sail (hullMesh/sailMesh) that read as floating triangles at gameplay zoom.
+  // Phase 16a: SHIPYARD — real ship-class meshes (models.js HARBOR_MODELS.SHIPYARD), reused every
+  // frame via compose transforms — replaces the old single hull-box + triangle-sail (hullMesh/
+  // sailMesh) that read as floating triangles at gameplay zoom.
   // SHIP[cls] = { hull: mesh (tint-ready), trim: mesh (baked real colours, drawn uVCol=1),
   //               sails: [{mesh, phase}], meta: {len,beam,funnel} }.
+  // Phase 17b: the fleet grew from 6 classes to 25 (three 8-tier ladders — see models.js
+  // HARBOR_MODELS.SHIPYARD.LADDERS) once ships evolve as the player buys fleet upgrades, so builds
+  // are now LAZY: getShip(cls) below builds+uploads a class to the GPU on its first actual use and
+  // caches it in SHIP[cls] forever after — a fresh game only ever pays for the handful of classes
+  // it's actually shown (ambient traffic + whatever tiers are owned), not all 25 up front. No
+  // eviction: every class is <=~3.2k verts (see shipStats), so even a save that's cycled through
+  // every tier of every ladder holds at most 25 tiny meshes — trivial next to the static harbour
+  // scene's own budget (10k-250k verts, see geomStats).
   var SHIP = {}, shipStats = null, DEBUG_SHIP = null;   // DEBUG_SHIP: test-only forced close-up ship (see __harbor.debugShip)
+  function getShip(cls) {
+    if (SHIP[cls]) return SHIP[cls];
+    if (!E || !HARBOR_MODELS || HARBOR_MODELS.SHIPYARD.CLASSES.indexOf(cls) < 0) return null;
+    var s = HARBOR_MODELS.SHIPYARD.build(cls);
+    var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
+    var sailMeshes = s.sails.map(function (sd) { return { mesh: E.mesh(sd.data), phase: sd.phase, verts: sd.data.positions.length / 3 }; });
+    var sailV = sailMeshes.reduce(function (a, sm) { return a + sm.verts; }, 0);
+    SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, meta: s.meta };
+    if (shipStats) { shipStats.classes[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV }; shipStats.total += hullV + trimV + sailV; }
+    return SHIP[cls];
+  }
+  // Phase 17b: the three fleet-registry ladders (models.js HARBOR_MODELS.SHIPYARD.LADDERS is the
+  // source of truth — game.js just indexes by owned tier). Fallback tier 2 (used only when SIM isn't
+  // ready) lands on dinghy/brig/schooner in every ladder — the exact pre-17b defaults — by design.
+  var FLEET_LADDERS = (window.HARBOR_MODELS && HARBOR_MODELS.SHIPYARD.LADDERS) || { fishing: ['dinghy'], trade: ['brig'], expedition: ['schooner'] };
+  var FLEET_NAMES = (window.HARBOR_MODELS && HARBOR_MODELS.SHIPYARD.NAMES) || {};
+  function ladderClass(role, tier) { var L = FLEET_LADDERS[role] || ['dinghy']; return L[Math.max(0, Math.min(L.length - 1, tier | 0))]; }
+  function fleetTierOf(role) { return (SIM && simReady()) ? SIM.fleetTier(role) : 2; }
   var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
   var cityModels = null, atlasTex = null, blobTex = null, wakeTex = null;   // glTF buildings (async) + shared atlas + shadow decal + wake decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
@@ -403,12 +429,14 @@
     var rng = mulberry(hash('amb:' + biomeId + ':' + Math.round(cx) + ':' + era));
     var nBoats = 2 + Math.min(9, era * 2 + (dev / 5 | 0)), nGulls = 4 + Math.min(12, era * 2 + (dev / 4 | 0)), boats = [], gulls = [], i;
     for (i = 0; i < nBoats; i++) {
-      // Phase 16a: ambient traffic is a SHIPYARD mix — small one-mast dinghies filling most of the
-      // bay, with the occasional bigger one-mast-plus-jib sloop (the old 'big' scale flag now picks
-      // the class outright instead of just stretching the same triangle).
+      // Phase 16a/17b: ambient traffic is a fishing-ladder mix — most boats fly the owned tier's
+      // sibling one below it, with the occasional bigger one flying the owned tier itself (the
+      // 'big' flag; see ambientBoatClass() in drawAmbient/collectWakes, which resolves it against
+      // the LIVE fishing fleet tier every frame — so the whole bay visibly modernises the moment
+      // you commission a new class, with no need to rebuild the ambient scene).
       var big = rng() < 0.4;
       boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20,
-        hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: big, cls: big ? 'sloop' : 'dinghy', sc: 0.92 + rng() * 0.22 });
+        hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: big, sc: 0.92 + rng() * 0.22 });
     }
     for (i = 0; i < nGulls; i++) {
       gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
@@ -425,7 +453,7 @@
   // mesh billowing/swaying on phase (sd.phase + phaseBase) so a two-masted ship's sails never move
   // in lockstep. sailC may be a single colour (every sail) or an array indexed per sail.
   function drawShip(M, cls, x, y, z, yaw, scale, hullC, sailC, phaseBase) {
-    var S = SHIP[cls]; if (!S) return;
+    var S = getShip(cls); if (!S) return;
     y -= S.meta.draft * scale;                    // ride IN the water: waterline ~1/3 up the hull
     gl.uniform3fv(M.u.uBase, hullC);
     composeRYS(mModel, x, y, z, scale, scale, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
@@ -437,6 +465,10 @@
       gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, sm.mesh);
     }
   }
+  // Phase 17b: which fishing-ladder class an ambient boat flies right now — 'big' boats fly the
+  // owned tier, the rest fly one tier below it (a live mix, not a fixed dinghy/sloop split), so
+  // the whole bay reads as "one tier newer" the instant a fishing-fleet upgrade is bought.
+  function ambientBoatClass(b) { var t = fleetTierOf('fishing'); return ladderClass('fishing', b.big ? t : Math.max(0, t - 1)); }
   // draw boats + gulls; assumes M program is bound with uVCol=0, uTexMix=0, uAlbedo=0 (flat colour)
   function drawAmbient(M) {
     if (!ambient) return;
@@ -448,7 +480,7 @@
       nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1); nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
       yaw = Math.atan2(nx, nz);
       var bob = Math.sin(clock * 1.3 + b.a0) * 0.3;
-      drawShip(M, b.cls, x, bob, z, yaw, b.sc, b.hull, [0.94, 0.93, 0.90], b.a0);
+      drawShip(M, ambientBoatClass(b), x, bob, z, yaw, b.sc, b.hull, [0.94, 0.93, 0.90], b.a0);
     }
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
@@ -471,12 +503,12 @@
   var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
   var EXP_HULL = [0.38, 0.26, 0.17], RTE_SAIL = [0.93, 0.91, 0.87],
       RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08];
-  // Phase 16a: era gate for the route freighter's SHIPYARD class — 'Industrial Port' (era 2, see
-  // sim.js ERAS) is when the world plausibly has steam power, so route ships upgrade from sail
-  // (brig) to stack/funnel (steamer) right when the static port scene itself starts getting a
-  // crane + container ship (models.js assemblePort's own era>=2 gate) — the fleet and the harbour
-  // read as the same era together.
-  function routeShipClass() { return era >= 2 ? 'steamer' : 'brig'; }
+  // Phase 17b: route freighter class now follows the OWNED trade-fleet tier (Registry purchases),
+  // not the era directly — supersedes 16a's era>=2 auto-swap to brig/steamer: a fleet only
+  // modernises when the harbourmaster actually commissions a new class. fleetTierOf falls back to
+  // tier 2 (brig) when SIM isn't ready, matching 16a's old pre-industrial default.
+  function routeShipClass() { return ladderClass('trade', fleetTierOf('trade')); }
+  function expeditionShipClass() { return ladderClass('expedition', fleetTierOf('expedition')); }
   function refreshFleet() {
     fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null;
     var p = scene.port; if (!p || !simReady()) return;
@@ -508,20 +540,22 @@
     if (rr && rr.race) fleet.rival = { cx: p.x + ox * 96, cz: p.z + oz * 96, px: oz, pz: -ox };   // patrol line runs along the coast
   }
   // draw the meta fleet; assumes the same flat-colour program state as drawAmbient. Each kind maps
-  // to a SHIPYARD class: expedition → schooner (tier-tinted sails, kept), route → brig (resource-
-  // tinted hull + kept deck cargo) or steamer once the port's era is industrial+, rival → corsair.
+  // to a fleet-registry ladder class at the OWNED tier (Phase 17b — supersedes 16a's fixed classes):
+  // expedition → expedition ladder (tier-tinted sails kept), route → trade ladder (resource-tinted
+  // hull + kept deck cargo where the class still has a deck to keep it on), rival → corsair (off
+  // every ladder, unchanged).
   function drawFleet(M) {
     var p = scene.port; if (!p) return;
     if (clock - fleet.at > 1) refreshFleet();
-    var i, x, z, yaw, bob, e, r;
-    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships: schooner, tier-tinted sails
+    var i, x, z, yaw, bob, e, r, eCls = expeditionShipClass();
+    for (i = 0; i < fleet.exp.length; i++) {                       // expedition ships: ladder class at the owned tier, tier-tinted sails
       e = fleet.exp[i];
       var f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2;        // out for the first half, home for the second
       var d = 28 + f * 132;                                        // ready ships wait just off the harbour
       x = p.x + e.dx * d; z = p.z + e.dz * d;
       yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
-      drawShip(M, 'schooner', x, bob, z, yaw, 1.0, EXP_HULL, e.sail, e.ph);
+      drawShip(M, eCls, x, bob, z, yaw, 1.0, EXP_HULL, e.sail, e.ph);
     }
     for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters: brig (+ kept deck cargo) or late-era steamer
       r = fleet.routes[i];
@@ -549,7 +583,18 @@
   // (camera dist frames it directly). Colours match each class's real in-game tints.
   var DEBUG_LOOK = { dinghy: [[0.5, 0.4, 0.28], [0.94, 0.93, 0.90]], sloop: [[0.45, 0.22, 0.14], [0.94, 0.93, 0.90]],
     brig: [[0.9, 0.52, 0.2], [0.93, 0.91, 0.87]], schooner: [[0.38, 0.26, 0.17], [1.0, 0.82, 0.34]],
-    steamer: [[0.30, 0.34, 0.42], [0.9, 0.9, 0.9]], corsair: [[0.15, 0.13, 0.18], [0.06, 0.05, 0.08]] };
+    steamer: [[0.30, 0.34, 0.42], [0.9, 0.9, 0.9]], corsair: [[0.15, 0.13, 0.18], [0.06, 0.05, 0.08]],
+    // Phase 17b: fleet-registry ladders — hull tint (uBase on the tint-ready hull) + sail tint
+    raft: [[0.55, 0.40, 0.24], [1, 1, 1]], coracle: [[0.58, 0.44, 0.24], [1, 1, 1]],
+    steam_trawler: [[0.34, 0.36, 0.40], [1, 1, 1]], modern_trawler: [[0.42, 0.44, 0.48], [1, 1, 1]],
+    hydrofoil_skiff: [[0.70, 0.73, 0.78], [1, 1, 1]], solar_skimmer: [[0.20, 0.55, 0.85], [1, 1, 1]],
+    log_barge: [[0.45, 0.32, 0.18], [1, 1, 1]], cog: [[0.55, 0.36, 0.20], [0.90, 0.86, 0.78]],
+    clipper: [[0.42, 0.24, 0.14], [0.96, 0.94, 0.88]], paddle_steamer: [[0.86, 0.84, 0.78], [1, 1, 1]],
+    container_ship: [[0.16, 0.18, 0.22], [1, 1, 1]], hover_freighter: [[0.55, 0.60, 0.66], [1, 1, 1]],
+    outrigger: [[0.48, 0.34, 0.20], [0.92, 0.90, 0.85]], caravel: [[0.50, 0.32, 0.18], [0.94, 0.90, 0.80]],
+    barque: [[0.38, 0.24, 0.15], [0.92, 0.88, 0.80]], steam_yacht: [[0.88, 0.86, 0.80], [1, 1, 1]],
+    research_vessel: [[0.85, 0.42, 0.14], [1, 1, 1]], expedition_catamaran: [[0.90, 0.90, 0.87], [0.94, 0.93, 0.90]],
+    solar_trimaran: [[0.24, 0.30, 0.40], [1, 1, 1]] };
   function drawDebugShip(M) {
     var look = DEBUG_LOOK[DEBUG_SHIP] || DEBUG_LOOK.dinghy;
     drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
@@ -587,6 +632,11 @@
   // world position here (same formulas as drawAmbient/drawFleet) is far cheaper and more robust
   // in this hand-rolled engine than adding a second shader + a ship-position uniform array
   // plumbed into F_WATER — boat counts are tiny (a dozen-ish) and this reuses a battle-tested path.
+  // Phase 17b: wake width now derives from the ACTUAL hull length of whatever class is sailing
+  // (getShip(cls).meta.len — already cached by getShip) instead of a hard-coded per-class check, so
+  // every one of the 25 fleet-registry classes gets a wake sized to its own silhouette with no
+  // per-class list to maintain as the ladders grow.
+  function wakeScaleFor(cls, fallback) { var S = getShip(cls); return (S && S.meta) ? clamp(S.meta.len / 16, 0.45, 2.0) : (fallback || 1); }
   function collectWakes() {
     var out = [], i;
     if (ambient) {
@@ -594,23 +644,22 @@
         var b = ambient.boats[i], ang = b.a0 + clock * b.sp;
         var x = ambient.cx + Math.cos(ang) * b.rx, z = ambient.cz + Math.sin(ang) * b.rz;
         var nx = -Math.sin(ang) * b.rx * (b.sp < 0 ? -1 : 1), nz = Math.cos(ang) * b.rz * (b.sp < 0 ? -1 : 1);
-        // Phase 16a: wake width tracks the SHIPYARD class — a dinghy leaves a ripple, a sloop a real trail
-        out.push({ x: x, z: z, yaw: Math.atan2(nx, nz), sc: (b.cls === 'sloop' ? 1.0 : 0.55) * b.sc });
+        out.push({ x: x, z: z, yaw: Math.atan2(nx, nz), sc: wakeScaleFor(ambientBoatClass(b), 0.55) * b.sc });
       }
     }
     var p = scene.port;
     if (p) {
       if (clock - fleet.at > 1) refreshFleet();
-      var e, r, x2, z2, yaw2, f, d;
+      var e, r, x2, z2, yaw2, f, d, eWake = wakeScaleFor(expeditionShipClass(), 1.5);
       for (i = 0; i < fleet.exp.length; i++) {
         e = fleet.exp[i]; f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2; d = 28 + f * 132;
         x2 = p.x + e.dx * d; z2 = p.z + e.dz * d; yaw2 = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
-        out.push({ x: x2, z: z2, yaw: yaw2, sc: 1.5 });                                   // schooner: long elegant hull, long wake
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: eWake });                                 // expedition ladder: long hull, long wake
       }
       for (i = 0; i < fleet.routes.length; i++) {
         r = fleet.routes[i]; var ph = (clock * r.sp + r.ph) % 2, ff = ph < 1 ? ph : 2 - ph, dd = 24 + ff * 92;
         x2 = p.x + r.dx * dd; z2 = p.z + r.dz * dd; yaw2 = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
-        out.push({ x: x2, z: z2, yaw: yaw2, sc: r.cls === 'steamer' ? 1.7 : 1.3 });       // steamer churns harder than the brig
+        out.push({ x: x2, z: z2, yaw: yaw2, sc: wakeScaleFor(r.cls, 1.3) });               // trade ladder: churn tracks the owned hull
       }
       if (fleet.rival) {
         var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
@@ -1623,6 +1672,7 @@
   var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
   var setBtn = null, settingsPanel = null, settingsOpen = false, resetArm = false;
   var expBtn = null, expPanel = null, expOpen = false;
+  var registryBtn = null, registryPanel = null, registryOpen = false;   // Phase 17b: fleet registry
   var timelinePanel = null, timelineStrip = null, timelineOpen = false;   // Phase 17a: age timeline strip
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
@@ -1746,7 +1796,12 @@
     // a salvage crate is sitting unopened
     { id: 'crateWaiting', cooldown: 240,
       when: function () { return crateCount() > 0; },
-      text: 'You have an unopened crate — treasure inside!' }
+      text: 'You have an unopened crate — treasure inside!' },
+    // Phase 17b: any fleet ladder sitting 2+ ages behind the current era — the rubber-band's -5%/age
+    // floor is starting to bite, and there's a concrete fix (Registry) to point at.
+    { id: 'fleetBehind', cooldown: 240,
+      when: function (s) { var f = s.fleet; return !!(f && SIM.FLEET_ROLES.some(function (r) { return (s.era - f[r].tier) >= 2; })); },
+      text: 'Your fleet is falling behind the times — commission modern ships in the Registry' }
   ];
   // Dropped: a "fever/festival ready or being ignored" rule was scoped but isn't shippable — Festival
   // is a random ambient event with no meter/threshold that reads as "ready" (just a randomised gap
@@ -1776,7 +1831,7 @@
   }
   // any surface that currently owns input — tips stay silent rather than talk over it
   function tipsBlocked() {
-    return settingsOpen || manageOpen || expOpen || tradeOpen || legacyOpen || timelineOpen || feverActive() ||
+    return settingsOpen || manageOpen || expOpen || registryOpen || tradeOpen || legacyOpen || timelineOpen || feverActive() ||
       (eventModal && eventModal.classList.contains('show')) ||
       (rivalModal && rivalModal.classList.contains('show')) ||
       !!document.getElementById('welcomemodal') ||
@@ -2014,7 +2069,7 @@
   // ---- expeditions (Phase 7b): send ships on timed voyages (resolve offline), collect rewards ----
   function toggleExp() {
     expOpen = !expOpen;
-    if (expOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } }
+    if (expOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } if (registryOpen) { registryOpen = false; registryPanel.classList.remove('show'); } }
     expPanel.classList.toggle('show', expOpen);
     if (expOpen) { renderExp(); sfx('tap'); haptic(8); }
   }
@@ -2860,6 +2915,7 @@
     legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
     crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
     expBtn = document.createElement('button'); expBtn.id = 'expbtn'; expBtn.textContent = '⛵ Expeditions'; expBtn.addEventListener('click', toggleExp);
+    registryBtn = document.createElement('button'); registryBtn.id = 'registrybtn'; registryBtn.textContent = '🚢 Registry'; registryBtn.style.display = 'none'; registryBtn.addEventListener('click', toggleRegistry);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
     bonusBtn = document.createElement('button'); bonusBtn.id = 'bonusbtn'; bonusBtn.textContent = '⚓ Bonus'; bonusBtn.style.display = 'none'; bonusBtn.addEventListener('click', openBonusCard);
     // top row: resource chips + a live countdown chip (while active) + mute + settings, keeps it short
@@ -2869,7 +2925,7 @@
     wrap.appendChild(econHud);
     // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
     actionBar = document.createElement('div'); actionBar.id = 'actionbar';
-    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(bonusBtn); actionBar.appendChild(mBtn);
+    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(registryBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(bonusBtn); actionBar.appendChild(mBtn);
     wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -2894,10 +2950,13 @@
 
     expPanel = document.createElement('div'); expPanel.id = 'exppanel';
     wrap.appendChild(expPanel);
+
+    registryPanel = document.createElement('div'); registryPanel.id = 'registrypanel';
+    wrap.appendChild(registryPanel);
     updateHUD();
   }
 
-  var BUILD_TAG = 'v66';
+  var BUILD_TAG = 'v67';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -2955,7 +3014,7 @@
 
   function toggleSettings() {
     settingsOpen = !settingsOpen;
-    if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } }
+    if (settingsOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } if (registryOpen) { registryOpen = false; registryPanel.classList.remove('show'); } }
     settingsPanel.classList.toggle('show', settingsOpen);
     resetArm = false;
     if (settingsOpen) { renderSettings(); sfx('tap'); haptic(8); }
@@ -3142,7 +3201,7 @@
     var on = simReady();
     econHud.classList.toggle('show', on); if (actionBar) actionBar.classList.toggle('show', on && !cine);
     if (eraBar) eraBar.classList.toggle('show', on && !cine);
-    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
+    if (!on) { if (managePanel) managePanel.classList.remove('show'); if (settingsPanel) { settingsPanel.classList.remove('show'); settingsOpen = false; } if (expPanel) { expPanel.classList.remove('show'); expOpen = false; } if (registryPanel) { registryPanel.classList.remove('show'); registryOpen = false; } if (raceBanner) raceBanner.classList.remove('show'); return; }
     // a founded port is the moment Expeditions become relevant — the button already exists (in actionBar)
     announceFeature('exp', '⛵', 'Expeditions', 'Send ships on voyages; they return even while you’re away.');
     if (chartersCount() >= DOCTRINE_UNLOCK) announceFeature('doctrine', '🧭', 'Doctrines', 'Pick a path in the Legacy panel.');
@@ -3184,6 +3243,15 @@
     if (legacyBtn) { var lp = s.prestige || { can: false }; var show = lp.can || legacyBal() > 0; legacyBtn.style.display = show ? '' : 'none'; legacyBtn.classList.toggle('ready', lp.can && !legacyOpen); if (lp.can) announceFeature('prestige', '✦', 'Legacy', 'Sign a new charter to restart stronger, forever.'); }
     if (crateBtn) { var nc = crateCount(); crateBtn.style.display = nc > 0 ? '' : 'none'; crateBtn.setAttribute('data-n', nc); }
     if (expBtn) { var rd = (s.voyages && s.voyages.ready) || 0; expBtn.classList.toggle('hasready', rd > 0); expBtn.setAttribute('data-n', rd); }
+    // Phase 17b: Registry becomes relevant once there's a tier worth buying — era 1+ (tier0 is
+    // free and every ladder needs era>=1 for its first upgrade) — announced once, same pattern as
+    // Legacy/Captain's Bonus above.
+    if (registryBtn) {
+      var regShow = s.era >= 1;
+      registryBtn.style.display = regShow ? '' : 'none';
+      if (regShow) announceFeature('registry', '🚢', 'Harbour Registry', 'Buy modern ships as the ages turn — commission upgrades in the Registry.');
+      if (registryOpen) renderRegistry();
+    }
     // Captain's Bonus (Phase 12a): opt-in rewarded boost — button only when eligible (available,
     // no boost already running, port founded), never nags once the daily cap hides it.
     if (bonusBtn) {
@@ -3200,7 +3268,99 @@
     if (manageOpen) renderManage();
     if (expOpen) renderExp();
   }
-  function toggleManage() { manageOpen = !manageOpen; if (manageOpen) { if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } } managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
+  function toggleManage() { manageOpen = !manageOpen; if (manageOpen) { if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } if (registryOpen) { registryOpen = false; registryPanel.classList.remove('show'); } } managePanel.classList.toggle('show', manageOpen); if (manageOpen) renderManage(); }
+  // Phase 17b: Harbour Registry — commission fleet-tier upgrades (sim.js buyShip/fleetTier), same
+  // house panel pattern as Manage/Expeditions (mp-head/mp-sec/mp-grid/mp-item + the 15a ghosted/
+  // "Need £X" convention). One card per role (fishing/trade/expedition): a real mesh PORTRAIT of the
+  // currently-owned class (paintShipPortrait — renders the actual ship, not a placeholder icon),
+  // its name + age label + live yield bonus, and a Commission button.
+  function toggleRegistry() {
+    registryOpen = !registryOpen;
+    if (registryOpen) { if (manageOpen) { manageOpen = false; managePanel.classList.remove('show'); } if (expOpen) { expOpen = false; expPanel.classList.remove('show'); } if (settingsOpen) { settingsOpen = false; settingsPanel.classList.remove('show'); } }
+    registryPanel.classList.toggle('show', registryOpen);
+    if (registryOpen) { renderRegistry(); sfx('tap'); haptic(8); }
+  }
+  var REGISTRY_ROLE_LABEL = { fishing: '🎣 Fishing fleet', trade: '⚓ Trade fleet', expedition: '⛵ Expedition fleet' };
+  function renderRegistry() {
+    if (!simReady()) { registryPanel.classList.remove('show'); registryOpen = false; return; }
+    var s = SIM.state(), fv = s.fleet;
+    var h = '<div class="mp-head">🚢 Harbour Registry<button id="reg-close">✕</button></div>';
+    SIM.FLEET_ROLES.forEach(function (role) {
+      var f = fv[role], cls = ladderClass(role, f.tier), name = FLEET_NAMES[cls] || cls, age = SIM.eraName(f.tier);
+      h += '<div class="mp-sec">' + REGISTRY_ROLE_LABEL[role] + '</div>';
+      h += '<div class="reg-card"><canvas class="reg-portrait" width="' + PORTRAIT_SIZE + '" height="' + PORTRAIT_SIZE + '" data-cls="' + cls + '"></canvas>';
+      h += '<div class="reg-info"><div class="reg-name">' + name + '</div><div class="reg-age">' + age + ' · ' + (f.mul >= 1 ? '+' : '') + Math.round((f.mul - 1) * 100) + '% yield</div>';
+      if (f.maxed) h += '<div class="reg-max">Fleet complete ✓</div>';
+      else {
+        var nextCls = ladderClass(role, f.tier + 1), nextName = FLEET_NAMES[nextCls] || nextCls, ghosted = false, label;
+        if (f.eraGated) { label = 'Requires ' + f.nextEra; ghosted = true; }
+        else if (!f.can) { label = 'Need £' + fmt(f.cost); ghosted = true; }
+        else label = 'Commission ' + nextName + ' — £' + fmt(f.cost);
+        h += '<button class="mp-item reg-buy' + (ghosted ? ' ghosted' : '') + '" data-buy="' + role + '"' + (ghosted ? ' disabled' : '') + '>' + label + '</button>';
+      }
+      h += '</div></div>';
+    });
+    registryPanel.innerHTML = h;
+    registryPanel.querySelector('#reg-close').addEventListener('click', toggleRegistry);
+    registryPanel.querySelectorAll('canvas.reg-portrait').forEach(function (cv) { paintShipPortrait(cv, cv.getAttribute('data-cls')); });
+    registryPanel.querySelectorAll('[data-buy]').forEach(function (el) { el.addEventListener('click', function () {
+      var role = el.getAttribute('data-buy');
+      if (SIM.buyShip(role)) {
+        sfx('merge'); haptic(18);
+        if (achUnlock('ship1')) popAch(achName('ship1'), true);
+        var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 20, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 160, life: 0.9, size: 5 });
+        ambient = null;   // Phase 17b: rebuild ambient traffic so newly-commissioned classes get lazily built + shown right away
+        renderRegistry(); updateHUD();
+      } else sfx('lose');
+    }); });
+  }
+  // ---- Phase 17b: ship-registry mesh portraits — a real render of the mesh (not a placeholder
+  // icon), reusing the main GL context + compiled program (E.P_main) + the already-cached ship
+  // meshes (getShip). One small offscreen framebuffer for the whole game (E.createRT, the same
+  // helper the post-processing pass uses); render one class, readPixels it back, blit into the
+  // panel's plain 2D <canvas> via putImageData (GL is bottom-up, so the row copy flips it). A
+  // per-class ImageData cache — a class's silhouette never changes once built — means this only
+  // ever costs real GPU work the first time each class is shown.
+  var portraitFB = null, PORTRAIT_SIZE = 168, portraitCache = {};
+  function ensurePortraitFB() { if (!portraitFB && gl && E) portraitFB = E.createRT(PORTRAIT_SIZE, PORTRAIT_SIZE); return portraitFB; }
+  function paintShipPortrait(canvasEl, cls) {
+    var ctx = canvasEl.getContext('2d'); if (!ctx) return;
+    if (portraitCache[cls]) { ctx.putImageData(portraitCache[cls], 0, 0); return; }
+    if (!gl || !E) return;
+    var S = getShip(cls); if (!S) return;
+    var rt = ensurePortraitFB(); if (!rt) return;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt.fb);
+    gl.viewport(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE);
+    gl.clearColor(0.055, 0.09, 0.13, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); gl.disable(gl.BLEND);
+    var M = E.P_main; gl.useProgram(M.p);
+    var len = (S.meta && S.meta.len) || 12, dist = len * 1.15 + 7, eyeP = [dist * 0.60, dist * 0.46, dist * 0.72];
+    var pP = mat4.create(), pV = mat4.create(), pVP = mat4.create();
+    mat4.perspective(pP, 0.6, 1, 0.5, dist * 5);
+    mat4.lookAt(pV, eyeP, [0, len * 0.05, 0], [0, 1, 0]);
+    mat4.mul(pVP, pP, pV);
+    gl.uniformMatrix4fv(M.u.uVP, false, pVP);
+    gl.uniform3fv(M.u.uSunDir, [0.42, 0.80, 0.32]); gl.uniform3fv(M.u.uSunCol, [1.5, 1.42, 1.28]);
+    gl.uniform3fv(M.u.uAmbTop, [0.56, 0.60, 0.70]); gl.uniform3fv(M.u.uAmbBot, [0.28, 0.27, 0.29]);
+    gl.uniform3fv(M.u.uShadowTint, [0.60, 0.65, 1.0]); gl.uniform1f(M.u.uShadowK, 0.5);
+    gl.uniform3fv(M.u.uCam, eyeP); gl.uniform3fv(M.u.uFog, [0.055, 0.09, 0.13]); gl.uniform1f(M.u.uFogD, 0);
+    gl.uniform3fv(M.u.uWin, [1, 1, 1]); gl.uniform1f(M.u.uNight, 0); gl.uniform1f(M.u.uTime, 0);
+    gl.uniform1f(M.u.uExposure, 1.6); gl.uniform1f(M.u.uSat, 1.28); gl.uniform1f(M.u.uCrush, 0.06);
+    gl.uniform1f(M.u.uShadowOn, 0);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(M.u.uShadow, 2);
+    gl.uniform1f(M.u.uToon, 1); gl.uniform1f(M.u.uAlbedo, 0); gl.uniform1f(M.u.uTexMix, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, facTex || null); gl.uniform1i(M.u.uTex, 1);
+    var look = DEBUG_LOOK[cls] || DEBUG_LOOK.dinghy;
+    drawShip(M, cls, 0, 0, 0, 0.68, 1, look[0], look[1], 0);
+    var px = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4);
+    gl.readPixels(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+    var img = ctx.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE), row = PORTRAIT_SIZE * 4;
+    for (var y = 0; y < PORTRAIT_SIZE; y++) { var sy = PORTRAIT_SIZE - 1 - y; img.data.set(px.subarray(sy * row, sy * row + row), y * row); }
+    portraitCache[cls] = img;
+    ctx.putImageData(img, 0, 0);
+  }
   function renderManage() {
     if (!simReady()) { managePanel.classList.remove('show'); manageOpen = false; return; }
     var s = SIM.state(), BT = SIM.BT;
@@ -3343,7 +3503,8 @@
     { id: 'pr1', name: 'First Charter Signed' }, { id: 'pr10', name: 'Ten Charters' }, { id: 'bpall', name: 'Blueprint Collector' },
     { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
     { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' },
-    { id: 'avert1', name: 'Storm Whisperer' }, { id: 'discover1', name: 'Pathfinder' }
+    { id: 'avert1', name: 'Storm Whisperer' }, { id: 'discover1', name: 'Pathfinder' },
+    { id: 'ship1', name: 'First Commission' }   // Phase 17b: first fleet-registry ship bought
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -3400,19 +3561,10 @@
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
     gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
-    // Phase 16a: SHIPYARD — build all six real ship-class meshes once (hull/trim/sails); see
-    // HARBOR_MODELS.SHIPYARD (models.js) for the shared part-builder kit + per-class spec table.
-    var shipVertTotal = 0, shipStatsByClass = {};
-    HARBOR_MODELS.SHIPYARD.CLASSES.forEach(function (cls) {
-      var s = HARBOR_MODELS.SHIPYARD.build(cls);
-      var hullV = s.hull.positions.length / 3, trimV = s.trim.positions.length / 3;
-      var sailMeshes = s.sails.map(function (sd) { return { mesh: E.mesh(sd.data), phase: sd.phase, verts: sd.data.positions.length / 3 }; });
-      var sailV = sailMeshes.reduce(function (a, sm) { return a + sm.verts; }, 0);
-      SHIP[cls] = { hull: E.mesh(s.hull), trim: E.mesh(s.trim), sails: sailMeshes, meta: s.meta };
-      shipStatsByClass[cls] = { hull: hullV, trim: trimV, sails: sailV, total: hullV + trimV + sailV };
-      shipVertTotal += hullV + trimV + sailV;
-    });
-    shipStats = { classes: shipStatsByClass, total: shipVertTotal, oldShipBaseline: 78 };   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives
+    // Phase 16a/17b: SHIPYARD — 25 real ship-class meshes across three fleet-tier ladders (see
+    // HARBOR_MODELS.SHIPYARD.LADDERS); built LAZILY via getShip() above (first actual use uploads +
+    // caches), so shipStats starts empty and fills in as classes are actually drawn.
+    shipStats = { classes: {}, total: 0, oldShipBaseline: 78 };   // 78 = legacy hullMesh(61)+sailMesh(17) unit primitives
     facTex = E.texture(facadeTexture()); gritTex = E.texture(gritTexture()); blobTex = E.texture(blobTexture()); wakeTex = E.texture(wakeTexture());   // waterMesh is (re)built per-biome in buildBiome() → buildWaterMesh() (Phase 14a: bakes shore-foam heights)
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
@@ -3491,7 +3643,7 @@
     setPost: function (v) { setPost(!!v, false); return postEnabled(); },   // forced state: disarms the probe (deterministic for tests)
     geomStats: function () { return geomStats; },        // static-scene vertex/index counts (budget guard)
     shipStats: function () { return shipStats; },        // Phase 16a: per-SHIPYARD-class vertex counts + old-ship baseline (budget guard)
-    debugShip: function (cls) { DEBUG_SHIP = (cls && SHIP[cls]) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears)
+    debugShip: function (cls) { DEBUG_SHIP = (cls && getShip(cls)) ? cls : null; return DEBUG_SHIP; },   // test-only: park one forced ship class in front of the camera (null/invalid clears); lazy-builds it if never seen before
     setEra: function (n) { era = Math.max(0, n | 0); if (SIM && SIM.raw() && SIM.raw().founded) SIM.setEra(era); if (window.Retention) Retention.set(GAME, 'era', era); if (E) { buildBiome(biomeId); updateHUD(); } },
     econ: function () { return SIM ? SIM.state() : null; },
     setFocus: function (f, id) { var r = SIM ? SIM.setFocus(id == null ? null : id, f) : false; if (r) { updateHUD(); if (manageOpen) renderManage(); } return r; },
@@ -3574,7 +3726,14 @@
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
     fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0,
-      expClass: fleet.exp.length ? 'schooner' : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null }; },   // Phase 16a: kind→SHIPYARD class mapping
+      expClass: fleet.exp.length ? expeditionShipClass() : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null }; },   // Phase 17b: kind→owned-tier ladder class mapping
+    // Phase 17b: fleet registry (test/debug hooks)
+    fleetTier: function (role) { return SIM ? SIM.fleetTier(role) : 0; },
+    fleetShipCost: function (role) { return SIM ? SIM.fleetShipCost(role) : null; },
+    buyShip: function (role) { var r = SIM ? SIM.buyShip(role) : false; if (r) { updateHUD(); if (registryOpen) renderRegistry(); } return r; },
+    fleetView: function () { return SIM ? SIM.fleet() : null; },
+    ladderClass: function (role, tier) { return ladderClass(role, tier); },
+    openRegistry: function () { if (!registryOpen) toggleRegistry(); else renderRegistry(); }, closeRegistry: function () { if (registryOpen) toggleRegistry(); },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },
     season: function () { return { id: seasonId(), theme: seasonTheme(), points: seasonGet().points, claimed: seasonGet().claimed.slice(), daysLeft: seasonDaysLeft(), tiers: PASS_TIERS.length }; }, addSeasonPoints: function (n) { seasonAdd(n); updateHUD(); }, claimPass: function (i) { return claimPass(i); },
     fortune: function () { if (window.Retention) Retention.set(GAME, 'fortuneDay', null); showStreak(); return !!(fortuneModal && fortuneModal.classList.contains('show')); }, drawFortune: function () { var b = fortuneModal && fortuneModal.querySelector('#ft-btns .ev-btn'); if (b) b.click(); },
