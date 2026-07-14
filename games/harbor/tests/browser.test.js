@@ -194,10 +194,13 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     shown: document.getElementById('registrypanel').classList.contains('show'),
     cards: document.querySelectorAll('#registrypanel .reg-card').length,
     portraits: document.querySelectorAll('#registrypanel canvas.reg-portrait').length,
-    buyBtns: document.querySelectorAll('#registrypanel [data-buy]').length
+    buyBtns: document.querySelectorAll('#registrypanel [data-buy]').length,
+    navyBuyBtns: document.querySelectorAll('#registrypanel [data-buy-navy]').length   // Phase 17c: the 4th (Navy) card's button is a distinct attribute
   }));
-  ok('17b registry: panel renders 3 role cards, each with a mesh portrait + a Commission button (flush with cash + era4)',
-    reg1.shown && reg1.cards === 3 && reg1.portraits === 3 && reg1.buyBtns === 3);
+  ok('17b registry: panel renders 3 fleet-role cards, each with a mesh portrait + a Commission button (flush with cash + era4)',
+    reg1.shown && reg1.buyBtns === 3);
+  ok('17c registry: a 4th card (Navy) renders alongside the 3 fleet roles, each with its own mesh portrait',
+    reg1.cards === 4 && reg1.portraits === 4 && reg1.navyBuyBtns === 1);
   // ghosted "Need £X" state: broke, but era-eligible for tier1
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 0; window.__harbor.openRegistry(); });
   await sleep(120);
@@ -242,6 +245,67 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('17b registry: maxing a ladder (tier7) shows "Fleet complete ✓" instead of a Commission button', reg4.tier === 7 && reg4.hasMax);
   await page.evaluate(() => window.__harbor.closeRegistry());
   ok('17b registry: panel flows produced zero new console/GL errors', errs.length === errsBeforeReg);
+
+  // ---- Phase 17c: THE NAVY — Registry section, visible patrol, auto-defended raid banner ----
+  const errsBeforeNavy = errs.length;
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(0); window.HARBOR_SIM.raw().navy = 0; window.HARBOR_SIM.raw().money = 0; window.__harbor.openRegistry(); });
+  await sleep(150);
+  const nav0 = await page.evaluate(() => {
+    var btn = document.querySelector('#registrypanel [data-buy-navy]');
+    return { cardCount: document.querySelectorAll('#registrypanel .reg-card').length, text: btn ? btn.textContent : null, ghosted: btn ? btn.classList.contains('ghosted') : null };
+  });
+  ok('17c registry: a 4th card (Navy) renders alongside the 3 fleet roles', nav0.cardCount === 4);
+  ok('17c registry: era0 navy — ghosted "Requires [Age]" (tier1 needs era>=1)', /^Requires /.test(nav0.text || '') && nav0.ghosted === true);
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(1); window.HARBOR_SIM.raw().money = 0; window.__harbor.openRegistry(); });
+  await sleep(120);
+  const nav1 = await page.evaluate(() => {
+    var btn = document.querySelector('#registrypanel [data-buy-navy]');
+    return { text: btn ? btn.textContent : null, ghosted: btn ? btn.classList.contains('ghosted') : null };
+  });
+  ok('17c registry: era1 + broke — ghosted "Need £X" Commission button', /^Need £/.test(nav1.text || '') && nav1.ghosted === true);
+  await page.evaluate(() => {
+    var a = window.Retention.get('harbor', 'ach', {}); delete a.admiral1; window.Retention.set('harbor', 'ach', a);   // clear ONLY admiral1 — other achievements earned earlier in this run must survive
+    window.HARBOR_SIM.raw().money = 1e7; window.__harbor.openRegistry();
+  });
+  await sleep(120);
+  const preNavyTier = await page.evaluate(() => window.__harbor.navyTier());
+  await page.evaluate(() => { var b = document.querySelector('#registrypanel [data-buy-navy]'); if (b) b.click(); });
+  await sleep(150);
+  const postNavyBuy = await page.evaluate(() => {
+    var names = document.querySelectorAll('#registrypanel .reg-name');
+    return { tier: window.__harbor.navyTier(), ach: (window.Retention.get('harbor', 'ach', {}) || {}).admiral1 === 1, cardName: names.length ? names[names.length - 1].textContent : null };
+  });
+  ok('17c registry: Commission charges the tier cost and bumps navy tier by exactly 1', postNavyBuy.tier === preNavyTier + 1);
+  ok('17c registry: first-ever navy commission latches the "Admiral" achievement', postNavyBuy.ach === true);
+  ok('17c registry: the Navy card repaints to the newly-commissioned class name (Patrol Cutter)', postNavyBuy.cardName === 'Patrol Cutter');
+  // max out the navy ladder → "Fleet complete ✓" replaces the Commission button, on the LAST (Navy) card
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(6); for (var i = 0; i < 10; i++) { window.HARBOR_SIM.raw().money = 1e7; window.__harbor.buyNavy(); } window.__harbor.openRegistry(); });
+  await sleep(120);
+  const navMax = await page.evaluate(() => {
+    var cards = document.querySelectorAll('#registrypanel .reg-card'), last = cards[cards.length - 1];
+    return { tier: window.__harbor.navyTier(), lastHasMax: last ? !!last.querySelector('.reg-max') : false, lastHasBuy: last ? !!last.querySelector('[data-buy-navy]') : false };
+  });
+  ok('17c registry: maxing the navy (tier5) shows "Fleet complete ✓" on the Navy card, no Commission button', navMax.tier === 5 && navMax.lastHasMax === true && navMax.lastHasBuy === false);
+  await page.evaluate(() => window.__harbor.closeRegistry());
+  await sleep(200);
+  // visible patrol: a maxed navy shows 2 ships (highest tier + one below), a real ladder class
+  const fleetNav = await page.evaluate(() => window.__harbor.fleet());
+  ok('17c patrol: navy tier5 shows 2 patrol ships via __harbor.fleet().navy, flying the top-tier class', fleetNav.navy === 2 && fleetNav.navyClass === 'drone_screen');
+  // auto-defended raid: navyPower(5) >= raidStrength(era6=4) — fireEvent('raid') resolves instantly
+  // (no modal), and the repelled-raid banner shows with the loot amount, auto-dismissing on its own.
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1000; });
+  const repelEv = await page.evaluate(() => window.__harbor.fireEvent('raid'));
+  await sleep(200);
+  const banner = await page.evaluate(() => {
+    var el = document.getElementById('navybanner');
+    return { shown: el ? el.classList.contains('show') : false, text: el ? el.querySelector('.nb-txt').textContent : null, modalShown: !!document.querySelector('#eventmodal.show') };
+  });
+  ok('17c auto-defense: fireEvent(raid) at navyPower>=raidStrength resolves instantly (auto:true, no modal)', repelEv && repelEv.auto === true && banner.modalShown === false);
+  ok('17c auto-defense: repelled-raid banner shows the loot amount, styled like a celebratory storm banner', banner.shown === true && /Navy repelled the raiders/i.test(banner.text || '') && /£/.test(banner.text || ''));
+  await sleep(3800);
+  const bannerAfter = await page.evaluate(() => document.getElementById('navybanner').classList.contains('show'));
+  ok('17c auto-defense: the banner auto-dismisses on its own (~3.6s), no player action needed', bannerAfter === false);
+  ok('17c navy flows produced zero new console/GL errors', errs.length === errsBeforeNavy);
 
   // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
   await page.evaluate(() => window.__harbor.openTrade());
@@ -549,6 +613,20 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   }));
   ok('16a shipyard: static-scene geomStats untouched by the fleet rework (ships are per-frame meshes)',
     await page.evaluate(() => { var g = window.__harbor.geomStats(); return g && g.verts > 10000 && g.verts < 250000; }));
+
+  // Phase 17c: THE NAVY — 5 more real ship classes (models.js HARBOR_MODELS.SHIPYARD.NAVY), off
+  // every fleet ladder. Same lazy-build/vert-budget contract as the fleet-registry classes above.
+  const errsBefore17c = errs.length;
+  for (const c of ['patrol_cutter', 'frigate', 'ironclad', 'destroyer', 'drone_screen']) {
+    await page.evaluate(cc => window.__harbor.debugShip(cc), c); await sleep(180);
+  }
+  await page.evaluate(() => window.__harbor.debugShip(null));
+  ok('17c shipyard: all 5 navy classes render several frames with zero GL warnings/errors', errs.length === errsBefore17c);
+  const ss17c = await page.evaluate(() => window.__harbor.shipStats());
+  ok('17c shipyard: all 5 navy classes build bigger than the old ship and under the 4000-vert class budget',
+    ss17c && ['patrol_cutter', 'frigate', 'ironclad', 'destroyer', 'drone_screen'].every(c => {
+      var s = ss17c.classes[c]; return s && s.total > ss17c.oldShipBaseline && s.total < 4000;
+    }));
 
   // Phase 16b: VIBRANT STORYBOOK world pass — bolder saturated palette, a two-tone postcard water
   // gradient (rich teal deep -> bright turquoise shallow, quantized into toon bands), a wider/

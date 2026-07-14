@@ -685,6 +685,84 @@
       }
     }
   };
+
+  // ---------------- Phase 17c: THE NAVY — a 5-rung DEFENSE ladder (sim.js S.navy), off every 17b
+  // fleet ladder (its own SHIPYARD.NAVY list below). Same assembleShip()/SPEC-table kit as every
+  // other class, deliberately CHARMING not grim: crisp white hulls, a bold navy-blue "gun-deck
+  // stripe" (gunDeckStripe below — a painted band, not an actual line of guns) and gold trim/
+  // pennants throughout, so the fleet reads as ceremonial harbour patrol boats rather than warships
+  // — no cannons, turrets or missiles anywhere in the kit, only stylised deck fixtures (a signal
+  // lamp, a ram-bow spur, funnels, a bridge tower, two tiny hovering drone "satellites" baked into
+  // the futuristic capstone's own trim mesh).
+  var NAVY_BLUE = [0.10, 0.16, 0.32], NAVY_TRIM = [0.14, 0.22, 0.42], GOLD_TRIM = [0.85, 0.68, 0.26];
+  // a painted horizontal band around the hull at a given height fraction (y, 0=waterline..1=deck) —
+  // reuses the SAME hullW/hullLift profile every hull ring samples, so the stripe always hugs the
+  // real silhouette instead of floating off a straight-line approximation.
+  function gunDeckStripe(trim, L, Bm, H, n, bowLift, y, tone) {
+    n = n || 7;
+    for (var i = 0; i < n; i++) {
+      var t = (i + 0.5) / n, w = hullW(Bm, t) * 1.01, lift = hullLift(bowLift, t), z = -L / 2 + L * (i + 0.5) / n, len = L / n * 1.05;
+      trim.box(0, H * y + lift, z, len, H * 0.16, w, tone, 0);
+    }
+  }
+  function signalLamp(trim, x, y, z, r) { trim.cyl(x, y, z, r, r * 1.3, 7, [0.92, 0.90, 0.78], 0.85); trim.cyl(x, y + r * 1.3, z, r * 0.65, r * 0.32, 7, [0.18, 0.18, 0.20], 0.6); }
+  // a tiny hovering "drone satellite" — a flat glass-steel pad + a short glowing antenna mast,
+  // TETHERED to the deck by a thin strut (deckY = local hull deck height) so it reads as hovering
+  // just off the mothership rather than floating disconnected in the distance — baked directly
+  // into the mothership's own trim mesh (not a separate draw call/animation) so it reads as "part
+  // of the fleet" the instant the class is drawn, exactly like the steamer's baked containers or
+  // the trimaran's baked pontoons.
+  function droneSat(trim, x, y, z, s, deckY, tone) {
+    strutS(trim, x, deckY, z, x, y - s * 0.3, z, 0.07, [0.55, 0.57, 0.60]);
+    trim.bbox(x, y, z, s * 1.4, s * 0.45, s * 1.4, tone || GLASS_STEEL, 0, s * 0.18);
+    trim.box(x, y + s * 0.42, z, s * 0.14, s * 0.5, s * 0.14, NEON_HUES[1], 0);
+  }
+  var NAVY_SPECS = {
+    patrol_cutter: {  // tier1 (era>=1): tiny sharp motor launch, no sails — a signal mast + gold
+                       // pennant and a deck lamp are its only "fixtures"
+      L: 9, Bm: 2.8, H: 1.15, n: 5, bowLift: 0.55, gunwale: true, gunwaleTone: NAVY_TRIM, rudder: true, rig: false,
+      deckTone: WHITE_HULL, masts: [{ z: -1.6, top: 4.6 }], pennant: { c: NAVY_BLUE, accent: GOLD_TRIM },
+      extra: function (trim, L2, Bm2, H2) { gunDeckStripe(trim, L2, Bm2, H2, 5, 0.55, 0.55, NAVY_BLUE); signalLamp(trim, 0, H2 * 1.30, L2 * 0.18, 0.30); }
+    },
+    frigate: {  // tier2 (era>=2): two-master, white hull + a bold navy gun-deck stripe, gold pennant
+      L: 18, Bm: 5.4, H: 2.4, n: 7, bowLift: 1.0, gunwale: true, gunwaleTone: NAVY_TRIM, rudder: true,
+      bowspritLen: 2.4, cabin: true, cabinTone: WHITE_HULL, deckTone: [0.86, 0.84, 0.78],
+      masts: [{ z: 3.6, top: 13.0 }, { z: -2.8, top: 14.0 }],
+      sails: [{ shape: 'square', mast: 0, base: 6.6, h: 6.8, y0: 3.2 }, { shape: 'square', mast: 1, base: 7.2, h: 7.6, y0: 3.4 }],
+      pennant: { c: NAVY_BLUE, accent: GOLD_TRIM },
+      extra: function (trim, L2, Bm2, H2) { gunDeckStripe(trim, L2, Bm2, H2, 7, 1.0, 0.58, NAVY_BLUE); }
+    },
+    ironclad: {  // tier3 (era>=4): low iron hull, ram-bow spur, single funnel — no sails
+      L: 21, Bm: 5.8, H: 2.0, n: 7, bowLift: 0.35, gunwale: true, gunwaleTone: STEEL, rudder: true, rig: false,
+      cabin: true, cabinTone: STEEL, deckTone: [0.24, 0.25, 0.27],
+      extra: function (trim, L2, Bm2, H2) {
+        funnelPart(trim, 0, -L2 * 0.05, H2, H2 * 1.7, 0.62, GOLD_TRIM);
+        strutS(trim, 0, H2 * 0.30, L2 * 0.40, 0, H2 * 0.18, L2 * 0.56, Math.max(0.5, Bm2 * 0.16), STEEL);   // ram-bow spur, low at the waterline
+        gunDeckStripe(trim, L2, Bm2, H2, 7, 0.35, 0.62, NAVY_BLUE);
+      }
+    },
+    destroyer: {  // tier4 (era>=5): sleek grey hull, tall bridge tower, twin funnels — no sails
+      L: 26, Bm: 5.6, H: 2.3, n: 7, bowLift: 0.55, gunwale: true, gunwaleTone: STEEL, rudder: true, rig: false,
+      deckTone: [0.30, 0.31, 0.34],
+      extra: function (trim, L2, Bm2, H2) {
+        trim.bbox(0, H2 * 1.7, L2 * 0.10, Bm2 * 0.42, H2 * 1.5, L2 * 0.10, WHITE_HULL, 0, 0.2);      // bridge tower
+        trim.box(0, H2 * 2.35, L2 * 0.10, Bm2 * 0.40, 0.4, 0.12, NAVY_TRIM, 0);                       // bridge window band
+        funnelPart(trim, 0, -L2 * 0.06, H2, H2 * 1.5, 0.5, GOLD_TRIM); funnelPart(trim, 0, -L2 * 0.24, H2, H2 * 1.5, 0.5, GOLD_TRIM);
+        gunDeckStripe(trim, L2, Bm2, H2, 7, 0.55, 0.56, NAVY_BLUE);
+      }
+    },
+    drone_screen: {  // tier5 (era>=6): futuristic mothership + two tiny hovering drone satellites
+                      // baked into its own trim mesh — the Navy's "harbour of tomorrow" capstone
+      L: 20, Bm: 5.2, H: 1.6, n: 6, bowLift: 0.25, gunwale: false, rudder: false, rig: false, deckTone: SOLAR_BLUE,
+      extra: function (trim, L2, Bm2, H2) {
+        solarDeckPart(trim, Bm2, H2, -L2 * 0.30, L2 * 0.30, SOLAR_BLUE); glowTrimPart(trim, L2, Bm2, H2, 6, 0.25, GOLD_TRIM);
+        trim.cyl(0, H2 * 1.3, -L2 * 0.40, 0.30, 0.6, 8, GLASS_STEEL, 0.85);
+        droneSat(trim, Bm2 * 0.85, H2 * 1.9, L2 * 0.12, 1.1, H2, GLASS_STEEL); droneSat(trim, -Bm2 * 0.80, H2 * 1.75, -L2 * 0.10, 1.0, H2, GLASS_STEEL);
+      }
+    }
+  };
+  for (var __navyKey in NAVY_SPECS) SHIP_SPECS[__navyKey] = NAVY_SPECS[__navyKey];   // merge navy rungs into the shared SPEC table
+
   function assembleShip(spec) {
     var L = spec.L, Bm = spec.Bm, H = spec.H;
     var hullB = new g.HGL.Builder(); hullTint(hullB, L, Bm, H, spec.n, spec.bowLift);
@@ -740,16 +818,21 @@
     trade: ['log_barge', 'cog', 'brig', 'clipper', 'paddle_steamer', 'steamer', 'container_ship', 'hover_freighter'],
     expedition: ['outrigger', 'caravel', 'schooner', 'barque', 'steam_yacht', 'research_vessel', 'expedition_catamaran', 'solar_trimaran']
   };
+  // Phase 17c: the Navy's own 5-rung ladder — index === navyTier()-1 from sim.js (HARBOR_SIM.navyTier;
+  // tier0 = no navy = no class at all), kept separate from FLEET_LADDERS (it isn't a production
+  // role — see NAVY_SPECS above).
+  var NAVY_LADDER = ['patrol_cutter', 'frigate', 'ironclad', 'destroyer', 'drone_screen'];
   var SHIP_NAMES = {
     dinghy: 'Dinghy', sloop: 'Sloop', brig: 'Brig', schooner: 'Schooner', steamer: 'Steam Freighter', corsair: 'Corsair',
     raft: 'Raft', coracle: 'Coracle', steam_trawler: 'Steam Trawler', modern_trawler: 'Modern Trawler', hydrofoil_skiff: 'Hydrofoil Skiff', solar_skimmer: 'Solar Skimmer',
     log_barge: 'Log Barge', cog: 'Cog', clipper: 'Clipper', paddle_steamer: 'Paddle Steamer', container_ship: 'Container Ship', hover_freighter: 'Hover-Freighter',
-    outrigger: 'Outrigger', caravel: 'Caravel', barque: 'Barque', steam_yacht: 'Steam Yacht', research_vessel: 'Research Vessel', expedition_catamaran: 'Expedition Catamaran', solar_trimaran: 'Solar Trimaran'
+    outrigger: 'Outrigger', caravel: 'Caravel', barque: 'Barque', steam_yacht: 'Steam Yacht', research_vessel: 'Research Vessel', expedition_catamaran: 'Expedition Catamaran', solar_trimaran: 'Solar Trimaran',
+    patrol_cutter: 'Patrol Cutter', frigate: 'Frigate', ironclad: 'Ironclad', destroyer: 'Destroyer', drone_screen: 'Drone Screen'
   };
   var SHIPYARD = {
     CLASSES: ['dinghy', 'sloop', 'brig', 'schooner', 'steamer', 'corsair'].concat(
-      FLEET_LADDERS.fishing, FLEET_LADDERS.trade, FLEET_LADDERS.expedition).filter(function (c, i, a) { return a.indexOf(c) === i; }),
-    LADDERS: FLEET_LADDERS, NAMES: SHIP_NAMES,
+      FLEET_LADDERS.fishing, FLEET_LADDERS.trade, FLEET_LADDERS.expedition, NAVY_LADDER).filter(function (c, i, a) { return a.indexOf(c) === i; }),
+    LADDERS: FLEET_LADDERS, NAVY: NAVY_LADDER, NAMES: SHIP_NAMES,
     build: function (cls) { return assembleShip(SHIP_SPECS[cls] || SHIP_SPECS.dinghy); }
   };
 

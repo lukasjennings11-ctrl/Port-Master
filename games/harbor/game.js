@@ -192,6 +192,12 @@
   var FLEET_NAMES = (window.HARBOR_MODELS && HARBOR_MODELS.SHIPYARD.NAMES) || {};
   function ladderClass(role, tier) { var L = FLEET_LADDERS[role] || ['dinghy']; return L[Math.max(0, Math.min(L.length - 1, tier | 0))]; }
   function fleetTierOf(role) { return (SIM && simReady()) ? SIM.fleetTier(role) : 2; }
+  // Phase 17c: the Navy's own 5-rung ladder (models.js HARBOR_MODELS.SHIPYARD.NAVY) — index ===
+  // navyTier()-1 (tier0 = no navy = no class); FLEET_NAMES already covers navy classes too since
+  // models.js merges their display names into the same SHIPYARD.NAMES map.
+  var NAVY_LADDER = (window.HARBOR_MODELS && HARBOR_MODELS.SHIPYARD.NAVY) || ['patrol_cutter'];
+  function navyClass(tier) { return tier > 0 ? NAVY_LADDER[Math.max(0, Math.min(NAVY_LADDER.length - 1, (tier | 0) - 1))] : null; }
+  function navyTierOf() { return (SIM && simReady()) ? SIM.navyTier() : 0; }
   var era = 0, scene = { city: [], blobs: [], crane: false, era: 0, founded: false, port: null };
   var cityModels = null, atlasTex = null, blobTex = null, wakeTex = null;   // glTF buildings (async) + shared atlas + shadow decal + wake decal
   var founded = {};                                          // biomeId -> {x,z,yaw} (founded harbours)
@@ -498,19 +504,31 @@
   // the active port and the horizon on stable per-route headings (capped at 4). While a rival
   // race is on, Baron Krall's black-sailed ship patrols offshore. State is cached from the sim
   // ~1/sec (keyed per voyage seq / route id); the per-frame draw allocates nothing.
-  var fleet = { exp: [], routes: [], rival: null, at: -1e9 };
+  // Phase 17c: fleet.navy — up to 2 owned navy ships (highest tier + one below it, if owned)
+  // patrolling their own coastal lane, closer to shore and slower than the rival corsair's — see
+  // navyPatrolPos()/refreshFleet() below.
+  var fleet = { exp: [], routes: [], rival: null, navy: [], at: -1e9 };
   var FLEET_SAIL = [[0.78, 0.9, 1.0], [0.55, 0.95, 0.72], [1.0, 0.82, 0.34], [0.85, 0.5, 1.0]];       // sail tint per destination tier 1..4
   var FLEET_HULL = { fish: [0.56, 0.66, 0.78], timber: [0.5, 0.33, 0.18], goods: [0.9, 0.52, 0.2] };  // hull tint per route resource
   var EXP_HULL = [0.38, 0.26, 0.17], RTE_SAIL = [0.93, 0.91, 0.87],
-      RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08];
+      RVL_HULL = [0.15, 0.13, 0.18], RVL_SAIL = [0.06, 0.05, 0.08],
+      NAVY_HULL = [0.92, 0.92, 0.90], NAVY_SAIL = [0.90, 0.89, 0.84];   // crisp white hull; the navy-blue/gold trim is baked into each class's own mesh
   // Phase 17b: route freighter class now follows the OWNED trade-fleet tier (Registry purchases),
   // not the era directly — supersedes 16a's era>=2 auto-swap to brig/steamer: a fleet only
   // modernises when the harbourmaster actually commissions a new class. fleetTierOf falls back to
   // tier 2 (brig) when SIM isn't ready, matching 16a's old pre-industrial default.
   function routeShipClass() { return ladderClass('trade', fleetTierOf('trade')); }
   function expeditionShipClass() { return ladderClass('expedition', fleetTierOf('expedition')); }
+  // Phase 17c: current world position of a patrolling navy ship (n = one fleet.navy entry) — a
+  // shared helper so drawFleet/collectWakes/the auto-defense repel FX all agree on where the ship
+  // actually is right now. Slower (0.22 vs the corsair's 0.35) and a tighter arc (amplitude 30 vs
+  // 46) than Baron Krall's patrol — lawful, unhurried, close to shore.
+  function navyPatrolPos(n) {
+    var pa = clock * 0.22 + (n.ph || 0), dir = Math.cos(pa) >= 0 ? 1 : -1;
+    return { x: n.cx + n.px * Math.sin(pa) * 30, z: n.cz + n.pz * Math.sin(pa) * 30, yaw: Math.atan2(n.px * dir, n.pz * dir) };
+  }
   function refreshFleet() {
-    fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null;
+    fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null; fleet.navy.length = 0;
     var p = scene.port; if (!p || !simReady()) return;
     // offshore heading: reuse the deep-water lane the ambient boats found (fallback: downhill to the sea)
     var ox, oz;
@@ -538,6 +556,17 @@
     }
     var rr = rivalGet();
     if (rr && rr.race) fleet.rival = { cx: p.x + ox * 96, cz: p.z + oz * 96, px: oz, pz: -ox };   // patrol line runs along the coast
+    // Phase 17c: navy patrol — a lane distinctly CLOSER to shore than the rival's (46-62 offshore
+    // vs the corsair's 96), one ring per owned ship so a 2-ship navy doesn't overlap itself.
+    var navyT = SIM.navyTier();
+    if (navyT > 0) {
+      var navyTiers = navyT >= 2 ? [navyT, navyT - 1] : [navyT];
+      navyTiers.forEach(function (t, idx) {
+        var cls = navyClass(t); if (!cls) return;
+        var laneR = 46 + idx * 16;
+        fleet.navy.push({ cls: cls, cx: p.x + ox * laneR, cz: p.z + oz * laneR, px: oz, pz: -ox, ph: idx * 2.1 });
+      });
+    }
   }
   // draw the meta fleet; assumes the same flat-colour program state as drawAmbient. Each kind maps
   // to a fleet-registry ladder class at the OWNED tier (Phase 17b — supersedes 16a's fixed classes):
@@ -577,6 +606,11 @@
       bob = Math.sin(clock * 1.3) * 0.3;
       drawShip(M, 'corsair', x, bob, z, yaw, 1.0, RVL_HULL, RVL_SAIL, 1.3);
     }
+    for (i = 0; i < fleet.navy.length; i++) {                       // Phase 17c: the Navy patrols its own inshore lane — lawful, unhurried
+      var nv = fleet.navy[i], pos = navyPatrolPos(nv);
+      bob = Math.sin(clock * 1.3 + nv.ph) * 0.3;
+      drawShip(M, nv.cls, pos.x, bob, pos.z, pos.yaw, 1.0, NAVY_HULL, NAVY_SAIL, nv.ph);
+    }
   }
   // Phase 16a: test-only forced close-up ship (see __harbor.debugShip) — parked AT the camera
   // target in a 3/4 view regardless of founded/fleet state, so a screenshot can isolate one class
@@ -594,7 +628,12 @@
     outrigger: [[0.48, 0.34, 0.20], [0.92, 0.90, 0.85]], caravel: [[0.50, 0.32, 0.18], [0.94, 0.90, 0.80]],
     barque: [[0.38, 0.24, 0.15], [0.92, 0.88, 0.80]], steam_yacht: [[0.88, 0.86, 0.80], [1, 1, 1]],
     research_vessel: [[0.85, 0.42, 0.14], [1, 1, 1]], expedition_catamaran: [[0.90, 0.90, 0.87], [0.94, 0.93, 0.90]],
-    solar_trimaran: [[0.24, 0.30, 0.40], [1, 1, 1]] };
+    solar_trimaran: [[0.24, 0.30, 0.40], [1, 1, 1]],
+    // Phase 17c: the Navy — crisp white hull every rung (the navy-blue stripe + gold trim are baked
+    // into each class's own mesh), matching NAVY_HULL/NAVY_SAIL above
+    patrol_cutter: [[0.92, 0.92, 0.90], [0.90, 0.89, 0.84]], frigate: [[0.92, 0.92, 0.90], [0.90, 0.89, 0.84]],
+    ironclad: [[0.92, 0.92, 0.90], [0.90, 0.89, 0.84]], destroyer: [[0.92, 0.92, 0.90], [0.90, 0.89, 0.84]],
+    drone_screen: [[0.92, 0.92, 0.90], [0.90, 0.89, 0.84]] };
   function drawDebugShip(M) {
     var look = DEBUG_LOOK[DEBUG_SHIP] || DEBUG_LOOK.dinghy;
     drawShip(M, DEBUG_SHIP, C.tx, Math.sin(clock * 1.3) * 0.3, C.tz, C.az + 2.35, 1.0, look[0], look[1], 0);
@@ -665,6 +704,10 @@
         var rv = fleet.rival, pa = clock * 0.35, dir = Math.cos(pa) >= 0 ? 1 : -1;
         x2 = rv.cx + rv.px * Math.sin(pa) * 46; z2 = rv.cz + rv.pz * Math.sin(pa) * 46;
         out.push({ x: x2, z: z2, yaw: Math.atan2(rv.px * dir, rv.pz * dir), sc: 1.4 });   // corsair
+      }
+      for (i = 0; i < fleet.navy.length; i++) {                     // Phase 17c: navy patrol wakes track the owned hull, closer inshore
+        var nv = fleet.navy[i], npos = navyPatrolPos(nv);
+        out.push({ x: npos.x, z: npos.z, yaw: npos.yaw, sc: wakeScaleFor(nv.cls, 1.1) });
       }
     }
     return out;
@@ -1801,7 +1844,12 @@
     // floor is starting to bite, and there's a concrete fix (Registry) to point at.
     { id: 'fleetBehind', cooldown: 240,
       when: function (s) { var f = s.fleet; return !!(f && SIM.FLEET_ROLES.some(function (r) { return (s.era - f[r].tier) >= 2; })); },
-      text: 'Your fleet is falling behind the times — commission modern ships in the Registry' }
+      text: 'Your fleet is falling behind the times — commission modern ships in the Registry' },
+    // Phase 17c: a manual raid that wasn't won (tribute paid, or a fight lost) with a navy tier
+    // affordable right now — the concrete "here's the fix" nudge toward the Navy section.
+    { id: 'navyReminder', cooldown: 240,
+      when: function (s) { return raidLostRecently && !!(s.navy && s.navy.can); },
+      text: 'Raiders again? Commission a Navy in the Registry — they’ll fight for you' }
   ];
   // Dropped: a "fever/festival ready or being ignored" rule was scoped but isn't shippable — Festival
   // is a random ambient event with no meter/threshold that reads as "ready" (just a randomised gap
@@ -2043,6 +2091,10 @@
     if (!out) return;
     if (!out.ok) { showHint(out.text || 'Cannot do that yet.'); sfx('lose'); return; }
     if (out.crate) grantCrate(out.crate);
+    // Phase 17c: 15d tips rule "navyReminder" — a raid that wasn't WON (tribute paid, or a fight
+    // lost) with the navy affordable is the moment to point at the Registry. Manual raids only —
+    // an auto-defended raid never opens this modal at all (see handleNavyRepel below).
+    if (out.id === 'raid' && out.win !== true) raidLostRecently = true;
     var pw = portWorld();
     if (out.cash > 0) {
       if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '+£' + fmt(out.cash), { color: '#ffe08a', size: 22, life: 1.4, vy: -56 }); burstWorld(pw.x, pw.y, pw.z, { count: out.win ? 36 : 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 210, life: 1.1, size: 5 }); }
@@ -2064,6 +2116,36 @@
       sfx('win'); haptic(18);
       if (ev.id === 'festival') startFever();                          // Festival kicks off the active tap-frenzy
     } else showEventModal(ev);                                         // choice / collect — a decision modal
+  }
+  // ---- Phase 17c: navy auto-defense — a raid that never even opened a modal (sim.js's fireEvent
+  // resolved it instantly once navyPower() caught up to raidStrength()). Watched by seq (like
+  // shownEvtSeq above) off s.navyRepel; fires a brief cannon-puff particle exchange at the lead
+  // patrol ship, a storm-banner-styled (but celebratory) auto-dismissing banner, and a sting.
+  var navyBanner = null, shownNavySeq = 0, raidLostRecently = false;
+  function ensureNavyBanner() {
+    if (navyBanner) return;
+    navyBanner = document.createElement('div'); navyBanner.id = 'navybanner';
+    navyBanner.innerHTML = '<div class="nb-row"><span class="nb-ic">⚓</span><span class="nb-txt"></span></div>';
+    wrap.appendChild(navyBanner);
+  }
+  function showNavyBanner(text) {
+    ensureNavyBanner();
+    navyBanner.querySelector('.nb-txt').textContent = text;
+    navyBanner.classList.add('show');
+    clearTimeout(navyBanner._hideT); navyBanner._hideT = setTimeout(function () { navyBanner.classList.remove('show'); }, 3600);
+  }
+  function handleNavyRepel(s) {
+    var nr = s.navyRepel;
+    if (!nr || nr.seq === shownNavySeq) return;
+    shownNavySeq = nr.seq;
+    if (clock - fleet.at > 1) refreshFleet();                          // make sure fleet.navy is current so the FX lands on a real patrol ship
+    var pos = fleet.navy.length ? navyPatrolPos(fleet.navy[0]) : null;
+    var by = scene.port ? scene.port.by : 0;
+    var wx = pos ? pos.x : portWorld().x, wy = by + 4, wz = pos ? pos.z : portWorld().z;
+    burstWorld(wx, wy, wz, { count: 22, colors: ['#dfe6ea', '#9aa6ad', '#fff3c4'], speed: 190, life: 0.8, size: 5, gravity: 60 });   // cannon-puff exchange
+    popWorld(wx, wy + 5, wz, '+£' + fmt(nr.loot), { color: '#ffe08a', size: 18, life: 1.2, vy: -46 });
+    showNavyBanner('⚓ The Navy repelled the raiders! +£' + fmt(nr.loot) + ' loot');
+    sfx('win'); haptic(20);
   }
 
   // ---- expeditions (Phase 7b): send ships on timed voyages (resolve offline), collect rewards ----
@@ -2956,7 +3038,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v67';
+  var BUILD_TAG = 'v68';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3234,6 +3316,7 @@
     checkGoals(s);
     handleHazard(s);
     handleEvent(s);
+    handleNavyRepel(s);
     updateRaceBanner();
     maybeTriggerRival(s);
     checkAchievements(s);
@@ -3250,6 +3333,9 @@
       var regShow = s.era >= 1;
       registryBtn.style.display = regShow ? '' : 'none';
       if (regShow) announceFeature('registry', '🚢', 'Harbour Registry', 'Buy modern ships as the ages turn — commission upgrades in the Registry.');
+      // Phase 17c: the Navy becomes commissionable the same moment the Registry itself does
+      // (tier1 needs era>=1, same gate) — announced separately since it's a distinct system (defense, not production).
+      if (regShow) announceFeature('navy', '⚓', 'The Navy', 'Commission a navy in the Registry — they defend your harbour and fight off raiders.');
       if (registryOpen) renderRegistry();
     }
     // Captain's Bonus (Phase 12a): opt-in rewarded boost — button only when eligible (available,
@@ -3283,7 +3369,7 @@
   var REGISTRY_ROLE_LABEL = { fishing: '🎣 Fishing fleet', trade: '⚓ Trade fleet', expedition: '⛵ Expedition fleet' };
   function renderRegistry() {
     if (!simReady()) { registryPanel.classList.remove('show'); registryOpen = false; return; }
-    var s = SIM.state(), fv = s.fleet;
+    var s = SIM.state(), fv = s.fleet, nv = s.navy;
     var h = '<div class="mp-head">🚢 Harbour Registry<button id="reg-close">✕</button></div>';
     SIM.FLEET_ROLES.forEach(function (role) {
       var f = fv[role], cls = ladderClass(role, f.tier), name = FLEET_NAMES[cls] || cls, age = SIM.eraName(f.tier);
@@ -3300,6 +3386,23 @@
       }
       h += '</div></div>';
     });
+    // Phase 17c: the Navy — a fourth card, same row pattern (portrait + name/age + Commission
+    // button), but a DEFENSE ladder not a production role: shows "Defense power N" instead of a
+    // yield %, and previews the tier1 class (ghosted) before anything is ever commissioned.
+    var nCls = navyClass(nv.tier) || navyClass(1), nName = FLEET_NAMES[nCls] || nCls;
+    h += '<div class="mp-sec">⚓ Navy</div>';
+    h += '<div class="reg-card"><canvas class="reg-portrait' + (nv.tier ? '' : ' unowned') + '" width="' + PORTRAIT_SIZE + '" height="' + PORTRAIT_SIZE + '" data-cls="' + nCls + '"></canvas>';
+    h += '<div class="reg-info"><div class="reg-name">' + (nv.tier ? nName : 'No navy commissioned') + '</div>' +
+      '<div class="reg-age">' + (nv.tier ? ('Defense power ' + nv.power) : 'Raiders sail unopposed') + '</div>';
+    if (nv.maxed) h += '<div class="reg-max">Fleet complete ✓</div>';
+    else {
+      var nextNCls = navyClass(nv.tier + 1), nextNName = FLEET_NAMES[nextNCls] || nextNCls, nghosted = false, nlabel;
+      if (nv.eraGated) { nlabel = 'Requires ' + nv.nextEra; nghosted = true; }
+      else if (!nv.can) { nlabel = 'Need £' + fmt(nv.cost); nghosted = true; }
+      else nlabel = 'Commission ' + nextNName + ' — £' + fmt(nv.cost);
+      h += '<button class="mp-item reg-buy' + (nghosted ? ' ghosted' : '') + '" data-buy-navy="1"' + (nghosted ? ' disabled' : '') + '>' + nlabel + '</button>';
+    }
+    h += '</div></div>';
     registryPanel.innerHTML = h;
     registryPanel.querySelector('#reg-close').addEventListener('click', toggleRegistry);
     registryPanel.querySelectorAll('canvas.reg-portrait').forEach(function (cv) { paintShipPortrait(cv, cv.getAttribute('data-cls')); });
@@ -3310,6 +3413,14 @@
         if (achUnlock('ship1')) popAch(achName('ship1'), true);
         var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 20, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 160, life: 0.9, size: 5 });
         ambient = null;   // Phase 17b: rebuild ambient traffic so newly-commissioned classes get lazily built + shown right away
+        renderRegistry(); updateHUD();
+      } else sfx('lose');
+    }); });
+    registryPanel.querySelectorAll('[data-buy-navy]').forEach(function (el) { el.addEventListener('click', function () {
+      if (SIM.buyNavy()) {
+        sfx('merge'); haptic(18);
+        if (achUnlock('admiral1')) popAch(achName('admiral1'), true);
+        var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 20, colors: ['#bcd8ff', '#ffffff', '#ffe08a'], speed: 160, life: 0.9, size: 5 });
         renderRegistry(); updateHUD();
       } else sfx('lose');
     }); });
@@ -3504,7 +3615,8 @@
     { id: 'voy1', name: 'First Expedition' }, { id: 'rival1', name: 'Bested Baron Krall' }, { id: 'relset', name: 'Relic Set Complete' },
     { id: 'combo', name: 'Fever Pitch' }, { id: 'pass1', name: 'Season Sailor' },
     { id: 'avert1', name: 'Storm Whisperer' }, { id: 'discover1', name: 'Pathfinder' },
-    { id: 'ship1', name: 'First Commission' }   // Phase 17b: first fleet-registry ship bought
+    { id: 'ship1', name: 'First Commission' },  // Phase 17b: first fleet-registry ship bought
+    { id: 'admiral1', name: 'Admiral' }         // Phase 17c: first navy ship commissioned
   ];
   function achName(id) { for (var i = 0; i < ACHIEVEMENTS.length; i++) if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i].name; return id; }
   function achOwned(id) { return window.Retention ? !!(Retention.get(GAME, 'ach', {})[id]) : false; }
@@ -3725,13 +3837,18 @@
     rival: function () { return rivalGet(); },
     triggerRival: function () { rivalPending = false; var r = rivalGet(); r.race = null; rivalSet(r); showRivalChallenge(); },
     raceProgress: function () { var r = rivalGet(); return r.race ? { kind: r.race.kind, prog: raceCounter(r.race.kind) - r.race.base, target: r.race.target } : null; },
-    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0,
-      expClass: fleet.exp.length ? expeditionShipClass() : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null }; },   // Phase 17b: kind→owned-tier ladder class mapping
+    fleet: function () { refreshFleet(); return { expedition: fleet.exp.length, route: fleet.routes.length, rival: fleet.rival ? 1 : 0, navy: fleet.navy.length,
+      expClass: fleet.exp.length ? expeditionShipClass() : null, routeClass: fleet.routes.length ? fleet.routes[0].cls : null, rivalClass: fleet.rival ? 'corsair' : null,
+      navyClass: fleet.navy.length ? fleet.navy[0].cls : null }; },   // Phase 17b/17c: kind→owned-tier ladder class mapping
     // Phase 17b: fleet registry (test/debug hooks)
     fleetTier: function (role) { return SIM ? SIM.fleetTier(role) : 0; },
     fleetShipCost: function (role) { return SIM ? SIM.fleetShipCost(role) : null; },
     buyShip: function (role) { var r = SIM ? SIM.buyShip(role) : false; if (r) { updateHUD(); if (registryOpen) renderRegistry(); } return r; },
     fleetView: function () { return SIM ? SIM.fleet() : null; },
+    // Phase 17c: the Navy (test/debug hooks)
+    navyTier: function () { return SIM ? SIM.navyTier() : 0; },
+    buyNavy: function () { var r = SIM ? SIM.buyNavy() : false; if (r) { updateHUD(); if (registryOpen) renderRegistry(); } return r; },
+    navyClass: function (tier) { return navyClass(tier); },
     ladderClass: function (role, tier) { return ladderClass(role, tier); },
     openRegistry: function () { if (!registryOpen) toggleRegistry(); else renderRegistry(); }, closeRegistry: function () { if (registryOpen) toggleRegistry(); },
     startFever: function (secs) { startFever(secs); }, fever: function () { return { active: feverActive(), combo: combo, mult: +comboMult().toFixed(2), coins: feverLayer ? feverLayer.querySelectorAll('.coin').length : 0 }; }, collectCoins: function () { if (feverLayer) feverLayer.querySelectorAll('.coin').forEach(function (c) { collectCoin(c); }); },

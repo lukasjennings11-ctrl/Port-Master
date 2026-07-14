@@ -407,6 +407,21 @@ html, body {
 .reg-age { font-family: 'Fredoka', sans-serif; font-size: 10px; color: var(--muted); }
 .reg-max { font-family: 'Fredoka', sans-serif; font-size: 10.5px; font-weight: 800; color: #8ef0a8; }
 .mp-item.reg-buy { grid-column: unset; display: block; width: 100%; text-align: left; font-size: 11px; font-weight: 800; color: var(--brass); background: rgba(214,178,94,.14); border-color: rgba(214,178,94,.4); padding: 7px 10px; }
+/* Phase 17c: the Navy card's portrait is dimmed until the first ship is actually commissioned —
+   it's previewing tier1, not showing something owned. */
+.reg-portrait.unowned { opacity: .38; }
+
+/* Phase 17c: navy auto-defense banner — storm-alert's layout/position, celebratory (teal/gold)
+   colouring instead of alarm-red, and no button (it auto-dismisses; see showNavyBanner in game.js). */
+#navybanner {
+  position: absolute; left: 50%; top: calc(150px + env(safe-area-inset-top)); transform: translateX(-50%);
+  display: none; align-items: center; gap: 8px; z-index: 8; padding: 7px 14px;
+  border-radius: 16px; max-width: min(90vw, 380px); background: rgba(8,26,22,.85); border: 1px solid rgba(158,224,196,.55);
+  backdrop-filter: blur(4px); font-family: 'Fredoka', sans-serif; box-shadow: 0 4px 18px rgba(0,0,0,.4);
+}
+#navybanner.show { display: flex; }
+#navybanner .nb-ic { font-size: 15px; }
+#navybanner .nb-txt { font-size: 11.5px; font-weight: 700; color: #d9ffe6; text-align: center; }
 .ex-slots { margin-left: auto; margin-right: 8px; font-family: 'Fredoka',sans-serif; font-size: 10px; font-weight: 800; color: var(--teal); }
 .mp-item.ex-go { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; background: rgba(124,224,214,.08); border-color: rgba(124,224,214,.24); }
 .mp-item.ex-go .mi-n { flex: 1; }

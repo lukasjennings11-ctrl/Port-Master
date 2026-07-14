@@ -227,6 +227,65 @@
   // make a sawmill saw faster) — every other resource's production multiplier stays 1.
   function fleetProdMul(res) { return res === 'fish' ? fleetYieldMul('fishing') : 1; }
 
+  // ---- Phase 17c: THE NAVY — a 5-rung, era-gated DEFENSE ladder (S.navy 0-5) alongside the 17b
+  // fleet ladders above. Where fleet-tech is a production rubber-band, the Navy is pure harbour
+  // DEFENSE: it auto-repels raids outright once navyPower catches up to how dangerous raids have
+  // become (raidStrength, era-scaled — "the harbourmaster has to keep up with the times"), nudges
+  // the manual raid-fight winOdds, and trims storm damage (hazardResist) — composing with, never
+  // replacing, the existing Sea Wall/Lighthouse/Sky Beacon/Legacy defenses (portDef()/strike()/
+  // evData('raid') below). No upkeep: once bought, a class stays on patrol for free — a pure
+  // one-time money sink + a permanent safety net, exactly as idle-friendly as the rest of the
+  // defense stack.
+  //
+  // Ladder (bought strictly in order, one class at a time, era-gated): 1 Patrol Cutter (era>=1),
+  // 2 Frigate (era>=2), 3 Ironclad (era>=4), 4 Destroyer (era>=5), 5 Drone Screen (era>=6) — the
+  // era gate deliberately SKIPS era3 (no new rung at Metropolis, mirroring how eras 3-5 never
+  // added new BUILDING types either — see BT's Phase 17a comment above) and the ladder tops out a
+  // full age early (era6, Automated Harbour) rather than waiting for Neon Horizon/era7 — the
+  // "harbour of tomorrow" drone screen is deliberately the Navy's own capstone, not a mirror of
+  // the fleet ladders' 8th rung.
+  //
+  // Cost table: [—, 300, 1500, 12000, 90000, 400000] — steeper than the fleet-tech ladder
+  // (FLEET_COST above) at every step it overlaps: a navy tier is a permanent safety net (never
+  // revenue), so it should read as a heavier, more deliberate spend than a same-age production
+  // upgrade — roughly 2.5x FLEET_COST at tiers 1-2 (fleet £120/£450 vs navy £300/£1500), settling
+  // to a comparable order of magnitude by the top (fleet caps at £500000, navy at £400000) once
+  // raids are a late-game inconvenience either way.
+  var NAVY_CLASSES = ['patrol_cutter', 'frigate', 'ironclad', 'destroyer', 'drone_screen'];
+  var NAVY_COST = [0, 300, 1500, 12000, 90000, 400000];        // index = tier; index0 unused (tier0 = no navy)
+  var NAVY_ERA = [0, 1, 2, 4, 5, 6];                            // era required to OWN tier i (index = tier)
+  var NAVY_MAX_TIER = NAVY_COST.length - 1;                    // 5
+  function navyTier() { return (S && S.navy) || 0; }
+  function navyShipCost() { var t = navyTier(); return t >= NAVY_MAX_TIER ? null : NAVY_COST[t + 1]; }
+  function navyEraGated() { var t = navyTier(); return t < NAVY_MAX_TIER && (S.era || 0) < NAVY_ERA[t + 1]; }
+  function canBuyNavy() {
+    if (!S) return false;
+    var t = navyTier();
+    return t < NAVY_MAX_TIER && (S.era || 0) >= NAVY_ERA[t + 1] && S.money >= NAVY_COST[t + 1];
+  }
+  function buyNavy() {
+    if (!canBuyNavy()) return false;
+    var t = navyTier();
+    S.money -= NAVY_COST[t + 1];
+    S.navy = t + 1;
+    S.stats.navyBought = (S.stats.navyBought || 0) + 1;
+    save(); return true;
+  }
+  // navyPower(): deliberately the simplest possible read — tier IS power, no separate formula to
+  // tune. Every downstream effect (raidStrength threshold, winOdds bonus, hazardResist) scales off
+  // this one number.
+  function navyPower() { return navyTier(); }
+  // raidStrength: how dangerous a raid has become by this era — the auto-defense threshold
+  // navyPower must MEET OR BEAT for the harbour to repel a raid outright with no modal. Scales +1
+  // every 2 eras (era0-1 -> 1, era2-3 -> 2, era4-5 -> 3, era6-7 -> 4…) so a maxed navyPower=5 keeps
+  // auto-repelling raids all the way through era8-9 before the harbourmaster has to modernise the
+  // navy again — "keep up with the times", not "buy once and forget forever".
+  function raidStrength() { return 1 + Math.floor((S.era || 0) / 2); }
+  function navyView() {
+    var t = navyTier(), cost = navyShipCost();
+    return { tier: t, cost: cost, power: navyPower(), can: canBuyNavy(), eraGated: navyEraGated(), maxed: cost == null, nextEra: cost == null ? null : eraName(NAVY_ERA[t + 1]) };
+  }
+
   // META: permanent cross-prestige multipliers (computed in game.js from the Legacy tree, fed in via
   // applyMeta so the sim stays headless-testable). Defaults are the no-prestige baseline.
   var META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
@@ -263,7 +322,8 @@
       evt: { t: 0, next: evRand(60, 130), active: null, lastId: '', seq: 0 },
       voyages: [], voyageSeq: 0,
       fleetTech: { fishing: 0, trade: 0, expedition: 0 },     // Phase 17b: fleet registry tiers
-      stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0 }
+      navy: 0, lastNavyRepel: null,                           // Phase 17c: navy tier + last auto-defense (for the game.js banner)
+      stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0, navyBought: 0, raidsRepelled: 0 }
     };
   }
   function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
@@ -310,6 +370,10 @@
     if (typeof S.stats.shipsBought !== 'number') S.stats.shipsBought = 0;   // Phase 17b: additive backfill
     if (!S.fleetTech) S.fleetTech = { fishing: 0, trade: 0, expedition: 0 };   // Phase 17b: old saves start every ladder at tier 0
     else FLEET_ROLES.forEach(function (r) { if (typeof S.fleetTech[r] !== 'number') S.fleetTech[r] = 0; });
+    if (typeof S.navy !== 'number') S.navy = 0;                               // Phase 17c: old saves start with no navy
+    if (typeof S.lastNavyRepel === 'undefined') S.lastNavyRepel = null;
+    if (typeof S.stats.navyBought !== 'number') S.stats.navyBought = 0;
+    if (typeof S.stats.raidsRepelled !== 'number') S.stats.raidsRepelled = 0;
     setActive(S.active);
   }
 
@@ -455,7 +519,10 @@
   function strike(portId) {
     var p = S.ports[portId]; if (!p) return;
     var def = portDef(p);
-    var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.10 * def.beacon - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0));   // sea wall + sky beacon + insurance + Legacy
+    // Phase 17c: navy hazardResist (0.03/power) composes ADDITIVELY with every existing term —
+    // sea wall + sky beacon + network insurance + Legacy — same Math.max(0.1, …) floor as before,
+    // so navyPower()===0 (no navy, or a pre-17c migrated save) reproduces the exact old formula.
+    var dmgF = Math.max(0.1, 1 - 0.16 * def.wall - 0.10 * def.beacon - 0.05 * ((S.network.level || 1) - 1) - (META.hazardResist || 0) - 0.03 * navyPower());   // sea wall + sky beacon + insurance + Legacy + navy
     var pool = []; for (var i = 0; i < p.buildings.length; i++) if (BT[p.buildings[i].type].cat !== 'defense') pool.push(i);
     var n = Math.min(pool.length, 1 + Math.floor(_rng() * 2)), damaged = 0;     // hit 1–2 buildings
     for (var k = 0; k < n && pool.length; k++) {
@@ -562,7 +629,14 @@
     if (def.id === 'goldrush') return { mult: 1.8, secs: 30 };
     if (def.id === 'festival') return { mult: 1.5, secs: 30, fever: true };
     if (def.id === 'castaway') return {};
-    if (def.id === 'raid') return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(0.45 + 0.12 * d.wall + 0.06 * d.light + 0.08 * d.beacon, 0.45, 0.92) };
+    // Phase 17c: navy adds +0.08/power ON TOP of the pre-17c wall/light/beacon odds — that base term
+    // keeps its OWN original clamp(0.45,0.92) unchanged (so navyPower()===0 reproduces the exact
+    // pre-17c winOdds for any wall/light/beacon combo, even a maxed one that would otherwise have
+    // clamped at 0.92), then the navy bonus is added and the TOTAL gets its own, higher 0.95 ceiling.
+    if (def.id === 'raid') {
+      var raidBase = clamp(0.45 + 0.12 * d.wall + 0.06 * d.light + 0.08 * d.beacon, 0.45, 0.92);
+      return { tribute: Math.round(Math.max(30, Math.min(money * 0.12, 60 * Math.pow(2, era)))), winOdds: clamp(raidBase + 0.08 * navyPower(), 0.45, 0.95) };
+    }
     if (def.id === 'gamble') return { wager: Math.round(Math.max(40, Math.min(money * 0.15, 90 * Math.pow(2, era)))), odds: 0.6 };
     if (def.id === 'commission') { var res = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var amt = Math.round(40 * (1 + era * 0.6)); return { res: res, amt: amt, reward: Math.round(amt * basePrice(res) * 2.4) }; }
     if (def.id === 'smuggler') { var sr = era >= 2 ? ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)] : 'fish'; var sa = Math.round(60 * (1 + era * 0.7)); return { res: sr, amt: sa, cost: Math.round(sa * basePrice(sr) * 0.55) }; }
@@ -573,6 +647,17 @@
     if (!S) return null; setActive(S.active);
     var def = evDef(id); if (!def) return null;
     S.evt.seq = (S.evt.seq || 0) + 1;
+    // Phase 17c: navy auto-defense — a raid never even opens a modal once navyPower() catches up
+    // to raidStrength(): instant victory, half the tribute it would have demanded as loot, no risk.
+    if (def.id === 'raid' && navyPower() >= raidStrength()) {
+      var rd = evData(def), loot = Math.round(rd.tribute * 0.5);
+      S.money += loot; S.lifetimeMoney = (S.lifetimeMoney || 0) + loot;
+      S.stats.raidsRepelled = (S.stats.raidsRepelled || 0) + 1;
+      S.evt.lastId = def.id;
+      S.lastNavyRepel = { seq: S.evt.seq, loot: loot };
+      save();
+      return { id: def.id, kind: 'auto', name: def.name, seq: S.evt.seq, auto: true, loot: loot };
+    }
     S.evt.active = { id: def.id, kind: def.kind, name: def.name, seq: S.evt.seq, ttl: def.kind === 'ambient' ? 7 : 40, data: evData(def) };
     S.evt.lastId = def.id;
     if (def.kind === 'ambient') applyAmbient(S.evt.active);
@@ -875,12 +960,13 @@
       canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
-      network: networkView(), fleet: fleetView(),
+      network: networkView(), fleet: fleetView(), navy: navyView(),   // Phase 17c: navy defense-ladder view
       hazard: S.hazard ? { phase: S.hazard.phase || 'idle', port: S.hazard.port || null, kind: S.hazard.kind || null, in: Math.max(0, Math.ceil(S.hazard.warn || 0)), strikeId: S.hazard.strikeId || 0, last: S.hazard.last || null, avertCost: avertCost() } : { phase: 'idle', strikeId: 0, last: null, avertCost: avertCost() },
       crash: S.crash ? { res: S.crash.res, t: Math.ceil(S.crash.t) } : null,
       event: (S.evt && S.evt.active) ? { id: S.evt.active.id, name: S.evt.active.name, kind: S.evt.active.kind, seq: S.evt.active.seq, ttl: Math.max(0, Math.ceil(S.evt.active.ttl)), data: S.evt.active.data } : null,
+      navyRepel: S.lastNavyRepel || null,   // Phase 17c: last auto-defended raid {seq,loot} — game.js banner watches this by seq
       voyages: voyageState(),
-      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, shipsBought: (S.stats && S.stats.shipsBought) || 0, ports: Object.keys(S.ports).length },
+      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, shipsBought: (S.stats && S.stats.shipsBought) || 0, navyBought: (S.stats && S.stats.navyBought) || 0, raidsRepelled: (S.stats && S.stats.raidsRepelled) || 0, ports: Object.keys(S.ports).length },
       ports: portList()
     };
     if (port) {
@@ -922,6 +1008,10 @@
     FLEET_ROLES: FLEET_ROLES, FLEET_COST: FLEET_COST,
     fleetTier: fleetTier, fleetShipCost: fleetShipCost, canBuyShip: canBuyShip, buyShip: buyShip,
     fleetYieldMul: fleetYieldMul, fleet: fleetView,
+    // Phase 17c: the Navy — buy/query the 5-tier defense ladder
+    NAVY_CLASSES: NAVY_CLASSES, NAVY_COST: NAVY_COST, NAVY_ERA: NAVY_ERA,
+    navyTier: navyTier, navyShipCost: navyShipCost, canBuyNavy: canBuyNavy, buyNavy: buyNavy,
+    navyPower: navyPower, navy: navyView, raidStrength: function () { return S ? raidStrength() : 0; },
     strikePort: function (id) { if (S) { strike(id || S.active); save(); } },   // debug/test: force a storm strike now
     avertCost: function () { return S ? avertCost() : 0; }, avertHazard: avertHazard, avertCrash: avertCrash,
     forceWarn: forceWarn,                                           // debug/test: jump straight to the warn (avert-able) phase
