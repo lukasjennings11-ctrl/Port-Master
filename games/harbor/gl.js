@@ -169,7 +169,7 @@
   precision highp float;
   in vec3 vN; in vec3 vW; in vec2 vUV; in vec4 vLP; in vec3 vCol;
   uniform vec3 uSunDir, uSunCol, uAmbTop, uAmbBot, uCam, uFog, uBase, uWin, uShadowTint;
-  uniform float uFogD, uRough, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo, uShadowK, uCrush;
+  uniform float uFogD, uTexMix, uShadowOn, uVCol, uExposure, uSat, uNight, uTime, uToon, uAlbedo, uShadowK, uCrush, uGrain;
   uniform sampler2D uShadow; uniform sampler2D uTex;
   out vec4 frag;
   // Phase 14a: slope-scaled bias — grazing light (low ndl) needs a bigger depth push to avoid
@@ -188,6 +188,12 @@
   }
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
+  // Phase 19a: paper-fibre grain — two-octave value noise on SCREEN position (static, no time
+  // term: the fibre belongs to the paper stock the diorama is shot on, so it must never crawl
+  // under camera motion). Amplitude is uGrain, authored per pass (terrain > water > sky).
+  float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+    return mix(mix(dth(i),dth(i+vec2(1.0,0.0)),u.x), mix(dth(i+vec2(0.0,1.0)),dth(i+vec2(1.0,1.0)),u.x), u.y); }
+  float fib(vec2 p){ return vn2(p*0.31)*0.6 + vn2(p*0.87+17.0)*0.4; }
   void main(){
     vec3 N=normalize(vN);
     vec3 base = uVCol>0.5 ? vCol : uBase;
@@ -196,24 +202,21 @@
     else if(uTexMix>0.0){ vec4 t=texture(uTex,vUV); base=mix(base, base*(0.55+0.9*t.r), uTexMix); emiss=t.a; }
     float ndl=max(dot(N,uSunDir),0.0);
     float sh=shadow(vLP, ndl);
-    vec3 V=normalize(uCam-vW); vec3 H=normalize(uSunDir+V);
-    // cartoon banded diffuse (stepped with soft edges) + soft rim highlight
+    // Phase 19a PAPERCRAFT: 2-step banded diffuse — a card face is either in the light or in the
+    // shade, nothing between (the old 4-band toon ramp read as airbrushed by comparison). All
+    // gloss is gone with it: no specular, no fresnel rim sheen, no dark silhouette-edge darkening
+    // — matte construction paper under diffuse light. The white scissor-cut rims that replaced
+    // the dark ink outlines live in F_POST.
     float diff = ndl;
-    float rim = 0.0;
-    if(uToon>0.5){ float n=4.0; diff=(floor(ndl*n)+smoothstep(0.25,0.75,fract(ndl*n)))/n;
-                   rim = pow(1.0-max(dot(N,V),0.0),3.0)*ndl*0.28; }
+    if(uToon>0.5){ float n=2.0; diff=(floor(ndl*n)+smoothstep(0.25,0.75,fract(ndl*n)))/n; }
     diff*=sh;
-    float specK = (uToon>0.5?0.22:0.5)*(1.0-uRough);
-    float spec=pow(max(dot(N,H),0.0), mix(8.0,80.0,1.0-uRough))*specK*sh*ndl;
     vec3 amb=mix(uAmbBot,uAmbTop,N.y*0.5+0.5);
     // warm-key / cool-shadow chromatic ramp: as the banded diffuse falls, shift the surface
-    // toward the biome's cool shadow tint (shadow bands cool, sun-lit bands stay warm).
+    // toward the biome's shadow tint (19a: retuned in biomes.js toward neutral grey-mauve paper
+    // shadow — a shaded card face, not a glowing blue one).
     float lit = clamp(diff*1.7, 0.0, 1.0);
     vec3 ramp = mix(uShadowTint, vec3(1.0), mix(1.0, lit, uShadowK));
-    vec3 col = base*ramp*(amb + uSunCol*diff) + uSunCol*spec + uSunCol*rim;
-    // soft dark silhouette edge for a hand-drawn / animated-cartoon outline feel
-    float edge = uToon>0.5 ? pow(1.0-max(dot(N,V),0.0),3.5) : 0.0;
-    col *= 1.0 - edge*0.30;
+    vec3 col = base*ramp*(amb + uSunCol*diff);
     // night-lit windows: tex alpha mask, flickering warm glow
     float flick = 0.7+0.3*sin(uTime*3.0 + vW.x*1.7 + vW.y*2.3);
     col += uWin * emiss * uNight * flick;
@@ -225,7 +228,8 @@
     // clip and true blacks never crush further — safe on HDR-ish >1 values too, since the clamp
     // used to build the factor pins those to m=1, i.e. no effect).
     vec3 m=clamp(col,0.0,1.0); col -= uCrush*m*(1.0-m);
-    col += (dth(gl_FragCoord.xy)-0.5)/255.0;   // hash dither kills mobile gradient banding
+    // paper-fibre grain (19a) + the old 1-bit hash dither (still needed against banding)
+    col += (fib(gl_FragCoord.xy)-0.5)*uGrain + (dth(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(col),1.0);
   }`;
 
@@ -238,9 +242,12 @@
   var V_SKY = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.999,1.0); }`;
   var F_SKY = `#version 300 es
-  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun; uniform float uNight,uTime,uHorizonY; out vec4 frag;
+  precision highp float; in vec2 vUv; uniform vec3 uTop,uBot,uSunCol,uHorizon; uniform vec2 uSun; uniform float uNight,uTime,uHorizonY,uGrain; out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float hash(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
+  float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x), mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x), u.y); }
+  float fib(vec2 p){ return vn2(p*0.31)*0.6 + vn2(p*0.87+17.0)*0.4; }
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
     // 3rd stop: a soft authored horizon band anchored to the projected sea horizon (uHorizonY) — a glow, not a stripe
     float hb=exp(-pow(max(vUv.y-uHorizonY,0.0)*4.2,1.5));
@@ -254,7 +261,8 @@
       float star=step(0.965,h)*pt*tw*smoothstep(0.20,0.62,vUv.y);
       c+=vec3(0.92,0.95,1.0)*star*uNight*1.25;
     }
-    c += (hash(gl_FragCoord.xy)-0.5)/255.0;   // dither the big gradient
+    // paper-fibre grain (19a, gentler than terrain — the sky is a distant backdrop card) + dither
+    c += (fib(gl_FragCoord.xy)-0.5)*uGrain + (hash(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(c*1.05),1.0); }`;
 
   var V_WATER = `#version 300 es
@@ -267,10 +275,13 @@
     vLandH=aColor.r;   // Phase 14a: terrain height baked per-vertex at mesh-build time (buildWaterMesh) — feeds the shoreline foam band below, no runtime heightfield lookup needed
     gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
-  precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uSparkle,uFoam;
+  precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uFoam,uGrain;
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
+  float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+    return mix(mix(dth(i),dth(i+vec2(1.0,0.0)),u.x), mix(dth(i+vec2(0.0,1.0)),dth(i+vec2(1.0,1.0)),u.x), u.y); }
+  float fib(vec2 p){ return vn2(p*0.31)*0.6 + vn2(p*0.87+17.0)*0.4; }
   void main(){ vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
     float fres=pow(1.0-max(dot(N,V),0.0),3.0); fres=floor(fres*3.0+0.2)/3.0;   // banded reflection
     // Phase 16b: POSTCARD two-tone depth gradient — vLandH (the terrain heightfield baked per-
@@ -289,7 +300,8 @@
     // mirror the sky GRADIENT: steep reflected rays see the zenith, grazing rays the horizon
     vec3 R=reflect(-V,N); vec3 sky=mix(uSky,uSkyTop,pow(clamp(R.y,0.0,1.0),0.6));
     vec3 col=mix(water,sky,clamp(fres*0.78,0.0,1.0));
-    vec3 H=normalize(uSunDir+V); float gl=pow(max(dot(N,H),0.0),140.0); col+=uSunCol*smoothstep(0.35,0.75,gl)*0.85; // soft toon glint
+    // Phase 19a PAPERCRAFT: the specular sun glint + the animated toon-sparkle grid are GONE —
+    // paper water is matte card; foam/wake whites (below + drawWakes) carry all the life instead.
     float foam=smoothstep(0.972,0.90,N.y); col+=vec3(0.90,0.95,1.0)*foam*0.10;  // gentle foam on wave faces
     // Phase 14a: scalloped shoreline foam — vLandH (baked from the terrain heightfield) tells us
     // how close this water fragment sits to the coastline; band it into a soft white fringe right
@@ -301,20 +313,9 @@
     float scallop=0.55+0.45*sin(vW.x*0.55+vW.z*0.33+uTime*0.8);
     col=mix(col,vec3(0.96,0.985,1.0),clamp(shoreBand*scallop,0.0,1.0)*0.6*uFoam);
     float dist=length(uCam-vW); float f=1.0-exp(-uFogD*dist); col=mix(col,uFog,clamp(f,0.0,1.0));
-    // animated toon sparkle: hashed world-XZ grid of crisp glints popping in/out with uTime,
-    // denser along the sun lane, brightness authored per ToD via uSparkle (faint moon-glints at night)
-    if(uSparkle>0.003){
-      vec2 gid=floor(vW.xz*0.85); float h1=dth(gid), h2=dth(gid+7.31);
-      vec2 gp=fract(vW.xz*0.85)-0.5+(vec2(h1,h2)-0.5)*0.62;
-      float tw=0.5+0.5*sin(uTime*(1.4+h1*2.6)+h2*40.0);
-      float spot=smoothstep(0.12+h2*0.05,0.03,length(gp));
-      vec2 vd=normalize(vW.xz-uCam.xz+vec2(1e-4,0.0));
-      float lane=0.35+0.65*smoothstep(0.15,0.9,dot(vd,normalize(uSunDir.xz+vec2(1e-4,0.0))));
-      float sp=step(0.70,h1)*spot*smoothstep(0.58,0.95,tw)*lane*exp(-dist*0.006);
-      col+=uSunCol*sp*uSparkle;
-    }
     col*=uExposure; float luma=dot(col,vec3(0.299,0.587,0.114)); col=mix(vec3(luma),col,uSat);
-    col += (dth(gl_FragCoord.xy)-0.5)/255.0;
+    // paper-fibre grain (19a) + dither — the sea is a sheet of card too
+    col += (fib(gl_FragCoord.xy)-0.5)*uGrain + (dth(gl_FragCoord.xy)-0.5)/255.0;
     frag=vec4(aces(col),1.0); }`;
 
   // Phase 10c post pass: tilt-shift "miniature diorama" DoF + bloom-lite in ONE kernel.
@@ -325,22 +326,30 @@
   // no second target, so night windows / sun glints get a gentle halo for one texture fetch set.
   var V_POST = `#version 300 es
   layout(location=0) in vec3 aPos; out vec2 vUv; void main(){ vUv=aPos.xy*0.5+0.5; gl_Position=vec4(aPos.xy,0.0,1.0); }`;
-  // Phase 14a: the same fullscreen composite also does screen-space INK OUTLINES. The scene RT's
+  // Phase 14a: the same fullscreen composite also does screen-space edge lines. The scene RT's
   // depth is now a samplable texture (see createRT below). Silhouette lines come from a 4-tap
   // depth cross (per-pixel — fwidth is 2x2-quad granular and dashes mid-distance lines) gated by
   // a screen-space Laplacian so smooth-but-steep terrain seen at grazing angles never reads as
   // an edge; interior detail lines come from derivative-reconstructed normals, near field only.
   // Distance-faded + smoothly cut past uOutlineMaxDist, sky masked outright, and the final edge
   // term is snapped through a confidence smoothstep so lines are solid or absent, never speckle.
+  // Phase 19a PAPERCRAFT: the line itself flipped from dark ink to a WHITE scissor-cut paper rim
+  // — uOutlineTint is now paper-white (see outlineTint() in game.js), the tap radius is wider,
+  // and a low-frequency screen-space wobble (uOutlineWobble) sways both the rim width and the
+  // edge threshold so every cut edge meanders slightly, hand-cut rather than vector-perfect.
+  // The detector machinery (Laplacian slope-rejection, sky mask, distance handling) is untouched.
   var F_POST = `#version 300 es
   precision highp float; in vec2 vUv;
   uniform sampler2D uTex; uniform sampler2D uDepth; uniform vec2 uTexel;
   uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
   uniform float uNear, uFar, uFovY, uAspect;
-  uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist, uOutlineWidth;
+  uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist, uOutlineWidth, uOutlineWobble;
   uniform vec3 uOutlineTint;
   out vec4 frag;
   float linZ(float d){ float z=d*2.0-1.0; return (2.0*uNear*uFar)/(uFar+uNear-z*(uFar-uNear)); }
+  float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
+  float vn2(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+    return mix(mix(dth(i),dth(i+vec2(1.0,0.0)),u.x), mix(dth(i+vec2(0.0,1.0)),dth(i+vec2(1.0,1.0)),u.x), u.y); }
   void main(){
     // blur strength: 0 inside the focus band, easing to 1 at the screen edges (quadratic onset keeps the band edge creamy)
     float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b;
@@ -365,11 +374,15 @@
       float d = texture(uDepth, vUv).r;
       float lz = linZ(d);
       // explicit cross taps, NOT fwidth: screen derivatives are 2x2-quad granular, which broke
-      // mid-distance lines into dash/dot speckle. Four extra depth fetches buy per-pixel ink.
+      // mid-distance lines into dash/dot speckle. Four extra depth fetches buy per-pixel lines.
       // Phase 16b: uOutlineWidth widens the tap radius (clamped >=1 so a stray zero uniform never
-      // collapses the cross to zero width) for a bolder, more confident storybook line at
-      // gameplay zoom — same slope-rejecting Laplacian gate below, just a fatter search radius.
-      float ow = max(uOutlineWidth, 1.0);
+      // collapses the cross to zero width). Phase 19a: scissor-cut wobble — a slow value noise
+      // over screen position (static: the wobble is a property of the cut edge, and an animated
+      // one would shimmer exactly like the dot-speckle 14a stamped out) sways the rim width
+      // ±~40% and, further below, the ink threshold, so the paper rim meanders like hand-cut card.
+      float wob = vn2(vUv*vec2(uAspect,1.0)*26.0);
+      float wob2 = vn2(vUv*vec2(uAspect,1.0)*19.0+7.3);
+      float ow = max(uOutlineWidth*(1.0+(wob-0.5)*0.85*uOutlineWobble), 1.0);
       vec2 ot = uTexel * ow;
       float zL = linZ(texture(uDepth, vUv - vec2(ot.x, 0.0)).r);
       float zR = linZ(texture(uDepth, vUv + vec2(ot.x, 0.0)).r);
@@ -384,8 +397,9 @@
       float lap = max(abs(zL + zR - 2.0 * lz), abs(zD + zU - 2.0 * lz));
       float depthEdge = min(gap, lap) / max(lz, 1.0);
       // relative threshold GROWS with view depth: a mid-distance silhouette needs a proportionally
-      // bigger step to ink, so terrain/skyline noise stays clean while port buildings keep lines
-      float dT = uOutlineDepthT * (1.0 + lz * 0.012);
+      // bigger step to ink, so terrain/skyline noise stays clean while port buildings keep lines.
+      // 19a: threshold wobble (2nd noise channel) makes the edge ONSET meander too — scissor cut.
+      float dT = uOutlineDepthT * (1.0 + lz * 0.012) * (1.0+(wob2-0.5)*0.7*uOutlineWobble);
       float edge = smoothstep(dT * 0.7, dT * 1.3, depthEdge);
       // interior detail lines (roof trim vs wall) from derivative-reconstructed normals — near
       // field only (quad-granular derivatives get noisy with distance: mid-range dot speckle)
