@@ -1449,18 +1449,32 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // static-scene ceiling (re-derived for 18b: measured worst case ~251k at era7 — no bump needed).
   ok('18b: building meshes present in geomStats (bldg > 1500 at a developed era) and total still within the 300k ceiling',
     gs18a && gs18a.bldg > 1500 && gs18a.verts < 300000);
-  // squash-stretch pop: DETERMINISTIC — setPopProgress(p) pins the pop clock at an exact point of
-  // its window (no wall-clock sleeps, no dependence on frame rate; precedent: 15b/15d synchronous
-  // forced checks). p=0.15 is mid-squash (y down, xz out); p=1.0 is the window end and must be
-  // exactly identity; clearing the pin (null) with no live trigger must also read identity.
-  const popMid = await page.evaluate(() => window.__harbor.setPopProgress(0.15));
-  ok('18b: forced squash-stretch pop is active mid-window with a real y-squash + xz-stretch on the draw transform',
-    popMid.active && popMid.scale.y < 0.99 && popMid.scale.x > 1.01);
+  // Phase 19c unfold pop: DETERMINISTIC — setPopProgress(p) pins the pop clock at an exact point
+  // of its window (no wall-clock sleeps; 18b hook contract preserved verbatim). unfoldExpect()
+  // mirrors popScaleFor() in game.js operation-for-operation, so the comparison is EXACT
+  // (same float ops in the same order — identical bits, not a tolerance band).
+  const unfoldExpect = (k) => {
+    const c1 = 1.70158, c3 = c1 + 1, u = k - 1;
+    const f = 1 + c3 * u * u * u + c1 * u * u;
+    const sy = f, sxz = 1 - 0.10 * (f - 1);
+    const hinge = k < 0.4 ? 0.22 * Math.sin(Math.PI * (k / 0.4)) : 0;
+    return { sy, sxz, hinge };
+  };
+  const pop19cA = await page.evaluate(() => window.__harbor.setPopProgress(0.1));
+  const pop19cB = await page.evaluate(() => window.__harbor.setPopProgress(0.4));
+  const pop19cC = await page.evaluate(() => window.__harbor.setPopProgress(0.8));
+  const eA = unfoldExpect(0.1), eB = unfoldExpect(0.4), eC = unfoldExpect(0.8);
+  ok('19c: unfold pop curve EXACT at pinned p=0.1 — rising from flat (y≈0.409) with the early forward hinge live, 0.45s window',
+    pop19cA.active && pop19cA.style === 'unfold' && pop19cA.dur === 0.45 &&
+    pop19cA.scale.y === eA.sy && pop19cA.scale.x === eA.sxz && pop19cA.scale.z === eA.sxz && pop19cA.hinge === eA.hinge);
+  ok('19c: unfold pop curve EXACT at p=0.4 (hinge exactly settled to 0, y past 1 into the easeOutBack overshoot) and p=0.8 (settling, xz counter-flex)',
+    pop19cB.active && pop19cB.hinge === 0 && pop19cB.scale.y === eB.sy && pop19cB.scale.y > 1 &&
+    pop19cC.active && pop19cC.hinge === 0 && pop19cC.scale.y === eC.sy && pop19cC.scale.x === eC.sxz);
   const popEnd = await page.evaluate(() => window.__harbor.setPopProgress(1.0));
   const popCleared = await page.evaluate(() => window.__harbor.setPopProgress(null));
-  ok('18b: pop settles back to identity scale after its 0.35s window (no residual transform, no save state)',
-    popEnd && !popEnd.active && popEnd.scale.x === 1 && popEnd.scale.y === 1 && popEnd.scale.z === 1
-    && popCleared && !popCleared.active && popCleared.scale.x === 1 && popCleared.scale.y === 1);
+  ok('19c: unfold settles to exact identity (scale 1, hinge 0) at the window end and when the pin clears (no residual transform, no save state)',
+    popEnd && !popEnd.active && popEnd.scale.x === 1 && popEnd.scale.y === 1 && popEnd.scale.z === 1 && popEnd.hinge === 0
+    && popCleared && !popCleared.active && popCleared.scale.x === 1 && popCleared.scale.y === 1 && popCleared.hinge === 0);
   // industry smoke anchors: chimney smoke keys off factory/sawmill counts (emitSmoke) — the
   // factory's remodeled chimney is cosmetic, the emitter logic must still fire once industry exists.
   await page.evaluate(() => { var S = window.HARBOR_SIM; S.raw().money = 1e6; if (S.canBuild('factory')) S.build('factory'); });
@@ -1571,6 +1585,66 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('19b: full ToD sweep with paper sea/sky/clouds/smoke all live → zero GL warnings/errors', errs.length === errsBefore19b);
   await page.evaluate(() => { window.__harbor.setTod(0.5); window.__harbor.setPost(false); }); await sleep(300);
   ok('19b: legacy quality-off path renders the paper world clean (no post pass, zero GL errors)', errs.length === errsBefore19b);
+  await page.evaluate(() => window.__harbor.setPost(true));
+
+  // Phase 19c: PAPER MOTION & UI — unfold build pop (asserted exactly up at the 18b block, which
+  // 19c re-pins to the new curve), page-flutter on collect, the papercraft interface reskin
+  // (body.paperui override layer in style.css), and the far-water band-CONTRAST distance fade.
+  const errsBefore19c = errs.length;
+  // page-flutter on collect: same deterministic pinned-progress contract as the pop. flutExpect()
+  // mirrors flutterAngleFor() operation-for-operation (exact compare, no tolerance).
+  const flutExpect = (k) => 0.10 * Math.sin(k * Math.PI * 3.0) * (1 - k);
+  const flut19cMid = await page.evaluate(() => window.__harbor.setFlutterProgress(0.15));
+  const flut19cEnd = await page.evaluate(() => window.__harbor.setFlutterProgress(1.0));
+  const flut19cClr = await page.evaluate(() => window.__harbor.setFlutterProgress(null));
+  ok('19c: collect page-flutter EXACT at pinned p=0.15 (decaying 3-half-wave rotation wobble, 0.25s, style flag armed) and exactly 0/inactive at the end + when cleared',
+    flut19cMid.active && flut19cMid.style === 'page-flutter' && flut19cMid.dur === 0.25 && flut19cMid.angle === flutExpect((0.15 * 0.25) / 0.25) &&
+    !flut19cEnd.active && flut19cEnd.angle === 0 && !flut19cClr.active && flut19cClr.angle === 0);
+  // paper UI reskin: the body.paperui root class gates the whole override layer, and every panel
+  // must actually resolve to a light warm-paper card background (not the old dark navy glass).
+  const paperUI = await page.evaluate(() => {
+    const lum = (c) => { const m = c.match(/\d+(\.\d+)?/g) || [0, 0, 0]; return (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) / 255; };
+    const bg = (id) => lum(getComputedStyle(document.getElementById(id)).backgroundColor);
+    return {
+      root: document.body.classList.contains('paperui'),
+      manage: bg('managepanel'), settings: bg('settingspanel'), exp: bg('exppanel'), registry: bg('registrypanel'),
+    };
+  });
+  ok('19c: paperui root class set + all four house panels (Manage/Settings/Expeditions/Registry) resolve to light paper-card backgrounds (luma > 0.75)',
+    paperUI.root && paperUI.manage > 0.75 && paperUI.settings > 0.75 && paperUI.exp > 0.75 && paperUI.registry > 0.75);
+  // computed-style CONTRAST sentinel: dark warm-brown text on the light card for Manage + Settings
+  // (WCAG-ish luma gap — panel bg light, header/row text dark, gap > 0.5 keeps AA at 390x844).
+  const contrast19c = await page.evaluate(() => {
+    document.getElementById('managebtn').click();   // open Manage so its rows exist in the DOM
+    const lum = (c) => { const m = c.match(/\d+(\.\d+)?/g) || [0, 0, 0]; return (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) / 255; };
+    const panel = document.getElementById('managepanel');
+    const head = panel.querySelector('.mp-head'), item = panel.querySelector('.mp-item:not(.ghosted) .mi-n');
+    const out = {
+      bg: lum(getComputedStyle(panel).backgroundColor),
+      head: head ? lum(getComputedStyle(head).color) : 1,
+      item: item ? lum(getComputedStyle(item).color) : 1,
+      setBg: lum(getComputedStyle(document.getElementById('settingspanel')).backgroundColor),
+      setHelp: lum(getComputedStyle(document.body).color),
+    };
+    document.getElementById('managebtn').click();   // close again
+    return out;
+  });
+  ok('19c: contrast sentinel — Manage header + item text are dark ink (luma < 0.35) on the light card (bg luma > 0.75), Settings card light too, body ink dark',
+    contrast19c.bg > 0.75 && contrast19c.head < 0.35 && contrast19c.item < 0.35 &&
+    contrast19c.setBg > 0.75 && contrast19c.setHelp < 0.35);
+  // far-water band-contrast fade: hook flag + the shader term actually in the served source
+  const water19c = await page.evaluate(() => window.__harbor.water());
+  const glSrc19c = await page.evaluate(() => fetch('gl.js').then(r => r.text()).catch(() => ''));
+  ok('19c: far-water band-CONTRAST distance fade armed (water().bandFarFade) and the bandFarFlat term ships in F_WATER — band tones ease to one card colour AND the cut rim fades with it',
+    water19c.bandFarFade === true && /bandFarFlat=smoothstep/.test(glSrc19c) && /wobFade\*\(1\.0-bandFarFlat\)/.test(glSrc19c));
+  // zero GL warnings ToD sweep with the unfold + flutter both live mid-window
+  await page.evaluate(() => { window.__harbor.setPopProgress(0.2); window.__harbor.setFlutterProgress(0.4); });
+  for (const t of [0, 0.25, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  await page.evaluate(() => { window.__harbor.setPopProgress(null); window.__harbor.setFlutterProgress(null); window.__harbor.setTod(0.5); });
+  ok('19c: full ToD sweep with unfold + page-flutter transforms live → zero GL warnings/errors', errs.length === errsBefore19c);
+  // legacy quality-off path with the 19c water fade + paper UI live
+  await page.evaluate(() => window.__harbor.setPost(false)); await sleep(300);
+  ok('19c: legacy quality-off path renders clean with the band-contrast fade + paper UI live (zero GL errors)', errs.length === errsBefore19c);
   await page.evaluate(() => window.__harbor.setPost(true));
 
   // live ticking after everything — no late errors
