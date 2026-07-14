@@ -3,7 +3,7 @@
    PortMaster installs as a standalone app and runs entirely offline.
    Network-first: always try the live file (so new builds show up immediately),
    fall back to cache when offline. Bump CACHE on every asset/version change. */
-const CACHE = 'portmaster-v35';
+const CACHE = 'portmaster-v36';
 const PRECACHE = [
   './',
   'index.html',
@@ -16,14 +16,14 @@ const PRECACHE = [
   '../../shared/portal.js?v=1',
   '../../shared/progression.js?v=1',
   '../../shared/stage.js?v=1',
-  'gl.js?v=69',
-  'gltf.js?v=69',
-  'biomes.js?v=69',
-  'assets.js?v=69',
-  'models.js?v=69',
-  'sim.js?v=69',
-  'ads.js?v=69',
-  'game.js?v=69',
+  'gl.js?v=70',
+  'gltf.js?v=70',
+  'biomes.js?v=70',
+  'assets.js?v=70',
+  'models.js?v=70',
+  'sim.js?v=70',
+  'ads.js?v=70',
+  'game.js?v=70',
   'fonts/Fredoka-400.woff2',
   'fonts/Fredoka-600.woff2',
   'fonts/Fredoka-700.woff2',

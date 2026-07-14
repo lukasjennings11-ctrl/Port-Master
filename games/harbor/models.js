@@ -20,6 +20,10 @@
   // ---------------- value-noise heightfield ----------------
   var WORLD = { W: 2400, z0: -130, z1: 430, cell: 5 };
   var FIELD = null;
+  // Phase 18a: budget/feature telemetry for the faceted-terrain rebuild — read by game.js's
+  // __harbor.terrainStats() test hook (vertex-budget + per-biome feature-count assertions).
+  var TERRAIN_STATS = { quads: 0, verts: 0 };
+  var DRESS_STATS = null, PORT_DRESS = null;
   function h2(ix, iz) { var n = (ix * 374761393 + iz * 668265263) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177); return ((n ^ (n >>> 16)) >>> 0) / 4294967296; }
   function vnoise(x, z) {
     var x0 = Math.floor(x), z0 = Math.floor(z), fx = x - x0, fz = z - z0;
@@ -125,32 +129,66 @@
   function seaDir(x, z) { var e = 6, gx = heightAt(x + e, z) - heightAt(x - e, z), gz = heightAt(x, z + e) - heightAt(x, z - e); var l = Math.hypot(gx, gz) || 1; return [-gx / l, -gz / l]; }
   function portYaw(x, z) { var s = seaDir(x, z); return Math.atan2(-s[0], -s[1]); } // local -z faces the sea
 
-  // build the heightfield surface into the flat builder (per-vertex colour + normal)
+  // Phase 18a LOOK 6.0: build the heightfield surface as FACETED FLAT-SHADED tiles — the single
+  // biggest pixel-count lever in every frame. heightAt() and the underlying FIELD values are
+  // completely untouched (gameplay-critical: building placement/site heights identical before/
+  // after) — this only changes how the SAME heights are turned into a mesh. Each grid quad gets
+  // its OWN 4 vertices (not shared with neighbours) and a single flat face normal (cross product
+  // of the quad's two edges), so every quad reads as one distinct light-catching facet — the
+  // Monument-Valley/Poly-Bridge "sculpted diorama" look — instead of the old smooth vertex-
+  // averaged normals. Per-quad (not per-triangle) duplication is a deliberate choice: the two
+  // triangles of a quad share the same flat normal + colour, so the diagonal split inside a quad
+  // never becomes a spurious extra edge for the ink-outline pass (14a/F_POST) — only real facet-
+  // to-facet boundaries ink, keeping the faceted look from reading as scratchy noise. A small
+  // deterministic per-face lightness jitter (hash of the quad's grid cell, not the shared rng
+  // stream — never perturbs prop/building placement order) makes even coplanar facets read as
+  // separate hand-placed plates. ~4x the old shared-vertex count (see terrainStats() budget).
   function buildFieldMesh(flat, biome) {
-    var nx = FIELD.nx, nz = FIELD.nz, H = FIELD.H, RM = FIELD.RM, base = flat.P.length / 3;
+    var nx = FIELD.nx, nz = FIELD.nz, H = FIELD.H, RM = FIELD.RM;
     var sand = biome.beach || [0.88, 0.80, 0.55], grass = biome.ground, deep = [0.40, 0.46, 0.40];
     var mrock = mixc(biome.hill, [0.40, 0.38, 0.43], 0.62), river = [0.13, 0.42, 0.52], snow = [0.96, 0.97, 1.0];
     var snowLine = 45;
-    for (var j = 0; j < nz; j++) {
-      var z = WORLD.z0 + j * WORLD.cell;
-      for (var i = 0; i < nx; i++) {
-        var idx = j * nx + i, x = -WORLD.W / 2 + i * WORLD.cell, y = H[idx];
-        var hl = H[j * nx + Math.max(0, i - 1)], hr = H[j * nx + Math.min(nx - 1, i + 1)];
-        var hd = H[Math.max(0, j - 1) * nx + i], hu = H[Math.min(nz - 1, j + 1) * nx + i];
-        var nX = hl - hr, nZ = hd - hu, nY = 2 * WORLD.cell, nl = Math.hypot(nX, nY, nZ) || 1;
-        var slope = 1 - nY / nl, col;
-        if (RM[idx]) col = river;                                              // winding river
-        else if (y < -0.2) col = mixc(deep, sand, clamp((y + 3) / 2.8, 0, 1));
-        else if (y < 1.1) col = sand;                                          // beach (wider sandy rim)
-        else if (y < 7) col = grass;
-        else if (y < 22) col = mixc(grass, mrock, clamp((y - 7) / 15, 0, 1));  // forested slope -> rock
-        else col = mrock;                                                      // bare rock
-        if (slope > 0.5 && y > 1.1 && !RM[idx]) col = mixc(col, mrock, clamp((slope - 0.5) * 2, 0, 1));
-        if (y > snowLine) col = mixc(col, snow, clamp((y - snowLine) / 12, 0, 1)); // snow-capped peaks (all biomes)
-        flat.P.push(x, y, z); flat.N.push(nX / nl, nY / nl, nZ / nl); flat.U.push(i * 0.25, j * 0.25); flat.C.push(col[0], col[1], col[2]);
+    function faceColor(i, j, yavg) {
+      var idx = j * nx + i;
+      var hl = H[j * nx + Math.max(0, i - 1)], hr = H[j * nx + Math.min(nx - 1, i + 1)];
+      var hd = H[Math.max(0, j - 1) * nx + i], hu = H[Math.min(nz - 1, j + 1) * nx + i];
+      var nX = hl - hr, nZ = hd - hu, nY = 2 * WORLD.cell, nl = Math.hypot(nX, nY, nZ) || 1, slope = 1 - nY / nl;
+      var isRiver = RM[idx] || RM[j * nx + Math.min(nx - 1, i + 1)] || RM[Math.min(nz - 1, j + 1) * nx + i] || RM[Math.min(nz - 1, j + 1) * nx + Math.min(nx - 1, i + 1)];
+      var col;
+      if (isRiver) col = river;                                              // winding river
+      else if (yavg < -0.2) col = mixc(deep, sand, clamp((yavg + 3) / 2.8, 0, 1));
+      else if (yavg < 1.3) col = sand;                                        // beach (slightly widened to complement facets)
+      else if (yavg < 7) col = grass;
+      else if (yavg < 22) col = mixc(grass, mrock, clamp((yavg - 7) / 15, 0, 1)); // forested slope -> rock
+      else col = mrock;                                                       // bare rock
+      if (slope > 0.5 && yavg > 1.1 && !isRiver) col = mixc(col, mrock, clamp((slope - 0.5) * 2, 0, 1));
+      if (yavg > snowLine) col = mixc(col, snow, clamp((yavg - snowLine) / 12, 0, 1)); // snow-capped peaks (all biomes)
+      return col;
+    }
+    var quads = 0;
+    for (var j = 0; j < nz - 1; j++) {
+      var z0 = WORLD.z0 + j * WORLD.cell, z1 = z0 + WORLD.cell;
+      for (var i = 0; i < nx - 1; i++) {
+        var x0 = -WORLD.W / 2 + i * WORLD.cell, x1 = x0 + WORLD.cell;
+        var ya = H[j * nx + i], yb = H[j * nx + i + 1], yc = H[(j + 1) * nx + i], yd = H[(j + 1) * nx + i + 1];
+        // flat facet normal from the quad's two edge vectors (a->c "up", a->b "across")
+        var e1y = yc - ya, e2y = yb - ya;
+        var fnx = e1y * 0 - WORLD.cell * e2y, fny = WORLD.cell * WORLD.cell - 0, fnz = 0 * e2y - e1y * WORLD.cell;
+        var fl = Math.hypot(fnx, fny, fnz) || 1; fnx /= fl; fny /= fl; fnz /= fl;
+        if (fny < 0) { fnx = -fnx; fny = -fny; fnz = -fnz; }                  // keep facing up
+        var col = faceColor(i, j, (ya + yb + yc + yd) / 4);
+        var jitk = 1 + (h2(i, j) - 0.5) * 0.14;                               // ±7% per-face lightness jitter — deliberate craft, not noise
+        var fc = [clamp(col[0] * jitk, 0, 1), clamp(col[1] * jitk, 0, 1), clamp(col[2] * jitk, 0, 1)];
+        var base = flat.P.length / 3;
+        flat.P.push(x0, ya, z0); flat.N.push(fnx, fny, fnz); flat.U.push(0, 0); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(x1, yb, z0); flat.N.push(fnx, fny, fnz); flat.U.push(1, 0); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(x0, yc, z1); flat.N.push(fnx, fny, fnz); flat.U.push(0, 1); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(x1, yd, z1); flat.N.push(fnx, fny, fnz); flat.U.push(1, 1); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.I.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+        quads++;
       }
     }
-    for (j = 0; j < nz - 1; j++) for (i = 0; i < nx - 1; i++) { var a = base + j * nx + i, b = a + 1, c = a + nx, d = c + 1; flat.I.push(a, c, b, b, c, d); }
+    TERRAIN_STATS.quads = quads; TERRAIN_STATS.verts = quads * 4;
   }
 
   // ---------------- vegetation (grounded on the field) ----------------
@@ -231,6 +269,104 @@
       var s = 0.5 + rng() * 0.7, tmp = new g.HGL.Builder(); landform(tmp, b, s, rng);
       flat.addXform(tmp, cx, y - 1, cz, rng() * TAU); placed++;
     }
+  }
+
+  // ---------------- Phase 18a LOOK 6.0: sculpted coast & per-biome dressing ------------------
+  // Static, budget-aware props scattered across the WHOLE world (wild or founded — landscape
+  // identity, not port furniture) so every biome reads as distinctly its own place up close, not
+  // just a different terrain tint. Small chamfered-box/cylinder kit pieces, same shape language as
+  // the rest of the game (bbox/box/cyl) — no new primitives, no new asset pipeline.
+  function rockOutcrop(flat, x, z, rng, biome) {                    // chunky stacked chamfered boulders
+    var rock = jit(biome.hill, 0.06, rng), n = 2 + (rng() * 3 | 0), y0 = 0;
+    for (var k = 0; k < n; k++) {
+      var s = 1.5 - k * 0.30 + rng() * 0.5, dx = (rng() - 0.5) * 1.5 * (k + 1), dz = (rng() - 0.5) * 1.5 * (k + 1);
+      flat.bbox(x + dx, y0 + s * 0.55, z + dz, s * 2.3, s * 1.5, s * 2.0, mul(rock, 0.84 + rng() * 0.3), rng() * TAU, s * 0.42);
+      y0 += s * 0.42;
+    }
+  }
+  function stoneShelf(flat, x, z, rng, biome) {                     // stepped rock shelf right at the waterline
+    var rock = mul(jit(biome.hill, 0.05, rng), 0.82), steps = 2 + (rng() * 2 | 0), y = -0.3;
+    for (var s = 0; s < steps; s++) {
+      var w = 7.5 - s * 1.5 + rng(), d = 3.6 - s * 0.5;
+      flat.bbox(x, y, z - s * 1.7, w, 0.9, d, mul(rock, 1 - s * 0.06), (rng() - 0.5) * 0.2, 0.5);
+      y -= 0.75;
+    }
+  }
+  var PEBBLE_TONES = [[0.90, 0.86, 0.78], [0.80, 0.74, 0.62], [0.96, 0.92, 0.86], [0.72, 0.68, 0.60], [0.62, 0.58, 0.52]];
+  function pebble(flat, x, z, rng) {                                 // shell/pebble speckle in the sand band
+    flat.bbox(x, 0.09 + rng() * 0.05, z, 0.32 + rng() * 0.34, 0.14 + rng() * 0.12, 0.28 + rng() * 0.30, pick(PEBBLE_TONES, rng), rng() * TAU, 0.07);
+  }
+  function duneRidge(flat, x, z, rng, biome) {                       // low elongated sand mound (desert)
+    var sand = jit(biome.hill, 0.05, rng), len = 9 + rng() * 13;
+    flat.cyl(x, -0.3, z, len * 0.5, 1.0 + rng() * 0.8, 6, sand, 0.72);
+  }
+  function boulder(flat, x, z, rng, biome) {                         // scattered snow-country boulder
+    var rock = jit(biome.hill, 0.07, rng), s = 0.9 + rng() * 1.6;
+    flat.bbox(x, s * 0.42, z, s * 1.5, s * 0.85, s * 1.3, rock, rng() * TAU, s * 0.32);
+    if (rng() < 0.4) flat.bbox(x + s * 0.6, s * 0.7, z - s * 0.4, s * 0.7, s * 0.5, s * 0.6, mul(rock, 0.9), rng() * TAU, s * 0.2);
+  }
+  function bigLeafPlant(flat, x, z, rng, y) {                        // broad-leaf tropical understory plant
+    var stalk = [0.20, 0.42, 0.18], leaf = jit([0.14, 0.52, 0.18], 0.08, rng), n = 3 + (rng() * 2 | 0);
+    for (var i = 0; i < n; i++) {
+      var a = i / n * TAU + rng() * 0.6, r = 1.0 + rng() * 0.6;
+      flat.box(x + Math.cos(a) * r * 0.5, y + 0.85 + rng() * 0.4, z + Math.sin(a) * r * 0.5, 2.1 + rng() * 0.8, 0.10, 0.8 + rng() * 0.3, leaf, a, 0.25);
+    }
+    flat.cyl(x, y, z, 0.18, 0.85, 5, stalk, 0.85);
+  }
+  // Scatters coastal rock/shelf/speckle + biome-specific dune/boulder/leaf features across the
+  // whole visible world. Called for BOTH wild and founded worlds (landscape identity), so a `port`
+  // exclusion zone keeps the harbour plot itself clear for building placement.
+  function biomeDressing(flat, biome, rng, port) {
+    var hw = WORLD.W * 0.48, rocky = biome.hillType === 'cliff' || biome.hillType === 'mountain', sandy = biome.hillType === 'hill';
+    var stats = { rock: 0, shelf: 0, speckle: 0, dune: 0, boulder: 0, leaf: 0 };
+    var targetRock = rocky ? 70 : 30, targetShelf = rocky ? 34 : 8, tries = 0, budget = (targetRock + targetShelf) * 46;
+    while ((stats.rock < targetRock || stats.shelf < targetShelf) && tries < budget) {
+      tries++;
+      var x = -hw + rng() * hw * 2, z = -120 + rng() * 560, y = heightAt(x, z);
+      if (port && Math.abs(x - port.x) < 70 && Math.abs(z - port.z) < 70) continue;
+      if (y <= -1.0 || y >= 3.2) continue;                           // right at/near the coastline only
+      if (stats.shelf < targetShelf && y < 0.6 && rng() < (rocky ? 0.5 : 0.16)) { stoneShelf(flat, x, z, rng, biome); stats.shelf++; }
+      else if (stats.rock < targetRock && rng() < (rocky ? 0.55 : 0.14)) { rockOutcrop(flat, x, z, rng, biome); stats.rock++; }
+    }
+    if (sandy) {                                                     // beach speckle — sandy coastlines only
+      var targetSpeckle = 160, t2 = 0;
+      while (stats.speckle < targetSpeckle && t2 < targetSpeckle * 30) {
+        t2++;
+        var x2 = -hw + rng() * hw * 2, z2 = -120 + rng() * 560, y2 = heightAt(x2, z2);
+        if (y2 < -0.1 || y2 > 1.3) continue;
+        if (port && Math.abs(x2 - port.x) < 40 && Math.abs(z2 - port.z) < 40) continue;
+        pebble(flat, x2, z2, rng); stats.speckle++;
+      }
+    }
+    if (biome.hillType === 'mesa') {                                 // dune ridges — desert only
+      var targetDune = 22, t3 = 0;
+      while (stats.dune < targetDune && t3 < targetDune * 20) {
+        t3++;
+        var x3 = -hw + rng() * hw * 2, z3 = -100 + rng() * 520, y3 = heightAt(x3, z3);
+        if (y3 < 1.1 || y3 > 10) continue;
+        duneRidge(flat, x3, z3, rng, biome); stats.dune++;
+      }
+    }
+    if (biome.snow) {                                                // scattered boulders — nordic/mountain
+      var targetBoulder = 46, t4 = 0;
+      while (stats.boulder < targetBoulder && t4 < targetBoulder * 20) {
+        t4++;
+        var x4 = -hw + rng() * hw * 2, z4 = -80 + rng() * 500, y4 = heightAt(x4, z4);
+        if (y4 < 8 || y4 > 40) continue;
+        boulder(flat, x4, z4, rng, biome); stats.boulder++;
+      }
+    }
+    if (biome.veg === 'palm') {                                      // extra big-leaf plants — tropical only
+      var targetLeaf = 28, t5 = 0;
+      while (stats.leaf < targetLeaf && t5 < targetLeaf * 20) {
+        t5++;
+        var x5 = -hw + rng() * hw * 2, z5 = -100 + rng() * 520, y5 = heightAt(x5, z5);
+        if (y5 < 1.1 || y5 > 9) continue;
+        if (port && Math.abs(x5 - port.x) < 40 && Math.abs(z5 - port.z) < 40) continue;
+        bigLeafPlant(flat, x5, z5, rng, y5); stats.leaf++;
+      }
+    }
+    return stats;
   }
 
   // ---------------- port structures (LOCAL origin: water toward -z, land +z) ----------------
@@ -842,8 +978,100 @@
   };
 
   // assemble the port at LOCAL origin for the given era; returns local placements
-  function assemblePort(L, biome, rng, era) {
+  // ---------------- Phase 18a LOOK 6.0: dressed ground near a FOUNDED port -------------------
+  // Local port-frame geometry (water toward -z, land toward +z — same convention as the rest of
+  // assemblePort). Only ever built when a port is actually founded (assemblePort is never called
+  // for a wild/unfounded world) so this apron/dock/path/fence/clutter geometry is strictly a
+  // founded-port feature, verified by terrainStats().port in the test suite.
+  // groundY(lx,lz): local-space (lx,lz) -> the REAL terrain height at that world position, minus
+  // the port's own founding height 'by' — i.e. how far the actual (possibly hilly) ground sits
+  // above/below the flat y=0 plane every port structure assumes. The generic PLAIN flattening in
+  // genField only smooths height near the plain's own centre, so terrain a few tens of units
+  // inland from the (often low, coastal) founding point can genuinely sit metres above 'by' —
+  // invisible on the old soft/blurred terrain, but a ground-hugging apron/path/fence would bury
+  // itself under the new hard-edged facets without this correction. Structures that were already
+  // flat-assumed pre-18a (huts/warehouses/quay) are left exactly as before — out of scope here.
+  function stoneApron(grit, x0, x1, z0, z1, rng, biome, groundY) {   // bordered slab grid, grout lines via facet-colour banding
+    var wallC = biome.build && biome.build.wall && biome.build.wall[2] ? biome.build.wall[2] : [0.72, 0.70, 0.66];
+    var base = mixc(wallC, [0.74, 0.72, 0.68], 0.6), tile = 6.5, n = 0;
+    for (var z = z0; z < z1; z += tile) for (var x = x0; x < x1; x += tile) {
+      var w = Math.min(tile, x1 - x) - 0.4, d = Math.min(tile, z1 - z) - 0.4;
+      if (w < 2 || d < 2) continue;
+      var cx = x + w / 2, cz = z + d / 2, gy = groundY ? groundY(cx, cz) : 0;
+      var shade = mul(base, 0.90 + h2((x / tile) | 0, (z / tile) | 0) * 0.18);   // per-slab grout-line jitter
+      grit.box(cx, gy + 0.08, cz, w, 0.16, d, shade, 0); n++;
+    }
+    return n;
+  }
+  function plankDockStrip(flat, x0, x1, z, rng) {                      // raised plank rows where the quay meets the water
+    var n = Math.max(2, Math.round((x1 - x0) / 1.6)), step = (x1 - x0) / n;
+    for (var i = 0; i < n; i++) {
+      var px = x0 + (i + 0.5) * step, tone = i % 2 ? [0.56, 0.40, 0.24] : [0.62, 0.46, 0.28];
+      flat.box(px, 0.55, z, step * 0.92, 0.30, 3.6, tone, 0);
+    }
+    for (var p = 0; p <= 2; p++) flat.cyl(x0 + p * (x1 - x0) / 2, -1.8, z - 1.6, 0.32, 2.6, 6, [0.34, 0.25, 0.16], 1);
+    return n;
+  }
+  function dirtPath(flat, ax, az, bx, bz, rng, groundY) {              // flattened, slightly desaturated ribbon that follows the real terrain
+    var dirt = mixc([0.52, 0.42, 0.28], [0.5, 0.5, 0.5], 0.12), n = 6 + (rng() * 3 | 0);
+    for (var i = 0; i < n; i++) {
+      var t0 = i / n, t1 = (i + 1) / n, mx = ax + (bx - ax) * (t0 + t1) / 2, mz = az + (bz - az) * (t0 + t1) / 2;
+      var yaw = Math.atan2(bx - ax, bz - az), len = Math.hypot((bx - ax) / n, (bz - az) / n) * 1.18;
+      var gy = groundY ? groundY(mx, mz) : 0;
+      flat.box(mx, gy + 0.06, mz, 3.2 + (h2(i, 7) - 0.5) * 0.8, 0.10, len, mul(dirt, 0.94 + h2(i, 3) * 0.14), yaw);
+    }
+    return n;
+  }
+  function fenceLine(flat, cx, cz, w, d, rng, biome, groundY) {        // low stone wall (rocky biomes) or pickets, around a field patch
+    var stony = biome.hillType === 'cliff' || biome.hillType === 'mountain';
+    var post = stony ? [0.52, 0.52, 0.54] : [0.42, 0.30, 0.18], rail = mul(post, 1.15);
+    var hw = w / 2, hd = d / 2, corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd], [-hw, -hd]], n = 0;
+    for (var s = 0; s < 4; s++) {
+      var ax = corners[s][0], az = corners[s][1], bx = corners[s + 1][0], bz = corners[s + 1][1];
+      var segN = Math.max(1, Math.round(Math.hypot(bx - ax, bz - az) / 3.2));
+      for (var i = 0; i <= segN; i++) {
+        var t = i / segN, px = cx + ax + (bx - ax) * t, pz = cz + az + (bz - az) * t, gy = groundY ? groundY(px, pz) : 0;
+        flat.cyl(px, gy, pz, 0.11, stony ? 0.7 : 0.9, 5, post, 0.85); n++;
+      }
+      var mx = cx + ax + (bx - ax) * 0.5, mz = cz + az + (bz - az) * 0.5, yaw = Math.atan2(bx - ax, bz - az);
+      var railGy = groundY ? groundY(mx, mz) : 0;
+      if (!stony) flat.box(mx, railGy + 0.55, mz, Math.hypot(bx - ax, bz - az), 0.10, 0.10, rail, yaw);   // pickets get a top rail; stone walls read solid from posts alone
+    }
+    return n;
+  }
+  var QUAY_PROP_KINDS = ['crate', 'barrel', 'rope', 'pot', 'basket'];
+  function quayProp(flat, x, z, kind, rng) {                           // crates / barrels / rope coils / lobster pots / fish baskets
+    if (kind === 'crate') flat.box(x, 0.35, z, 0.7, 0.7, 0.7, pick([[0.62, 0.46, 0.28], [0.70, 0.52, 0.30]], rng), rng() * 0.3);
+    else if (kind === 'barrel') { flat.cyl(x, 0.02, z, 0.42, 0.75, 8, [0.44, 0.30, 0.18], 0.94); flat.cyl(x, 0.70, z, 0.44, 0.10, 8, [0.20, 0.18, 0.16], 0.98); }
+    else if (kind === 'rope') flat.cyl(x, 0.10, z, 0.42, 0.20, 10, [0.72, 0.64, 0.42], 0.7);
+    else if (kind === 'pot') { flat.cyl(x, 0.05, z, 0.34, 0.42, 6, [0.30, 0.22, 0.16], 0.6); flat.box(x, 0.42, z, 0.55, 0.10, 0.55, [0.34, 0.26, 0.18], rng() * TAU); }
+    else flat.bbox(x, 0.22, z, 0.55, 0.42, 0.42, [0.66, 0.52, 0.34], rng() * TAU, 0.08);            // basket
+  }
+  function quayClutter(flat, x0, x1, z0, z1, rng, cap) {                // deterministic prop set, capped per port
+    var n = Math.min(cap, 6 + (rng() * (cap - 5) | 0)), placed = 0, tries = 0;
+    while (placed < n && tries < n * 4) { tries++; quayProp(flat, x0 + rng() * (x1 - x0), z0 + rng() * (z1 - z0), pick(QUAY_PROP_KINDS, rng), rng); placed++; }
+    return placed;
+  }
+  function assemblePort(L, biome, rng, era, port, by, yaw) {
     var sc = { city: [], blobs: [], lamps: [], crane: era >= 2 };
+    // Phase 18a: local(x,z) -> real terrain height minus 'by', for ground-hugging dressing that
+    // must follow the actual (possibly hilly) surface instead of the flat y=0 every other port
+    // part assumes — see the long comment above stoneApron().
+    var pc = Math.cos(yaw), ps = Math.sin(yaw);
+    function groundY(lx, lz) { return heightAt(lx * pc + lz * ps + port.x, -lx * ps + lz * pc + port.z) - by; }
+    // the fenced field patch is small (posts every ~3 units) and reads badly on a real slope — a
+    // level-looking enclosure needs a comparatively flat spot, so pick the flattest of a couple of
+    // candidate centres (min/max groundY sample across the patch footprint) rather than a single
+    // fixed offset that might land on a steep hillside in a hillier biome/seed.
+    function flattest(cands, hw, hd) {
+      var best = cands[0], bestRange = Infinity;
+      cands.forEach(function (c) {
+        var vs = [groundY(c[0] - hw, c[1] - hd), groundY(c[0] + hw, c[1] - hd), groundY(c[0] - hw, c[1] + hd), groundY(c[0] + hw, c[1] + hd), groundY(c[0], c[1])];
+        var range = Math.max.apply(null, vs) - Math.min.apply(null, vs);
+        if (range < bestRange) { bestRange = range; best = c; }
+      });
+      return best;
+    }
     if (era === 0) {
       // primitive wild village: a few shacks, one jetty, a fishing boat — no quay yet, so no
       // lampposts/lit-window pools (Phase 14b night light pools start once a real quay exists)
@@ -851,6 +1079,14 @@
       var huts = 3 + (rng() * 2 | 0);
       for (var hI = 0; hI < huts; hI++) { var hx = -16 + rng() * 32, hz = 24 + rng() * 14; hut(L.flat, hx, hz, rng, biome); sc.blobs.push({ x: hx, z: hz, r: 5 }); }
       dinghy(L.flat, -4 + rng() * 8, -3, rng); sc.blobs.push({ x: 0, z: 8, r: 7 });
+      // Phase 18a: even the primitive village gets a worn dirt track from the jetty to the huts, a
+      // small fenced garden patch, and a handful of dropped crates/rope by the water — no stone
+      // apron or plank dock yet (there's no real quay to dress until era1's concreteQuay exists).
+      var dPath0 = dirtPath(L.flat, 0, 9, 0, 28, rng, groundY);
+      var fc0 = flattest([[28, 30], [-28, 30]], 8, 7);
+      var dFence0 = fenceLine(L.flat, fc0[0], fc0[1], 16, 14, rng, biome, groundY);
+      var dProps0 = quayClutter(L.flat, -12, 12, 3, 15, rng, 8);
+      sc.portDressing = { apron: 0, dock: 0, path: dPath0, fence: dFence0, props: dProps0 };
     } else {
       concreteQuay(L.grit, L.flat, era); lighthouse(L.grit, L.flat, -70, 8); sc.blobs.push({ x: -70, z: 8, r: 6 });
       var whN = Math.min(6, 1 + era);
@@ -864,6 +1100,19 @@
       sc.blobs.push({ x: 0, z: -6, r: 22 });
       if (era >= 2) { craneStatic(L.grit, 0, -6); sc.blobs.push({ x: 0, z: -6, r: 14 }); }
       props(L.grit, L.flat, rng, era, sc);
+      // Phase 18a: dressed ground — a bordered stone-slab apron under the warehouse/yard cluster
+      // (grout-line facet jitter, sits just behind the concrete quay so it never intersects it),
+      // raised plank-dock rows bridging the quay's seaward lip to open water, a dirt path threading
+      // from the quay back toward the city blocks, a low fenced field patch off to one side, and a
+      // capped, deterministic scatter of quay clutter (crates/barrels/rope/pots/baskets).
+      var whSpan = 56 + Math.min(6, 1 + era) * 3;
+      var dApron = stoneApron(L.grit, -whSpan, whSpan, 18, 46, rng, biome, groundY);
+      var dDock = plankDockStrip(L.flat, -46, 46, 1.4, rng);
+      var dPath = dirtPath(L.flat, 0, 46, 0, 88, rng, groundY);
+      var fc1 = flattest([[-whSpan - 22, 34], [whSpan + 22, 34]], 10, 8);
+      var dFence = fenceLine(L.flat, fc1[0], fc1[1], 20, 16, rng, biome, groundY);
+      var dProps = quayClutter(L.flat, -whSpan, whSpan, 6, 16, rng, 14);
+      sc.portDressing = { apron: dApron, dock: dDock, path: dPath, fence: dFence, props: dProps };
       // Phase 17a: Automated Harbour (era6) / Neon Horizon (era7) get their OWN skyline — a small
       // cluster of tech-age towers east of the warehouse row (solarSpire's steel/glass silhouette at
       // era6, swapping to neonTower's glowing accent rings at era7) plus a drone landing pad by the
@@ -931,18 +1180,20 @@
       }
     }
     scatterLushness(B.flat, rng, port, biome);   // Phase 16b: bushes + flowers near a founded port
+    DRESS_STATS = biomeDressing(B.flat, biome, rng, port);   // Phase 18a: coastal rocks/shelves/speckle + biome features
     for (var bk = 0, bt = 0; bk < 8 && bt < 80; bt++) {    // little boats dotted in the water around the island
       var bx = -760 + rng() * 1520, bz = -210 + rng() * 760, byy = heightAt(bx, bz);
       if (byy > -3.2 && byy < -0.7) { dinghy(B.flat, bx, bz, rng); bk++; }
     }
-    var scene = { city: [], blobs: [], lamps: [], crane: false, era: era, founded: !!port, port: null };
+    var scene = { city: [], blobs: [], lamps: [], crane: false, era: era, founded: !!port, port: null, dressing: DRESS_STATS };
+    PORT_DRESS = null;
     if (!port) return scene;                               // wild, unfounded — no structures
 
     var by = heightAt(port.x, port.z); if (by < 0.3) by = 0.3;
     var yaw = (port.yaw == null) ? portYaw(port.x, port.z) : port.yaw;
     scene.port = { x: port.x, z: port.z, by: by, yaw: yaw };
     var L = { fac: new g.HGL.Builder(), grit: new g.HGL.Builder(), flat: new g.HGL.Builder() };
-    var lsc = assemblePort(L, biome, rng, era);
+    var lsc = assemblePort(L, biome, rng, era, port, by, yaw);
     B.fac.addXform(L.fac, port.x, by, port.z, yaw); B.grit.addXform(L.grit, port.x, by, port.z, yaw); B.flat.addXform(L.flat, port.x, by, port.z, yaw);
     var c = Math.cos(yaw), s = Math.sin(yaw);
     function W(p) { return { x: p.x * c + p.z * s + port.x, z: -p.x * s + p.z * c + port.z }; }
@@ -950,8 +1201,12 @@
     lsc.blobs.forEach(function (b) { var w = W(b); scene.blobs.push({ x: w.x, z: w.z, r: b.r }); });
     lsc.lamps.forEach(function (l) { var w = W(l); scene.lamps.push({ x: w.x, z: w.z, q: l.q }); });   // Phase 14b: night light pool anchors (q=1: on the quay deck)
     scene.crane = lsc.crane;
+    PORT_DRESS = lsc.portDressing || null; scene.portDressing = PORT_DRESS;   // Phase 18a: apron/dock/path/fence/prop counts — founded ports only
     return scene;
   }
 
-  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD };
+  // Phase 18a: LOOK 6.0 terrain/dressing telemetry — read by game.js's __harbor.terrainStats()
+  // test hook (vertex-budget + per-biome feature-count + founded-port-only assertions).
+  function terrainStats() { return { terrain: { quads: TERRAIN_STATS.quads, verts: TERRAIN_STATS.verts }, dressing: DRESS_STATS, port: PORT_DRESS }; }
+  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD, terrainStats: terrainStats };
 })(window);
