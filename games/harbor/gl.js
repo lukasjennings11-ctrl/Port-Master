@@ -310,7 +310,7 @@
     vLandH=aColor.r;   // Phase 14a: terrain height baked per-vertex at mesh-build time (buildWaterMesh) — feeds the shore-distance signal below, no runtime heightfield lookup needed
     gl_Position=uVP*vec4(p,1.0); }`;
   var F_WATER = `#version 300 es
-  precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uFoam,uGrain;
+  precision highp float; in vec3 vW; in vec3 vN; in float vLandH; uniform vec3 uCam,uSunDir,uSunCol,uDeep,uShallow,uSky,uSkyTop,uFog; uniform float uFogD,uExposure,uSat,uTime,uFoam,uGrain,uStorm;
   out vec4 frag;
   vec3 aces(vec3 x){ float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   float dth(vec2 p){ return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453); }
@@ -325,7 +325,11 @@
     float shoreT=smoothstep(-9.0,-0.35,vLandH);
     float bandsF=shoreT*4.0;
     float kf=floor(clamp(bandsF,0.0,3.999));                      // which boundary/band we're near, BEFORE the wobble (picks its slide speed)
-    float spd=0.05+0.035*kf;                                       // each band boundary slides at its OWN speed (matches waterBandPhase() in game.js)
+    // Phase 14c: uStorm (0..1, eased in game.js from the hazard warn state) whips the paper sea up
+    // during a storm — every band boundary slides up to ~3x faster, and the card tones darken
+    // toward a cold slate below. WebGL zero-initializes uniforms, so callers that never set uStorm
+    // (and the pre-14c look) get the exact calm-sea behaviour unchanged.
+    float spd=(0.05+0.035*kf)*(1.0+2.0*uStorm);                    // each band boundary slides at its OWN speed (matches waterBandPhase() in game.js)
     float lateral=vW.x*0.035+vW.z*0.022;
     // wobble fades out with camera distance: at a grazing/far view a single screen pixel spans a
     // huge range of world-space lateral coordinate, so the (otherwise lovely, up-close) zigzag
@@ -342,6 +346,7 @@
     float bandIdx=floor(bandsW);
     float bandFrac=fract(bandsW);
     vec3 water=mix(uDeep,uShallow,bandIdx/3.0);
+    water=mix(water,water*vec3(0.42,0.47,0.58),uStorm*0.55);       // Phase 14c: storm-darkened slate sea (cool multiply, still card-flat)
     // Phase 19c: the band CONTRAST fades with distance too (not just the wobble) — once wobFade has
     // straightened the boundaries into razor lines at grazing/far views, the tone step itself is
     // what reads as a hard seam across the horizon. bandFarFlat eases the whole far field toward
