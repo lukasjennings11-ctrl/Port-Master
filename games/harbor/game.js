@@ -480,7 +480,7 @@
     var span = Math.max(1e-5, b[0] - a[0]), t = clamp((tod - a[0]) / span, 0, 1);
     t = t * t * (3 - 2 * t);                                   // smoothstep between keys
     var A = a[1], B = b[1];
-    return {
+    var out = {
       day: day, night: night,
       top: lerp3(A.top, B.top, t), bot: lerp3(A.bot, B.bot, t),
       sun: lerp3(A.sun, B.sun, t), fog: lerp3(A.fog, B.fog, t),
@@ -489,6 +489,18 @@
       fogD: A.fogD + (B.fogD - A.fogD) * t, shadowK: A.shadowK + (B.shadowK - A.shadowK) * t,
       sparkle: A.sparkle + (B.sparkle - A.sparkle) * t
     };
+    // Phase 14c: storm keyframe — blend the whole palette toward a darker slate-card sky/void with
+    // cooler light as DRAMA.stormT ramps up (real hazard-driven, not decorative on its own — see
+    // updateDrama). Never touches fogD/shadowK/sparkle (those stay ToD-only) — just the paper colours.
+    var st = (typeof DRAMA !== 'undefined') ? DRAMA.stormT : 0;
+    if (st > 0.001) {
+      var slateTop = [0.22, 0.24, 0.30], slateBot = [0.30, 0.32, 0.38], slateAmb = [0.16, 0.17, 0.21], slateWater = [0.42, 0.46, 0.52];
+      out.top = lerp3(out.top, slateTop, st); out.bot = lerp3(out.bot, slateBot, st);
+      out.ambTop = lerp3(out.ambTop, slateAmb, st); out.ambBot = lerp3(out.ambBot, slateAmb, st);
+      out.water = lerp3(out.water, slateWater, st); out.horizon = lerp3(out.horizon, slateBot, st);
+      out.sun = lerp3(out.sun, [0.62, 0.66, 0.74], st);
+    }
+    return out;
   }
   function sunDir() { var ang = (tod - 0.25) * Math.PI * 2, y = Math.max(0.07, Math.sin(ang) * 0.9 + 0.12); return norm([Math.cos(ang) * 0.7, y, 0.42]); }
   // Phase 19b: the paper moon card rides roughly the opposite arc from the sun (half a cycle out
@@ -502,7 +514,11 @@
   // the exact inversion of the 14a/16b dark ink. Slightly warm by day (paper stock, not printer
   // white) drifting to a paler, cooler rim after dark — pale card catching moonlight, never a
   // glow (values stay <=1 so the rim can't bloom).
-  function outlineTint(en) { return lerp3([0.96, 0.95, 0.91], [0.78, 0.79, 0.84], en.night); }
+  function outlineTint(en) {
+    var t = lerp3([0.96, 0.95, 0.91], [0.78, 0.79, 0.84], en.night);
+    var st = (typeof DRAMA !== 'undefined') ? DRAMA.stormT : 0;
+    return st > 0.001 ? lerp3(t, [1, 1, 1], st * 0.6) : t;   // whiter rims under storm
+  }
   // papercraft grade (19a): gentle, matte — the loud 16b uSat push (1.32+) is gone; construction
   // paper sits near unity saturation with only a whisper of noon lift / night dim, and the
   // mid-shadow crush eases too (deep inky crush reads as print, not card).
@@ -593,7 +609,7 @@
   // deterministic/reversible (and testable: sample twice at different clock values). Gentle
   // radial breathing on top of the angular drift keeps the ring from reading as a rail.
   function cloudWorldPos(c) {
-    var ang = c.a0 + clock * c.spd, r = c.r0 + Math.sin(clock * 0.03 + c.ph) * 26;
+    var ang = c.a0 + clock * c.spd * cloudDriftMul(), r = c.r0 + Math.sin(clock * 0.03 + c.ph) * 26;
     return [CLOUD_RING_CX + Math.cos(ang) * r, CLOUD_RING_CZ + Math.sin(ang) * r];
   }
   // ToD tint: crisp white at noon, warm pink through dawn/dusk twilight, dark slate by night —
@@ -601,17 +617,32 @@
   function cloudTint(en) {
     var duskT = clamp(1 - en.day - en.night, 0, 1);
     var t = lerp3([1.0, 1.0, 1.0], [1.0, 0.74, 0.72], duskT);
-    return lerp3(t, [0.36, 0.38, 0.48], en.night);
+    t = lerp3(t, [0.36, 0.38, 0.48], en.night);
+    var st = (typeof DRAMA !== 'undefined') ? DRAMA.stormT : 0;
+    return st > 0.001 ? lerp3(t, [0.30, 0.32, 0.38], st * 0.75) : t;   // storm: clouds darken toward slate
   }
+  function cloudDriftMul() { return 1 + ((typeof DRAMA !== 'undefined') ? DRAMA.stormT : 0) * 1.8; }   // storm: clouds drift faster
+  function waterStormMul() { return 1 + ((typeof DRAMA !== 'undefined') ? DRAMA.stormT : 0) * 2; }   // storm: mirrors F_WATER's uStorm band-slide multiplier (1+2*uStorm) for __harbor.storm() — the shader owns the actual speed-up now (no clock distortion)
   // Phase 19b: flat cutout clouds are billboarded on the yaw (Y) axis — always facing the camera —
   // so the scalloped paper silhouette shows its flat face from any orbit angle instead of edge-on.
   function drawClouds(M, en, ev) {
     if (!CLOUDS) return;
     gl.uniform3fv(M.u.uBase, cloudTint(en));   // matte/chalky (19a: F_MAIN is all-matte now — no per-draw roughness left to set)
+    // Phase 14c: while a storm is telegraphing, the ring CROWDS toward the threatened port — each
+    // cloud eases part-way in from its ring position and drops a little altitude, so the sky
+    // visibly gangs up over the harbour. Pure draw-side lerp on stormT: at 0 the 14b ring is
+    // bit-identical (cloudWorldPos itself stays a pure fn of clock for the drift tests).
+    var st14c = DRAMA.stormT, sp14c = scene.port;
     for (var i = 0; i < CLOUDS.length; i++) {
       var c = CLOUDS[i], p = cloudWorldPos(c);
+      var cy = c.y;
+      if (st14c > 0.001 && sp14c) {
+        var pull = st14c * 0.55;
+        p = [p[0] + (sp14c.x - p[0]) * pull, p[1] + (sp14c.z - p[1]) * pull];
+        cy = c.y - st14c * 38;                                    // lower, heavier storm deck (still >90, clear of the massif)
+      }
       var byaw = ev ? Math.atan2(ev[0] - p[0], ev[2] - p[1]) : c.ry;
-      composeRYS(mModel, p[0], c.y, p[1], c.scale, c.scale * 0.72, c.scale, byaw);
+      composeRYS(mModel, p[0], cy, p[1], c.scale, c.scale * 0.72, c.scale, byaw);
       gl.uniformMatrix4fv(M.u.uModel, false, mModel);
       drawMesh(M, CLOUD_MESHES[c.meshIdx]);
     }
@@ -944,6 +975,98 @@
     var pa = clock * 0.22 + (n.ph || 0), dir = Math.cos(pa) >= 0 ? 1 : -1;
     return { x: n.cx + n.px * Math.sin(pa) * 30, z: n.cz + n.pz * Math.sin(pa) * 30, yaw: Math.atan2(n.px * dir, n.pz * dir) };
   }
+  // ---- Phase 14c: WORLD DRAMA — visible theatre for events already happening in sim state (no new
+  // save fields, no fake state: every beat below is a pure function of SIM.state()/SIM.event() plus
+  // a locally-smoothed draw timer). stormT/crashT ramp 0->1 on real hazard telegraph/crash and ease
+  // back to 0 once it clears (strike or avert) — env()/clouds()/water read them for the paper storm
+  // look; pirate tracks the raid event lifecycle for the corsair hold/exchange/depart beats;
+  // theatre tracks the pop-up scaffold prelude that plays just before 19c's unfold.
+  var DRAMA = {
+    stormT: 0, crashT: 0,
+    pirate: null,                      // {phase:'in'|'hold'|'fight'|'pay'|'winDepart'|'loseDepart', t, x, z}
+    volleyN: 0, volleyT: 0,
+    theatreT0: -10, theatreTestP: null, theatreNew: true,
+    flashScaffold: 0,                  // brief 0.4s scaffold flash on upgrade
+    castoff: {},                       // voyage seq -> clock at send (cast-off ramp window)
+    boltT: 0, crashPulse: 0            // lightning-bolt overlay / crash vignette pulse (strike-triggered)
+  };
+  var THEATRE_DUR = 1.2, THEATRE_FLASH = 0.4;
+  // new build → the full 1.2s prelude (scaffold + 2 hammering workers + dust + tick-tock), with the
+  // 19c unfold pop CHAINED to fire only when the prelude ends (see updateDrama below) — the
+  // building visibly gets BUILT before it pops up. Upgrade → just a 0.4s bare-scaffold flash, with
+  // the pop immediate as before (upgrades are a tweak, not a construction site).
+  function triggerTheatre(isNew) {
+    DRAMA.theatreT0 = clock; DRAMA.theatreNew = isNew !== false; DRAMA.theatrePopped = !DRAMA.theatreNew;
+    if (!DRAMA.theatreNew) DRAMA.flashScaffold = THEATRE_FLASH;
+  }
+  function theatreNow() { return DRAMA.theatreTestP != null ? DRAMA.theatreTestP * THEATRE_DUR : clock - DRAMA.theatreT0; }
+  function theatreState() {
+    var t = theatreNow();
+    var active = DRAMA.theatreNew && t >= 0 && t < THEATRE_DUR;
+    var p = active ? clamp(t / THEATRE_DUR, 0, 1) : 1;
+    return {
+      active: active, t: p, dur: THEATRE_DUR, flash: DRAMA.flashScaffold > 0,
+      scaffold: active || DRAMA.flashScaffold > 0, workers: active ? 2 : 0,
+      rise: active ? Math.min(1, p * 4) : 1,                        // scaffold pops up over the first ~0.3s
+      fold: active ? (p > 0.85 ? (p - 0.85) / 0.15 : 0) : 0         // …and folds flat as the 19c unfold takes over
+    };
+  }
+  // corsair hold point: ~40 units offshore of the port, along the same deep-water heading the
+  // ambient fleet already uses (mirrors refreshFleet's ox/oz derivation so it reads as "the same
+  // sea lane every ship uses", not a bespoke position).
+  function pirateHoldPos() {
+    var p = scene.port; if (!p) return { x: 0, z: 0, ox: 0, oz: 1 };
+    var ox, oz;
+    if (ambient && (ambient.cx !== p.x || ambient.cz !== p.z)) { var ol = Math.hypot(ambient.cx - p.x, ambient.cz - p.z) || 1; ox = (ambient.cx - p.x) / ol; oz = (ambient.cz - p.z) / ol; }
+    else { var a0 = seaAz(p.x, p.z); ox = Math.sin(a0); oz = Math.cos(a0); }
+    return { x: p.x + ox * 40, z: p.z + oz * 40, ox: ox, oz: oz };
+  }
+  function startPirate() {
+    var hp = pirateHoldPos();
+    DRAMA.pirate = { phase: 'in', t: 0, x: hp.x, z: hp.z, ox: hp.ox, oz: hp.oz };
+  }
+  function pirateResolve(kind) {   // 'pay' | 'winDepart' | 'loseDepart'
+    if (!DRAMA.pirate) return;
+    DRAMA.pirate.phase = kind; DRAMA.pirate.t = 0;
+  }
+  // 2-3 volleys of confetti fired back and forth between the quay and the holding corsair — reuses
+  // the existing burstWorld/particle pipeline, tagged with a mixed-flecks style so it reads as
+  // cannon-fire confetti rather than a celebration burst.
+  function cannonVolley(atPirate) {
+    if (!FX) return;
+    var pw = portWorld(), hp = DRAMA.pirate ? { x: DRAMA.pirate.x, z: DRAMA.pirate.z } : pirateHoldPos();
+    var from = atPirate ? hp : { x: pw.x, z: pw.z };
+    var colors = ['#f2b35e', '#dfe6ea', '#ffe08a', '#c0392b'];
+    burstWorld(from.x, pw.y + 3, from.z, { count: 20, colors: colors, speed: 170, life: 0.75, size: 4, gravity: 190, shape: 'rect' });
+    shakeFX(4, 0.2); sfx('tap');
+  }
+  var theatreHammerT = 0;
+  function updateDrama(dt) {
+    if (DRAMA.flashScaffold > 0) DRAMA.flashScaffold = Math.max(0, DRAMA.flashScaffold - dt);
+    var th = theatreState();
+    if (th.active) {
+      theatreHammerT += dt;
+      if (theatreHammerT > 0.22) { theatreHammerT = 0; sfx('tap'); if (FX) { var pw = portWorld(); var sc = pw && worldToScreen(pw.x + (Math.random() - 0.5) * 14, pw.y + 3, pw.z + (Math.random() - 0.5) * 14); if (sc) FX.p.list.push({ x: sc.x, y: sc.y, vx: (Math.random() - 0.5) * 12, vy: -18 - Math.random() * 10, life: 0.5, max: 0.5, size: 3, color: 'rgba(220,214,198,0.6)', gravity: 30, shape: 'curl', rot: 0, vr: 2 }); } }
+    } else theatreHammerT = 0;
+    if (!simReady()) return;
+    var s = SIM.state();
+    var isCrashWarn = !!(s.hazard && s.hazard.phase === 'warn' && s.hazard.kind === 'Market Crash');
+    var stormOn = !!(s.hazard && s.hazard.phase === 'warn' && !isCrashWarn);
+    var crashOn = isCrashWarn || !!s.crash;
+    var st = stormOn ? 1 : 0, ct = crashOn ? 1 : 0;
+    DRAMA.stormT += (st - DRAMA.stormT) * Math.min(1, dt * 1.6); if (Math.abs(DRAMA.stormT - st) < 0.004) DRAMA.stormT = st;
+    DRAMA.crashT += (ct - DRAMA.crashT) * Math.min(1, dt * 2.2); if (Math.abs(DRAMA.crashT - ct) < 0.004) DRAMA.crashT = ct;
+    if (DRAMA.pirate) {
+      var pr = DRAMA.pirate; pr.t += dt;
+      if (pr.phase === 'in' && pr.t > 0.9) pr.phase = 'hold';
+      else if ((pr.phase === 'pay' || pr.phase === 'winDepart' || pr.phase === 'loseDepart') && pr.t > 1.4) DRAMA.pirate = null;
+      else if (pr.phase === 'fight') {
+        DRAMA.volleyT += dt;
+        if (DRAMA.volleyN < 3 && DRAMA.volleyT > 0.4) { DRAMA.volleyN++; DRAMA.volleyT = 0; cannonVolley(DRAMA.volleyN % 2 === 1); }
+        else if (DRAMA.volleyN >= 3 && DRAMA.volleyT > 0.35) { pirateResolve(DRAMA._fightOut || 'loseDepart'); }
+      }
+    }
+  }
   function refreshFleet() {
     fleet.at = clock; fleet.exp.length = 0; fleet.routes.length = 0; fleet.rival = null; fleet.navy.length = 0;
     var p = scene.port; if (!p || !simReady()) return;
@@ -957,6 +1080,7 @@
       var a = v.active[i], off = (((a.seq * 0.618034) % 1) - 0.5) * 1.1;   // stable fan-out per voyage
       ca = Math.cos(off); sa = Math.sin(off); dx = ox * ca + oz * sa; dz = oz * ca - ox * sa;
       fleet.exp.push({
+        seq: a.seq, ready: a.ready,
         prog: a.ready ? 1 : clamp(1 - a.remaining / Math.max(1, a.total), 0, 1),
         dx: dx, dz: dz, yawOut: Math.atan2(dx, dz), ph: a.seq * 2.4,
         sail: FLEET_SAIL[clamp((a.tier || 1) - 1, 0, 3)]
@@ -1011,10 +1135,22 @@
       e = fleet.exp[i];
       var f = e.prog < 0.5 ? e.prog * 2 : (1 - e.prog) * 2;        // out for the first half, home for the second
       var d = 28 + f * 132;                                        // ready ships wait just off the harbour
+      // Phase 14c: cast-off — a freshly-sent voyage starts AT the quay (d≈4, not offshore) and
+      // ramps out over ~0.9s, so the departure reads as a real launch rather than popping into
+      // existence mid-lane. Only affects the brief cast-off window; normal transit is untouched.
+      var co = DRAMA.castoff[e.seq];
+      if (co != null) { var cT = clock - co; if (cT < 0.9) d = 4 + (d - 4) * smooth01(clamp(cT / 0.9, 0, 1)); else delete DRAMA.castoff[e.seq]; }
       x = p.x + e.dx * d; z = p.z + e.dz * d;
       yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
       drawShipFolded(M, eCls, x, bob, z, yaw, d, EXP_HULL, e.sail, e.ph);
+      // return-ready: hold at the harbour mouth with a gentle pale-gold glint pulse until collected
+      if (e.ready) {
+        var glint = 0.5 + 0.5 * Math.sin(clock * 2.6);
+        gl.uniform3fv(M.u.uBase, [0.98, 0.90 + 0.06 * glint, 0.62 + 0.10 * glint]);
+        composeRYS(mModel, x, bob + 5.2, z, 1.6 + glint * 0.4, 1.6 + glint * 0.4, 1.6 + glint * 0.4, clock * 0.6);
+        gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+      }
     }
     for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters: brig (+ kept deck cargo) or late-era steamer
       r = fleet.routes[i];
@@ -1041,6 +1177,22 @@
       bob = Math.sin(clock * 1.3 + nv.ph) * 0.3;
       drawShip(M, nv.cls, pos.x, bob, pos.z, pos.yaw, 1.0, NAVY_HULL, NAVY_SAIL, nv.ph);
     }
+  }
+  // Phase 14c: the pirate corsair — folds IN at the world edge (reusing the existing FOLD_START/END
+  // fold-out transform in reverse) to its ~40-unit holding point offshore of the raided port, holds
+  // with a slow menace bob while the choice modal is open (or the navy fights it off), then folds
+  // back out on resolve. Pure draw: DRAMA.pirate (updateDrama above) already carries the real phase.
+  function drawPirate(M) {
+    var pr = DRAMA.pirate; if (!pr) return;
+    var d;
+    if (pr.phase === 'in') d = Math.max(0, (FOLD_END + 24) * (1 - smooth01(clamp(pr.t / 0.9, 0, 1))));
+    else if (pr.phase === 'hold' || pr.phase === 'fight') d = 0;
+    else d = (FOLD_END + 24) * smooth01(clamp(pr.t / 1.3, 0, 1));   // pay / winDepart / loseDepart
+    var bob = Math.sin(clock * 0.9) * 0.35;
+    // listing/tilted departure on a won fight — reads as a bested ship limping off
+    var listYaw = pr.phase === 'winDepart' ? 0.28 * smooth01(clamp(pr.t / 1.3, 0, 1)) : 0;
+    var yaw = Math.atan2(-pr.ox, -pr.oz) + listYaw;
+    drawShipFolded(M, 'corsair', pr.x, bob, pr.z, yaw, d, RVL_HULL, RVL_SAIL, 1.3);
   }
   // Phase 16a: test-only forced close-up ship (see __harbor.debugShip) — parked AT the camera
   // target in a 3/4 view regardless of founded/fleet state, so a screenshot can isolate one class
@@ -1309,7 +1461,7 @@
       gl.uniform3fv(M.u.uBase, parts[i].c); composeRYS(mModel, wx, wy, wz, parts[i].s[0], parts[i].s[1], parts[i].s[2], pf ? pf.yaw : 0); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
     }
     // living port: sailing boats + wheeling gulls + dock workers (flat-colour, same program state as crane parts)
-    if (scene.port) { drawAmbient(M); drawFleet(M); drawWorkers(M); }
+    if (scene.port) { drawAmbient(M); drawFleet(M); drawPirate(M); drawWorkers(M); }
     if (DEBUG_SHIP) drawDebugShip(M);   // Phase 16a test-only: forced close-up ship (works founded or wild)
 
     // curated harbour beacons (highlight each candidate; the selected one taller, brighter, pulsing)
@@ -1335,7 +1487,12 @@
     drawNightPools(en);
 
     // water
+    // Phase 14c: storm — F_WATER's uStorm uniform (0..1, eased from the real hazard-warn state in
+    // updateDrama) whips the paper sea's band-slide up (spd*(1+2*uStorm)) and darkens it toward
+    // slate; env() already cools uDeep/uShallow above. uTime stays the plain clock — the shader owns
+    // the storm speed-up, so __harbor.water()'s waterBandPhase(k, clock) still mirrors the calm sea.
     var W = E.P_water; gl.useProgram(W.p); gl.uniformMatrix4fv(W.u.uVP, false, mVP); gl.uniform1f(W.u.uTime, clock);
+    gl.uniform1f(W.u.uStorm, clamp(DRAMA.stormT, 0, 1));
     gl.uniform3fv(W.u.uCam, ev); gl.uniform3fv(W.u.uSunDir, sd); gl.uniform3fv(W.u.uSunCol, en.sun);
     gl.uniform3fv(W.u.uDeep, m3(biome.deep, en.water)); gl.uniform3fv(W.u.uShallow, m3(biome.shallow, en.water));   // ToD-lit water body
     gl.uniform3fv(W.u.uSky, lerp3(en.bot, en.horizon, 0.4)); gl.uniform3fv(W.u.uSkyTop, en.top);   // water mirrors the sky gradient incl. the horizon glow
@@ -1824,6 +1981,24 @@
     }
   }
 
+  // Phase 14c: storm rain — thin paper-strip streamers falling at a slight angle over the affected
+  // port while DRAMA.stormT is up (quality-gated + capped: skipped on the lightweight quality path,
+  // like emitSmoke/emitFunnelSmoke above, and throttled to a modest per-second rate so it never
+  // threatens the particle/geom budget even during a multi-hazard ToD sweep).
+  var rainT = 0;
+  function emitStormRain(dt) {
+    if (!FX || cine || DRAMA.stormT < 0.15 || !postEnabled()) return;
+    var s = SIM.state ? (simReady() ? SIM.state() : null) : null;
+    if (!s || !s.hazard || s.hazard.port !== biomeId) return;         // rain only draws over the storm's own port
+    rainT += dt; var every = 0.045;
+    while (rainT >= every && FX.p.list.length < 220) {
+      rainT -= every;
+      var x = Math.random() * CW, y = -10 - Math.random() * 40;
+      FX.p.list.push({ x: x, y: y, vx: 60 + Math.random() * 30, vy: 260 + Math.random() * 90, life: 0.9, max: 0.9,
+        size: 3 + Math.random() * 1.6, color: 'rgba(210,228,240,' + (0.35 + DRAMA.stormT * 0.3) + ')', gravity: 30, shape: 'streak', streakLen: 3.2 });
+    }
+  }
+
   // ---- Era Ascension cinematic ----
   // Phase 12b: the one natural pause where a portal SDK gets to show a commercial break. It fires
   // BEFORE the cinematic itself starts (era/economy state was already advanced by the caller) so a
@@ -1918,12 +2093,44 @@
     render();
     emitSmoke(dt);                                               // industry breathes: chimney smoke once you manufacture
     emitFunnelSmoke(dt);                                         // Phase 16a: steamers puff too
+    updateDrama(dt); emitStormRain(dt);                          // Phase 14c: storm/pirate/theatre state + paper-streamer rain
     if (FX && fxCtx) {                                            // draw the 2D juice overlay (with screenshake)
       FX.p.update(dt); FX.pop.update(dt); var sh = FX.shake.update(dt);
       fxCtx.setTransform(1, 0, 0, 1, 0, 0); fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
       fxCtx.setTransform(DPR, 0, 0, DPR, sh.x * DPR, sh.y * DPR);
       drawCine(fxCtx);
       if (flashT > 0) { flashT -= dt; fxCtx.fillStyle = 'rgba(255,70,45,' + (0.32 * Math.max(0, flashT)) + ')'; fxCtx.fillRect(0, 0, fxCanvas.width, fxCanvas.height); }
+      // Phase 14c: jagged paper-bolt flash on a storm strike (adds to, never replaces, flashT above)
+      if (DRAMA.boltT > 0) {
+        var bt = DRAMA.boltT; DRAMA.boltT = Math.max(0, DRAMA.boltT - dt * 2.4);
+        fxCtx.save(); fxCtx.globalAlpha = Math.min(1, bt * 2.4); fxCtx.strokeStyle = '#ffffff'; fxCtx.lineWidth = 4; fxCtx.lineCap = 'round';
+        var bx = CW * 0.5 + (CW * 0.18);
+        fxCtx.beginPath(); fxCtx.moveTo(bx, 0);
+        fxCtx.lineTo(bx - 26, CH * 0.28); fxCtx.lineTo(bx + 14, CH * 0.30); fxCtx.lineTo(bx - 32, CH * 0.62); fxCtx.lineTo(bx + 6, CH * 0.64); fxCtx.lineTo(bx - 20, CH);
+        fxCtx.stroke(); fxCtx.restore();
+      }
+      // Phase 14c: construction theatre — a thin paper scaffold lattice pops around the plot for
+      // the 1.2s prelude (new builds) or a brief 0.4s flash (upgrades), drawn screen-space over the
+      // port so it needs no new GL geometry/shader (keeps geomStats untouched).
+      var thd = theatreState();
+      if ((thd.active && DRAMA.theatreNew) || DRAMA.flashScaffold > 0) {
+        var tpw = portWorld(), tsc = tpw && worldToScreen(tpw.x, tpw.y, tpw.z);
+        if (tsc) {
+          var ta = DRAMA.flashScaffold > 0 ? DRAMA.flashScaffold / 0.4 : (1 - Math.abs(thd.t - 0.5) * 0.6);
+          fxCtx.save(); fxCtx.globalAlpha = Math.min(1, ta); fxCtx.strokeStyle = 'rgba(255,255,255,0.85)'; fxCtx.lineWidth = 2;
+          var sw2 = 46, sh2 = 60, sx = tsc.x - sw2 / 2, sy = tsc.y - sh2;
+          fxCtx.strokeRect(sx, sy, sw2, sh2);
+          fxCtx.beginPath(); fxCtx.moveTo(sx, sy); fxCtx.lineTo(sx + sw2, sy + sh2); fxCtx.moveTo(sx + sw2, sy); fxCtx.lineTo(sx, sy + sh2); fxCtx.stroke();
+          fxCtx.restore();
+        }
+      }
+      // crash vignette: brief red-crayon pulse around the frame edges
+      if (DRAMA.crashPulse > 0) {
+        DRAMA.crashPulse = Math.max(0, DRAMA.crashPulse - dt * 1.1);
+        var vg = fxCtx.createRadialGradient(CW / 2, CH / 2, Math.min(CW, CH) * 0.35, CW / 2, CH / 2, Math.max(CW, CH) * 0.72);
+        vg.addColorStop(0, 'rgba(229,73,58,0)'); vg.addColorStop(1, 'rgba(229,73,58,' + (0.38 * DRAMA.crashPulse) + ')');
+        fxCtx.fillStyle = vg; fxCtx.fillRect(0, 0, CW, CH);
+      }
       FX.p.draw(fxCtx); FX.pop.draw(fxCtx);
       canvas.style.transform = (sh.x || sh.y) ? ('translate(' + sh.x.toFixed(1) + 'px,' + sh.y.toFixed(1) + 'px)') : '';
     }
@@ -2595,10 +2802,14 @@
       stormRumble();
       shakeFX(11, 0.7); flashT = 0.85; sfx('lose'); haptic([10, 50, 20]); bumpDaily('storm');
       if (Math.random() < 0.35) { grantCrate(1); showHint('Salvage washed ashore — a crate! 🎁'); }   // storms occasionally drop salvage
-      if (last && last.crash) { showHint('Market crash — ' + last.res + ' prices slump'); }
+      if (last && last.crash) {
+        showHint('Market crash — ' + last.res + ' prices slump');
+        DRAMA.crashPulse = 1.0;                                     // Phase 14c: red-crayon vignette pulse + a falling price-tag glyph
+        var cpw = portWorld(); if (cpw) popWorld(cpw.x, cpw.y + 10, cpw.z, '🏷️ ' + last.res, { color: '#e5493a', size: 20, life: 1.3, vy: 34 });
+      }
       else if (last) {
         showHint((last.kind || 'Storm') + ' hit ' + wname(last.port) + '! ' + last.damaged + ' building' + (last.damaged === 1 ? '' : 's') + ' damaged');
-        if (last.port === biomeId) { var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 32, colors: ['#9aa6ad', '#cdd6da', '#ffd24a', '#88b0c0'], speed: 230, life: 1.1, size: 5, gravity: 240 }); }
+        if (last.port === biomeId) { var pw = portWorld(); burstWorld(pw.x, pw.y, pw.z, { count: 32, colors: ['#9aa6ad', '#cdd6da', '#ffd24a', '#88b0c0'], speed: 230, life: 1.1, size: 5, gravity: 240 }); DRAMA.boltT = 0.35; }
       }
     }
   }
@@ -2644,9 +2855,16 @@
     eventModal.classList.add('show'); sfx('score'); haptic(12);
   }
   function onEventChoice(i) {
+    var wasRaid = eventModal && SIM.event() && SIM.event().id === 'raid';
     var out = SIM.resolveEvent(i); if (eventModal) eventModal.classList.remove('show');
     if (!out) return;
     if (!out.ok) { showHint(out.text || 'Cannot do that yet.'); sfx('lose'); return; }
+    // Phase 14c: resolve the visible corsair to match the real outcome — pay sails it off quietly,
+    // fight opens a confetti cannon exchange (see updateDrama's 'fight' phase) that lands on win/lose.
+    if (out.id === 'raid' && DRAMA.pirate) {
+      if (i === 0) pirateResolve('pay');
+      else { DRAMA.pirate.phase = 'fight'; DRAMA.pirate.t = 0; DRAMA.volleyN = 0; DRAMA.volleyT = 0.4; DRAMA._fightOut = out.win ? 'winDepart' : 'loseDepart'; }
+    }
     if (out.crate) grantCrate(out.crate);
     // Phase 17c: 15d tips rule "navyReminder" — a raid that wasn't WON (tribute paid, or a fight
     // lost) with the navy affordable is the moment to point at the Registry. Manual raids only —
@@ -2672,7 +2890,10 @@
       var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 24, colors: ['#ffe08a', '#fff3c4', '#ffd24a'], speed: 200, life: 1.1, size: 5 });
       sfx('win'); haptic(18);
       if (ev.id === 'festival') startFever();                          // Festival kicks off the active tap-frenzy
-    } else showEventModal(ev);                                         // choice / collect — a decision modal
+    } else {
+      if (ev.id === 'raid') startPirate();                             // Phase 14c: the corsair folds in and holds while the modal is open
+      showEventModal(ev);                                              // choice / collect — a decision modal
+    }
   }
   // ---- Phase 17c: navy auto-defense — a raid that never even opened a modal (sim.js's fireEvent
   // resolved it instantly once navyPower() caught up to raidStrength()). Watched by seq (like
@@ -2703,6 +2924,9 @@
     popWorld(wx, wy + 5, wz, '+£' + fmt(nr.loot), { color: '#ffe08a', size: 18, life: 1.2, vy: -46 });
     showNavyBanner('⚓ The Navy repelled the raiders! +£' + fmt(nr.loot) + ' loot');
     sfx('win'); haptic(20);
+    // Phase 14c: the corsair still shows up for an auto-repel — folds in, one confetti exchange
+    // with the patrol ship, then retreats — same visible beat as a manually-fought raid, just fast.
+    startPirate(); DRAMA.pirate.phase = 'fight'; DRAMA.pirate.t = 0.9; DRAMA.volleyN = 2; DRAMA.volleyT = 0.4; DRAMA._fightOut = 'loseDepart';
   }
 
   // ---- expeditions (Phase 7b): send ships on timed voyages (resolve offline), collect rewards ----
@@ -2749,7 +2973,20 @@
     if (v.used >= v.slots) h += '<div class="ex-note">All ships are at sea — collect a voyage, or grow your empire for more berths.</div>';
     expPanel.innerHTML = h;
     expPanel.querySelector('#ex-close').addEventListener('click', toggleExp);
-    expPanel.querySelectorAll('[data-send]').forEach(function (el) { el.addEventListener('click', function () { if (SIM.startVoyage(el.getAttribute('data-send'))) { sfx('move'); haptic(14); var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 14, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 150, life: 0.8, size: 4 }); renderExp(); updateHUD(); } else sfx('lose'); }); });
+    expPanel.querySelectorAll('[data-send]').forEach(function (el) { el.addEventListener('click', function () {
+      var destId = el.getAttribute('data-send'), destName = null;
+      var vBefore = SIM.voyages(); vBefore.dests.forEach(function (d) { if (d.id === destId) destName = d.name; });
+      if (SIM.startVoyage(destId)) {
+        sfx('move'); haptic(14);
+        // Phase 14c: send-off salience — horn + toast, and mark this voyage's cast-off so drawFleet
+        // starts its ship at the quay (not offshore) with a visible wake for the first beat.
+        var vAfter = SIM.voyages(), maxSeq = 0; vAfter.active.forEach(function (a) { if (a.seq > maxSeq) maxSeq = a.seq; });
+        if (maxSeq) DRAMA.castoff[maxSeq] = clock;
+        sfx('score'); showHint('⛵ ' + (destName || 'Expedition') + ' expedition sets sail');
+        var pw = portWorld(); if (pw) burstWorld(pw.x, pw.y, pw.z, { count: 14, colors: ['#cfe8ff', '#ffffff', '#7fe0d6'], speed: 150, life: 0.8, size: 4 });
+        renderExp(); updateHUD();
+      } else sfx('lose');
+    }); });
     expPanel.querySelectorAll('[data-uncharted]').forEach(function (el) { el.addEventListener('click', function () {
       var id = unchartedTarget(); if (!id) { sfx('lose'); return; }
       var b = HARBOR_BIOMES[id];
@@ -3596,7 +3833,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v76';
+  var BUILD_TAG = 'v77';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4146,8 +4383,8 @@
     }
     managePanel.innerHTML = html;
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
-    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); triggerPop(); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
-    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); triggerPop(); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); triggerTheatre(true); triggerPop(); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
+    managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); triggerTheatre(false); triggerPop(); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-mgr]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-mgr'); if (SIM.buyManager(k)) { plopFeedback(2, 'Hired!'); sfx('merge'); haptic(20); bumpDaily('manager'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-repair]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-repair'); if (SIM.repair(i)) { plopFeedback(2, 'Repaired'); sfx('merge'); haptic(16); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-auto]').forEach(function (el) { el.addEventListener('click', function () { var k = el.getAttribute('data-auto'); setAuto(k, !autoOn(k)); sfx('tap'); haptic(10); renderManage(); }); });
@@ -4320,6 +4557,16 @@
     state: function () { return { biome: biomeId, era: era, founded: !!founded[biomeId], port: founded[biomeId] || null, sites: sites.length, sel: selSite, worlds: HARBOR_BIOME_ORDER.slice(), unlocked: unlocked.slice(), city: scene.city.length, crane: scene.crane, assets: !!(cityModels && atlasTex), tod: Math.round(tod * 1000) / 1000, cam: { az: +C.az.toFixed(2), el: +C.el.toFixed(2), dist: Math.round(C.dist), tx: Math.round(C.tx), tz: Math.round(C.tz) }, webgl: !!gl, phase: 'world-4.3' }; },
     setBiome: function (id) { if (E) buildBiome(id); }, setTod: function (t) { tod = t % 1; }, pause: function (p) { paused = !!p; },
     stepClock: function (dt) { clock += (dt == null ? 0.5 : +dt); return clock; },   // 19b: deterministic time-step (no wall-clock sleeps) for water-band-slide/flutter tests
+    // Phase 14c: deterministic drama time-step. The storm/crash ease + pirate phase timers + volley
+    // cadence all advance inside updateDrama on the clamped per-frame dt (max 0.05s, see frame()) —
+    // under swiftshader's slow software RAF a wall-clock sleep() advances that far LESS than its
+    // duration, so drama-timing tests drive the state here in fixed sub-steps instead. Same discipline
+    // as stepClock/setPopProgress/setBuildTheatreProgress (no sleep()-based timing anywhere in the suite).
+    stepDrama: function (secs, step) {
+      var total = secs == null ? 1 : Math.max(0, +secs), h = step == null ? 0.1 : Math.max(0.001, +step), acc = 0;
+      while (acc < total - 1e-9) { var d = Math.min(h, total - acc); updateDrama(d); acc += d; }
+      return { storm: window.__harbor.storm(), pirate: window.__harbor.pirate(), volleys: DRAMA.volleyN };
+    },
 
     env: function () { return biome ? env() : null; },   // debug: current ToD colour script values
     post: function () { return { on: postEnabled(), probed: postProbe.done, avgMs: Math.round(postProbe.avgMs * 100) / 100, armed: postProbe.armed, auto: postAutoOff, fail: postFail, outlines: postEnabled(), shadow: postEnabled() }; },   // Phase 14a: outlines + soft shadows ride the same quality gate — see render()
@@ -4331,6 +4578,28 @@
     // waterBandPhase() above), sampled live off `clock` so a test can call stepClock() between two
     // reads and assert the phases actually advance (deterministic, no wall-clock sleep needed).
     water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandFarFade: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }), bounded: WATER_STATS ? WATER_STATS.bounded : false, waterfallSegs: WATER_STATS ? WATER_STATS.waterfallSegs : 0, rimLip: WATER_STATS ? WATER_STATS.rimLip : false, poolVerts: WATER_STATS ? WATER_STATS.poolVerts : 0, waterfallScroll: fallScrollPhase(clock) }; },
+    // Phase 14c: WORLD DRAMA test/debug hooks — every field is a pure read of DRAMA (itself a pure
+    // function of real SIM.state()/event() plus a locally-smoothed draw timer; see updateDrama).
+    storm: function () {
+      return {
+        rainOn: DRAMA.stormT >= 0.15 && postEnabled(), cloudStorm: DRAMA.stormT > 0.001, waterStorm: waterStormMul(),
+        stormT: +DRAMA.stormT.toFixed(3), crashVignette: DRAMA.crashPulse > 0, crashT: +DRAMA.crashT.toFixed(3), boltOn: DRAMA.boltT > 0
+      };
+    },
+    pirate: function () {
+      var pr = DRAMA.pirate;
+      return pr ? { present: true, phase: pr.phase, confetti: pr.phase === 'fight', x: Math.round(pr.x), z: Math.round(pr.z), holdDist: Math.round(Math.hypot(pr.x - (scene.port ? scene.port.x : 0), pr.z - (scene.port ? scene.port.z : 0))) } : { present: false };
+    },
+    forcePirate: function (phase) { startPirate(); if (phase) { DRAMA.pirate.phase = phase; DRAMA.pirate.t = phase === 'hold' ? 1 : 0; if (phase === 'fight') { DRAMA.volleyN = 0; DRAMA.volleyT = 0.4; DRAMA._fightOut = 'winDepart'; } } return window.__harbor.pirate(); },   // test-only: skip the modal, park the corsair directly (fight primes the volley cadence like the real raid path)
+    resolvePirate: function (kind) { pirateResolve(kind || 'pay'); return window.__harbor.pirate(); },
+    volleyCount: function () { return DRAMA.volleyN; },
+    theatre: function () { return theatreState(); },
+    forceTheatre: function (isNew) { triggerTheatre(isNew !== false); return window.__harbor.theatre(); },
+    setBuildTheatreProgress: function (p) { DRAMA.theatreTestP = p == null ? null : Math.max(0, Math.min(1, +p)); return window.__harbor.theatre(); },
+    voyageDrama: function () {
+      var seqs = Object.keys(DRAMA.castoff);
+      return { castoffSeqs: seqs.map(Number), castoffOn: seqs.length > 0 };
+    },
     // Phase 20a: camera-bounds + world-slab telemetry (test/debug hooks)
     camBounds: function () { return { distMin: CAM_DIST_MIN, distMax: CAM_DIST_MAX, elMin: CAM_EL_MIN, panX: PANX, panZ0: PANZ0, panZ1: PANZ1 }; },
     slab: function () { return HARBOR_MODELS ? HARBOR_MODELS.SLAB : null; },

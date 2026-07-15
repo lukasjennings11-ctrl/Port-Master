@@ -1791,6 +1791,90 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('20b: geomStats unaffected by the presentation polish (flecks/gulls/bob are dynamic, not static geometry) — still within budget',
     gs20b && gs20b.verts > 10000 && gs20b.verts < 300000);
 
+  // ---- Phase 14c: WORLD DRAMA — storms/pirates/construction theatre/expedition send-offs are all
+  // pure reads of real sim state (SIM.state()/event()) plus a locally-smoothed draw timer; every
+  // assertion below drives that real state (forceWarn/fireEvent/the actual send-voyage click) and
+  // checks the exposed __harbor hooks, never a hardcoded/fake flag.
+  // NB: storm/crash ease + pirate phase timers + volley cadence all advance inside updateDrama on
+  // the clamped per-frame dt (≤0.05s), which swiftshader's slow software RAF under-advances vs a
+  // wall-clock sleep() — so this whole block drives the drama through the deterministic stepDrama()
+  // hook (fixed sub-steps), the same no-sleep discipline as stepClock/setPopProgress elsewhere.
+  const errsBefore14c = errs.length;
+  await page.evaluate(() => window.__harbor.pause(true));
+  await page.evaluate(() => { window.HARBOR_SIM.forceWarn('green', false); window.__harbor.forceHUD(); window.__harbor.stepDrama(2.4); });
+  const storm1 = await page.evaluate(() => window.__harbor.storm());
+  ok('14c storm: forceWarn ramps rainOn + cloudStorm up (real hazard.phase===warn, no crash)', storm1.cloudStorm === true && storm1.rainOn === true && storm1.stormT > 0.2);
+  ok('14c storm: water bands slide faster while a storm is up', storm1.waterStorm > 1.05);
+  await page.evaluate(() => { window.HARBOR_SIM.avertHazard(); window.__harbor.stepDrama(4); });
+  const storm2 = await page.evaluate(() => window.__harbor.storm());
+  ok('14c storm: avert clears the storm visuals back down (rainOn/cloudStorm off)', storm2.cloudStorm === false && storm2.rainOn === false && storm2.stormT < 0.05);
+
+  await page.evaluate(() => { window.HARBOR_SIM.forceWarn('green', true); window.__harbor.forceHUD(); window.__harbor.stepDrama(1.6); });
+  const crash1 = await page.evaluate(() => window.__harbor.storm());
+  ok('14c crash: forceWarn(crash) ramps the crash flag up (light treatment, distinct from storm)', crash1.crashT > 0.5 && crash1.cloudStorm === false);
+  await page.evaluate(() => { window.HARBOR_SIM.avertCrash(); window.__harbor.stepDrama(4); });
+  const crash2 = await page.evaluate(() => window.__harbor.storm());
+  ok('14c crash: avert clears the crash flag back down', crash2.crashT < 0.05);
+
+  // legacy quality path: rain is quality-gated (postEnabled()), cloud darkening/water-speed are not
+  await page.evaluate(() => { window.__harbor.setPost(false); window.HARBOR_SIM.forceWarn('green', false); window.__harbor.forceHUD(); window.__harbor.stepDrama(2.4); });
+  const stormLegacy = await page.evaluate(() => window.__harbor.storm());
+  ok('14c storm: legacy quality path (post off) turns rain off cleanly while the storm palette/water-speed beats stay live', stormLegacy.rainOn === false && stormLegacy.cloudStorm === true);
+  await page.evaluate(() => { window.HARBOR_SIM.avertHazard(); window.__harbor.stepDrama(4); window.__harbor.setPost(true); });
+
+  // pirate raid ship: fold-in to the hold point, pay-resolve departs, fight-resolve runs a confetti
+  // cannon exchange before departing
+  await page.evaluate(() => window.__harbor.forcePirate());
+  const pirIn = await page.evaluate(() => window.__harbor.pirate());
+  ok('14c pirate: forcePirate folds the corsair in', pirIn.present === true && pirIn.phase === 'in');
+  await page.evaluate(() => window.__harbor.stepDrama(1.2));
+  const pirHold = await page.evaluate(() => window.__harbor.pirate());
+  ok('14c pirate: corsair settles to its ~40-unit holding point offshore of the port', pirHold.phase === 'hold' && pirHold.holdDist > 25 && pirHold.holdDist < 55);
+  await page.evaluate(() => { window.__harbor.resolvePirate('pay'); window.__harbor.stepDrama(1.7); });
+  const pirPaid = await page.evaluate(() => window.__harbor.pirate());
+  ok('14c pirate: paying tribute sails the corsair off (folds out + clears)', pirPaid.present === false);
+
+  await page.evaluate(() => window.__harbor.forcePirate('fight'));
+  const pirFight = await page.evaluate(() => window.__harbor.pirate());
+  ok('14c pirate: fight resolution carries a confetti-style cannon exchange flag', pirFight.present === true && pirFight.confetti === true);
+  await page.evaluate(() => window.__harbor.stepDrama(4));   // fire the 2-3 volleys, then let the corsair depart
+  const volleys = await page.evaluate(() => window.__harbor.volleyCount());
+  const pirDone = await page.evaluate(() => window.__harbor.pirate());
+  ok('14c pirate: the fight runs a multi-volley confetti exchange (2-3 volleys) then the corsair departs', volleys >= 2 && volleys <= 3 && pirDone.present === false);
+
+  // construction theatre: deterministic scaffold pop via the pinned-progress hook (same contract
+  // as 19c's setPopProgress) — present mid-prelude, gone once the window has fully elapsed
+  const theatreMid = await page.evaluate(() => window.__harbor.setBuildTheatreProgress(0.3));
+  ok('14c theatre: scaffold prelude is present at p=0.3', theatreMid.active === true);
+  const theatreDone = await page.evaluate(() => window.__harbor.setBuildTheatreProgress(1));
+  ok('14c theatre: scaffold prelude is gone once p reaches 1', theatreDone.active === false);
+  await page.evaluate(() => window.__harbor.setBuildTheatreProgress(null));   // un-pin — restore live sampling
+
+  // expedition send-off: horn sfx commanded (11c target pattern: assert the call was made, not a
+  // continuous AudioParam) + toast text + a real cast-off (ship starts at the quay, not offshore)
+  await page.evaluate(() => { var S = window.HARBOR_SIM.raw(); S.money = 200000; window.HARBOR_SIM.setEra(1); window.HARBOR_SIM.save(); window.__sfxLog = []; window.Juice.Audio.play = (function (orig) { return function (name) { window.__sfxLog.push(name); return orig.apply(this, arguments); }; })(window.Juice.Audio.play); });
+  await page.evaluate(() => { document.getElementById('expbtn').click(); });
+  await sleep(150);
+  await page.evaluate(() => { var b = document.querySelector('[data-send]'); if (b) b.click(); });
+  await sleep(100);
+  const voyDrama = await page.evaluate(() => window.__harbor.voyageDrama());
+  const sfxLog = await page.evaluate(() => window.__sfxLog.slice());
+  ok('14c expedition: send-off commands a horn/sting sfx (11c target pattern — the call was made)', sfxLog.indexOf('score') >= 0);
+  ok('14c expedition: cast-off marks the freshly-sent voyage (ship starts at the quay, not offshore)', voyDrama.castoffOn === true);
+
+  // zero GL/console warnings + geomStats/vertex budget with storm + pirate + theatre all forced
+  // together across one ToD sweep (the "everything happening at once" stress case from the spec)
+  const errsBeforeSweep14c = errs.length;
+  await page.evaluate(() => { window.HARBOR_SIM.forceWarn('green', false); window.__harbor.forceHUD(); window.__harbor.forcePirate(); window.__harbor.setBuildTheatreProgress(0.4); });
+  for (const t of [0.1, 0.3, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(160); }
+  await page.evaluate(() => { window.HARBOR_SIM.avertHazard(); window.__harbor.setBuildTheatreProgress(null); window.__harbor.resolvePirate('pay'); window.__harbor.setTod(0.5); });
+  await sleep(300);
+  ok('14c: storm + pirate + theatre forced together across a ToD sweep → zero new GL/console warnings', errs.length === errsBeforeSweep14c);
+  const gs14c = await page.evaluate(() => window.__harbor.geomStats());
+  ok('14c: geomStats stays within the existing vertex budget (drama is all dynamic/2D-overlay, no new static geometry)', gs14c && gs14c.verts > 10000 && gs14c.verts < 300000);
+  await page.evaluate(() => window.__harbor.pause(false));
+  ok('14c: the whole drama pass ran with zero new console/page errors', errs.length === errsBefore14c);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

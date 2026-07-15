@@ -112,6 +112,16 @@
       ctx.globalAlpha = a; ctx.fillStyle = p.color;
       var s = p.size * (0.4 + a * 0.6);
       if (p.shape === 'rect') { ctx.fillRect(p.x - s/2, p.y - s/2, s, s); }
+      else if (p.shape === 'streak') {
+        // thin elongated paper strip falling at an angle — used for storm rain: a stroked line
+        // along the particle's velocity vector rather than a filled shape, so it reads as a
+        // ribbon of card, not a raindrop.
+        var ang = Math.atan2(p.vy, p.vx), len = s * (p.streakLen || 2.2);
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(ang);
+        ctx.strokeStyle = p.color; ctx.lineWidth = Math.max(1, s * 0.22); ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(-len / 2, 0); ctx.lineTo(len / 2, 0); ctx.stroke();
+        ctx.restore();
+      }
       else if (p.shape === 'curl') {
         // flat paper comma/spiral curl (harbor's papercraft smoke, but usable by any game) — a
         // thick stroked arc, not a filled disc, so it reads as a curled ribbon of card rather than
