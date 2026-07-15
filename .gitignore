@@ -13,6 +13,8 @@ Thumbs.db
 # build / deploy artifacts
 dist/
 *.zip
+# exception: the ready-to-upload portal bundles are committed so they're easy to download
+!submit/*.zip
 node_modules/
 
 # third-party SDK clone (has its own git repo) — used when we wire multi-portal publishing
