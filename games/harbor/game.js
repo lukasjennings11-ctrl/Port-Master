@@ -33,6 +33,7 @@
   // cliff-skirt included, instead of cropping it. Pan is clamped to the slab footprint below.
   var CAM_EL_MIN = 0.07, CAM_DIST_MIN = 45, CAM_DIST_MAX = 1300;
   var biomeId = 'green', biome = null, unlocked = ['green'];
+  var welcomeFraming = false;   // Phase 20b: true while the fresh-boot "model in hand" welcome framing is active (see boot() and showWelcome())
 
   // ---- Phase 10c/14a: quality-gated post pass (tilt-shift miniature DoF + bloom-lite +,
   // as of 14a, ink outlines) — and the same postEnabled() gate now also arms the revived PCF
@@ -62,6 +63,17 @@
     var d = C.dist, t = clamp((d - DOF_FADE_START) / (DOF_FADE_END - DOF_FADE_START), 0, 1);
     return 1 - t * t * (3 - 2 * t);   // smoothstep ease-out, 1 at/under DOF_FADE_START, 0 at DOF_FADE_END
   }
+  // Phase 20b: slab bob — the ENTIRE floating diorama (slab, port, water, waterfalls, void) drifts
+  // vertically on a very slow sine, with a barely-perceptible roll, so the world reads as a
+  // physical model resting in space rather than a locked-off diorama. Applied at the render ROOT
+  // (camera eye+target shift the opposite way, which is optically identical to moving the whole
+  // scene — see render()) so no per-mesh code changes anywhere; screen-space picking
+  // (screenToGround/eye()) deliberately stays UN-bobbed (compensated out) so founding/trade taps
+  // are unaffected — the ~0.4-unit drift would be sub-pixel noise there anyway. Pure functions of
+  // `clock`, so stepClock() makes them deterministic/testable with zero wall-clock sleeps.
+  var BOB_PERIOD = 13, BOB_AMP = 0.4, BOB_ROLL_AMP = 0.15 * Math.PI / 180;
+  function bobY() { return Math.sin(clock * (2 * Math.PI / BOB_PERIOD)) * BOB_AMP; }
+  function bobRoll() { return Math.sin(clock * (2 * Math.PI / BOB_PERIOD) + 1.1) * BOB_ROLL_AMP; }
   // edge-line tuning (Phase 14a detector) — see F_POST in gl.js for how these are used. NOTE: the
   // "distant" massif skyline sits at only ~60–100 VIEW units in the default framing (camera
   // orbits at ~110), inside the playable port's own depth range — so terrain cleanliness comes
@@ -605,6 +617,41 @@
     }
   }
 
+  // Phase 20b: void paper flecks — a sparse scatter of tiny billboard "confetti" quads drifting in
+  // the void around/below the floating slab, giving the empty space a sense of depth/scale (dust
+  // motes around a handcrafted model, not a hard black backdrop). Reuses the shared unit boxMesh
+  // (scaled paper-thin) rather than a new mesh, same trick as the crane/dock-worker props. Static
+  // twinkle-free: no per-frame opacity flicker, just a slow deterministic positional drift so
+  // stepClock() gives a testable, reversible "did it move" signal with zero wall-clock sleeps.
+  var FLECKS = null, FLECK_COUNT = 26;
+  function buildFlecks() {
+    var rng = mulberry(hash('void-flecks-v76'));                  // deterministic — same scatter every boot
+    FLECKS = [];
+    for (var i = 0; i < FLECK_COUNT; i++) {
+      var ang = rng() * Math.PI * 2, r = SLAB0.rx * (0.55 + rng() * 0.85);
+      FLECKS.push({
+        a0: ang, r: r, y: -20 - rng() * 220,                      // scattered below/around the slab rim
+        spd: (0.003 + rng() * 0.006) * (rng() < 0.5 ? -1 : 1), ph: rng() * 6.283,
+        scale: 2.2 + rng() * 3.2, ry: rng() * 6.283
+      });
+    }
+  }
+  function fleckWorldPos(f) {
+    var ang = f.a0 + clock * f.spd, r = f.r + Math.sin(clock * 0.02 + f.ph) * 18;
+    return [CLOUD_RING_CX + Math.cos(ang) * r, f.y + Math.sin(clock * 0.05 + f.ph) * 6, CLOUD_RING_CZ + Math.sin(ang) * r];
+  }
+  function fleckTint(en) { return lerp3([0.92, 0.90, 0.86], [0.30, 0.32, 0.42], en.night); }   // faint ToD tint, never bright
+  function drawFlecks(M, en, ev) {
+    if (!FLECKS || !boxMesh) return;
+    gl.uniform3fv(M.u.uBase, fleckTint(en));
+    for (var i = 0; i < FLECKS.length; i++) {
+      var f = FLECKS[i], p = fleckWorldPos(f);
+      var byaw = ev ? Math.atan2(ev[0] - p[0], ev[2] - p[2]) : f.ry;
+      composeRYS(mModel, p[0], p[1], p[2], f.scale, f.scale, 0.06, byaw);
+      gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);
+    }
+  }
+
   // ---- matrices ----
   var mView = mat4 && mat4.create(), mProj = mat4 && mat4.create(), mVP = mat4 && mat4.create(),
     mLV = mat4 && mat4.create(), mLP = mat4 && mat4.create(), mLVP = mat4 && mat4.create(), mModel = mat4 && mat4.create(), mI = mat4 && mat4.create();
@@ -730,8 +777,18 @@
       boats.push({ a0: rng() * 6.283, sp: (0.05 + rng() * 0.07) * (rng() < 0.5 ? 1 : -1), rx: 30 + rng() * 26, rz: 22 + rng() * 20,
         hull: rng() < 0.5 ? [0.45, 0.22, 0.14] : [0.5, 0.4, 0.28], big: big, sc: 0.92 + rng() * 0.22 });
     }
+    // Phase 20b: a few gulls arc WAY out beyond the harbour and beyond the slab's own edge before
+    // sweeping back — the far-out silhouette against the void sells the floating scale far better
+    // than birds confined to a tight ring around the quay. `far` gulls breathe their radius between
+    // the normal harbour ring and a distance past SLAB0.rx/rz (see drawAmbient) instead of holding
+    // a fixed r; everyone else is untouched (same tight harbour-life wheeling as before).
+    var nFar = Math.min(3, nGulls);
     for (i = 0; i < nGulls; i++) {
-      gulls.push({ a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283 });
+      var far = i < nFar;
+      gulls.push({
+        a0: rng() * 6.283, sp: 0.5 + rng() * 0.4, r: 12 + rng() * 24, h: 22 + rng() * 22, bob: rng() * 6.283,
+        far: far, rFar: far ? Math.max(SLAB0.rx, SLAB0.rz) * (1.05 + rng() * 0.35) : 0
+      });
     }
     // Phase 14b: quay life — 2..6 tiny dock workers (scaling with era, capped at 6), walking a
     // short back-and-forth lane along the harbour apron (jetty/beach at era0, quay apron once a
@@ -812,8 +869,11 @@
     gl.uniform3fv(M.u.uBase, [0.98, 0.98, 0.96]);
     for (i = 0; i < ambient.gulls.length; i++) {
       var g = ambient.gulls[i], ga = g.a0 + clock * g.sp;
-      x = (p ? p.x : ambient.cx) + Math.cos(ga) * g.r; z = (p ? p.z : ambient.cz) + Math.sin(ga) * g.r;
-      var gy = by + g.h + Math.sin(clock * 2 + g.bob) * 3;
+      // far gulls breathe out from the tight harbour ring to well past the slab edge and back —
+      // a slow independent sine so the out-and-back sweep never syncs with the wing-flap/wheel rate
+      var farK = (Math.sin(clock * 0.07 + g.bob) + 1) * 0.5, gr = g.far ? (g.r + (g.rFar - g.r) * farK) : g.r;
+      x = (p ? p.x : ambient.cx) + Math.cos(ga) * gr; z = (p ? p.z : ambient.cz) + Math.sin(ga) * gr;
+      var gy = by + g.h + (g.far ? 30 : 0) + Math.sin(clock * 2 + g.bob) * 3;
       var flap = 0.7 + Math.sin(clock * 9 + g.bob) * 0.4;                  // wing-flap: stretch the little V
       composeRYS(mModel, x, gy, z, 1.9 * flap, 0.5, 0.7, ga + clock * 0.6); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, gullMesh);
     }
@@ -1160,18 +1220,24 @@
     if (!gl) return;
     if (scene.port && !ambient) buildAmbient();
     var en = env(), sd = sunDir(), ev = eye(), target = [C.tx, C.ty, C.tz];
+    // Phase 20b: slab bob — shift eye+target by -bobY (camera moving down == whole world moving up
+    // by the same amount, see bobY() note above) and roll the up vector a hair; this is the ONLY
+    // place bob is applied, so picking (screenToGround, uses its own unbobbed eye()) is untouched.
+    var bY = bobY(), bR = bobRoll();
+    var evB = [ev[0], ev[1] - bY, ev[2]], targetB = [target[0], target[1] - bY, target[2]];
+    var upB = [Math.sin(bR), Math.cos(bR), 0];
     var parts = scene.crane ? craneParts() : [];
     var quality = postEnabled();   // Phase 14a: single quality gate drives DoF/bloom + ink outlines + soft shadows
     // sun-height shadow strength (see uShadowOn note below); skip the whole depth pass when it can't bite
     var shadowStr = quality ? smoothstep01((sd[1] - 0.10) / 0.22) : 0;
-    if (shadowStr > 0.01) renderShadowMap(target, sd);
+    if (shadowStr > 0.01) renderShadowMap(targetB, sd);
 
     // main. Phase 10c/14a: when quality is on, the whole scene renders into an offscreen RT and
     // composites to screen at the end (tilt-shift DoF + bloom-lite + ink outlines, all one pass).
     var rt = quality ? ensurePostRT() : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, rt ? rt.fb : null); gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(en.bot[0], en.bot[1], en.bot[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    mat4.perspective(mProj, CAM_FOVY, canvas.width / canvas.height, CAM_NEAR, CAM_FAR); mat4.lookAt(mView, ev, target, [0, 1, 0]); mat4.mul(mVP, mProj, mView);
+    mat4.perspective(mProj, CAM_FOVY, canvas.width / canvas.height, CAM_NEAR, CAM_FAR); mat4.lookAt(mView, evB, targetB, upB); mat4.mul(mVP, mProj, mView);
     var i;
 
     // sky
@@ -1230,6 +1296,12 @@
     // Phase 14b: drifting clouds — every biome/world, founded or wild, sky-layer only (no shadow,
     // no scene.blobs entry); same flat-colour program state the crane parts below reuse.
     drawClouds(M, en, ev);
+    // Phase 20b: void paper flecks — every biome/world, founded or wild, same flat-colour program
+    // state as the clouds above. Skipped during the era-ascension cinematic: the camera is pulled
+    // in tight on the port for that beat (see updateCine()) so the far-void scatter is off-screen
+    // anyway, and that cinematic's banner-reveal timing is real-wall-clock-bounded (see its own
+    // comment in updateCine), so it's not worth even the handful of extra draw calls there.
+    if (!cine) drawFlecks(M, en, ev);
     var pf = scene.port, pc = pf ? Math.cos(pf.yaw) : 1, psn = pf ? Math.sin(pf.yaw) : 0;
     for (i = 0; i < parts.length; i++) {
       var t = parts[i].t, lx = t[0], lz = t[2];
@@ -1444,6 +1516,7 @@
     muted = !!v; if (window.Juice) Juice.Audio.setMuted(muted); if (window.Retention) Retention.set(GAME, 'muted', muted);
     if (muteBtn) { muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.classList.toggle('off', muted); }
     if (muted) stopAmbient(); else startAmbient();
+    updateWashGain();   // Phase 20b: the wash target must reflect mute immediately, not on the next throttled tick
     if (settingsOpen) renderSettings();
   }
   function applyHaptics(off) { hapticsOff = !!off; if (window.Retention) Retention.set(GAME, 'hapticsOff', hapticsOff); if (settingsOpen) renderSettings(); }
@@ -1465,7 +1538,8 @@
   // last commanded target per ramped layer — the decision our code made, independent of how
   // fast the browser's audio thread actually gets there (exposed for deterministic testing;
   // WebAudio ramp convergence timing can't be reliably polled headless under swiftshader load).
-  var ambTarget = { master: 0, wave: 0.5, night: 0, weather: 0, music: 0 };
+  var ambTarget = { master: 0, wave: 0.5, night: 0, weather: 0, music: 0, wash: 0 };
+  var ambWashT = 0;   // Phase 20b: throttle for the edge-proximity wash-gain recompute (cheap, but no need every frame)
   var MUSIC_SCALE = [220.00, 261.63, 293.66, 329.63, 392.00, 440.00];   // A3 C4 D4 E4 G4 A4 — pentatonic
   var MUSIC_PAD = 110.00;                                               // low pad note, A2
   var MUSIC_BASE = 0.085;                                               // bed volume — low, background only
@@ -1506,7 +1580,19 @@
         // generative music bed: its own low gain, sequenced notes connect in per-note
         var music = ctx.createGain(); music.gain.value = 0; music.connect(master);
 
-        amb = { ctx: ctx, master: master, wave: wave, waveLP: lp, night: night, weather: weather, music: music };
+        // Phase 20b: waterfall wash — a gentle continuous filtered-noise layer (the 48 paper
+        // waterfall strips around the slab rim), silent-ish in the harbour bowl and swelling as the
+        // camera nears the slab's edge (see updateWashGain below). Reuses the same noise-buffer +
+        // biquad-filter + gain pattern as the wave/weather layers above; own gentle highpass (a
+        // brighter, splashier band than the low wave rumble) so it reads as falling water, not surf.
+        var washBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate), washD = washBuf.getChannelData(0);
+        for (var wj = 0; wj < washD.length; wj++) washD[wj] = Math.random() * 2 - 1;
+        var washSrc = ctx.createBufferSource(); washSrc.buffer = washBuf; washSrc.loop = true;
+        var washHp = ctx.createBiquadFilter(); washHp.type = 'highpass'; washHp.frequency.value = 1400; washHp.Q.value = 0.5;
+        var wash = ctx.createGain(); wash.gain.value = 0;
+        washSrc.connect(washHp); washHp.connect(wash); wash.connect(master); washSrc.start();
+
+        amb = { ctx: ctx, master: master, wave: wave, waveLP: lp, night: night, weather: weather, music: music, wash: wash };
         scheduleGull(); scheduleCritter(); scheduleMusic();
       } catch (e) { amb = null; return; }
     }
@@ -1621,6 +1707,24 @@
     amb.music.gain.cancelScheduledValues(t); amb.music.gain.setValueAtTime(amb.music.gain.value, t);
     amb.music.gain.linearRampToValueAtTime(target, t + (stormActive ? 0.8 : 2));
   }
+  // Phase 20b: how close the camera's focus is to the slab's own edge, 0 (harbour bowl) .. 1 (at/past
+  // the rim) — normalised against the SLAB ellipse, same shape the pan clamp (PANX/PANZ0/PANZ1) uses.
+  function edgeProximity() {
+    var dx = (C.tx - SLAB0.cx) / SLAB0.rx, dz = (C.tz - SLAB0.cz) / SLAB0.rz;
+    return clamp(Math.hypot(dx, dz), 0, 1);
+  }
+  // commanded wash-layer target: silent when muted (amb.master already gates it, but the TARGET
+  // itself must also report 0 so a test can assert the decision independent of live ramp timing —
+  // same "commanded, not live" contract as ambTarget.weather/music), otherwise scales with edge
+  // proximity up to a gentle ceiling (never louder than the wave-bed floor).
+  function updateWashGain() {
+    if (!amb) return;
+    var target = muted ? 0 : edgeProximity() * 0.11;
+    ambTarget.wash = target;
+    var t = amb.ctx.currentTime;
+    amb.wash.gain.cancelScheduledValues(t); amb.wash.gain.setValueAtTime(amb.wash.gain.value, t);
+    amb.wash.gain.linearRampToValueAtTime(target, t + 1.4);
+  }
   function stormRumble() {
     if (!amb) return;
     var ctx = amb.ctx, t0 = ctx.currentTime;
@@ -1653,7 +1757,7 @@
   function refreshAmbientNow() {
     if (!amb) return;
     ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
-    applyWeatherGain(stormActive); applyMusicGain();
+    applyWeatherGain(stormActive); applyMusicGain(); updateWashGain();
   }
   document.addEventListener('visibilitychange', function () {
     metricsVisibility(document.hidden);   // Phase 13d: flush/persist accumulated playtime on hide, resume on foreground
@@ -1769,6 +1873,7 @@
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
     if (amb) updateAmbientToD(dt);                              // Phase 11c: day/night audio cross-fade
+    if (amb) { ambWashT += dt; if (ambWashT > 0.4) { ambWashT = 0; updateWashGain(); } }   // Phase 20b: throttled edge-proximity wash recompute
     // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
     // frame is > ~26ms (below ~38fps) auto-disable the miniature look for this device
     // (persisted, so weak devices don't re-probe every boot; Settings can re-arm it).
@@ -1787,6 +1892,7 @@
       }
     }
     if (cine) updateCine(dt);
+    if (welcomeFraming) C.azT += dt * 0.02;   // Phase 20b: slow orbit drift while the model-in-hand welcome framing is up
     if (ptrs.size === 0) {
       C.azT += C.vAz; C.elT = clamp(C.elT + C.vEl, 0.14, 1.3); C.vAz *= 0.92; C.vEl *= 0.92; if (Math.abs(C.vAz) < 1e-4) C.vAz = 0; if (Math.abs(C.vEl) < 1e-4) C.vEl = 0;
       C.txT = clamp(C.txT + C.vTx, -PANX, PANX); C.tzT = clamp(C.tzT + C.vTz, PANZ0, PANZ1); C.vTx *= 0.90; C.vTz *= 0.90; if (Math.abs(C.vTx) < 1e-3) C.vTx = 0; if (Math.abs(C.vTz) < 1e-3) C.vTz = 0;
@@ -3490,7 +3596,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v75';
+  var BUILD_TAG = 'v76';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4126,6 +4232,7 @@
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
     gullMesh = E.mesh(new HGL.Builder().cyl(0, 0, 0, 1, 0.25, 3, [1, 1, 1], 1).data());
     buildClouds();   // Phase 14b: sky-layer clouds — built once, independent of biome/founding
+    buildFlecks();   // Phase 20b: void paper flecks — built once, independent of biome/founding
     // Phase 16a/17b: SHIPYARD — 25 real ship-class meshes across three fleet-tier ladders (see
     // HARBOR_MODELS.SHIPYARD.LADDERS); built LAZILY via getShip() above (first actual use uploads +
     // caches), so shipStats starts empty and fills in as classes are actually drawn.
@@ -4144,6 +4251,14 @@
     if (saved && !isUnlocked(saved)) saved = null;
     buildBiome(saved || 'green');
     resize(); defaultView(); C.dist = C.distT; C.tx = C.txT; C.tz = C.tzT; buildSelector(); buildFoundUI(); buildEconUI();
+    // Phase 20b: model-in-hand welcome framing — a brand-new player's very first frame should be
+    // the whole floating diorama at max zoom-out (like turning a model over in your hand), not the
+    // ordinary play framing defaultView() just computed above. Only a FRESH boot (welcome not yet
+    // seen) gets this: returning players keep whatever defaultView() gave them, unchanged. The
+    // camera snaps to it instantly (nothing has drawn yet) then eases back down to play zoom once
+    // the welcome card is dismissed (see showWelcome() below); a slow orbit drift while the card is
+    // up (see frame()) keeps the "presented object" feel alive instead of a static screenshot.
+    if (window.Retention && !Retention.get(GAME, 'seen', false)) { welcomeFraming = true; C.dist = C.distT = CAM_DIST_MAX; }
     try { var q = window.location.search; var m;
       if ((m = /[?&]era=(\d+)/.exec(q))) { era = +m[1] | 0; }
       if ((m = /[?&]biome=(\w+)/.exec(q))) { buildBiome(m[1]); buildSelector._set && buildSelector._set(); }
@@ -4191,7 +4306,13 @@
       '<div class="wm-feat">⚓ Build &amp; trade · ⛵ Expeditions &amp; relics · 🏴‍☠️ race a rival · 🎟️ seasons &amp; ✦ prestige <i>forever</i></div>' +
       '<button class="wm-btn">Begin ⚓</button></div>';
     wrap.appendChild(ov); requestAnimationFrame(function () { ov.classList.add('show'); }); sfx('score');
-    ov.querySelector('.wm-btn').addEventListener('click', function () { ov.classList.remove('show'); sfx('tap'); if (window.Juice) Juice.Audio.unlock(); showHint('Tap the glowing harbour, then “Found village”'); setTimeout(function () { ov.remove(); }, 320); });
+    ov.querySelector('.wm-btn').addEventListener('click', function () {
+      ov.classList.remove('show'); sfx('tap'); if (window.Juice) Juice.Audio.unlock(); showHint('Tap the glowing harbour, then “Found village”'); setTimeout(function () { ov.remove(); }, 320);
+      // Phase 20b: dismissing the card ends the model-in-hand framing and eases the camera back
+      // down to ordinary play zoom (defaultView()'s target) — the existing per-frame camera lerp
+      // in frame() does the actual easing, this just re-arms the normal target and stops the orbit drift.
+      welcomeFraming = false; defaultView();
+    });
     return true;
   }
 
@@ -4294,6 +4415,12 @@
     rollCrate: function () { return rollCrate(); }, blueprints: function () { return ownedBlueprints().map(function (b) { return b.id; }); },
     unlockAll: function () { HARBOR_BIOME_ORDER.forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); }); saveUnlocked(); if (buildSelector._set) buildSelector._set(); },
     startAmbient: function () { startAmbient(); }, ambient_audio: function () { return amb ? { state: amb.ctx.state, gain: +amb.master.gain.value.toFixed(3) } : null; },
+    // Phase 20b: diorama presentation polish — test/debug hooks
+    bob: function () { return { y: bobY(), roll: bobRoll(), period: BOB_PERIOD, amp: BOB_AMP }; },   // slab bob, pure fn of clock (stepClock-driven)
+    flecks: function () { return FLECKS ? { count: FLECKS.length, pos: FLECKS.map(fleckWorldPos) } : null; },   // void paper flecks
+    welcome: function () { return { framing: welcomeFraming, dist: C.dist, distT: C.distT, camMax: CAM_DIST_MAX }; },   // model-in-hand welcome framing state
+    gullFar: function () { return ambient ? ambient.gulls.filter(function (g) { return g.far; }).map(function (g) { return { r: g.r, rFar: g.rFar }; }) : []; },
+    setMuted: function (v) { applyMuted(!!v); },
     refreshAmbient: function () { refreshAmbientNow(); },   // force an immediate resync of every ramped layer to current ToD/hazard/mute state
     // Phase 11c: layered audio state — the eyeball-equivalent for sound (can't screenshot audio)
     audio: function () {
@@ -4301,8 +4428,9 @@
       return {
         state: amb.ctx.state, master: +amb.master.gain.value.toFixed(3), wave: +amb.wave.gain.value.toFixed(3),
         weather: +amb.weather.gain.value.toFixed(3), music: +amb.music.gain.value.toFixed(3), night: +amb.night.gain.value.toFixed(3),
+        wash: +amb.wash.gain.value.toFixed(3),
         muted: muted, musicOff: musicOff, stormActive: stormActive, envNight: +env().night.toFixed(3),
-        target: { master: ambTarget.master, wave: ambTarget.wave, night: ambTarget.night, weather: ambTarget.weather, music: ambTarget.music }   // last commanded value per layer — deterministic, independent of audio-thread ramp timing
+        target: { master: ambTarget.master, wave: ambTarget.wave, night: ambTarget.night, weather: ambTarget.weather, music: ambTarget.music, wash: ambTarget.wash }   // last commanded value per layer — deterministic, independent of audio-thread ramp timing
       };
     },
     setWeather: function (phase) {   // test-only: force the storm audio state without waiting on the sim's real timer
