@@ -165,11 +165,22 @@
       if (yavg > snowLine) col = mixc(col, snow, clamp((yavg - snowLine) / 12, 0, 1)); // snow-capped peaks (all biomes)
       return col;
     }
-    var quads = 0;
+    // Phase 20a THE FLOATING DIORAMA: terrain quads are now CLIPPED to the SLAB ellipse (with a
+    // small overlap margin so the terrain's own cut edge tucks under the cliff-skirt's top strata,
+    // no gap/seam). Before this the heightfield mesh spanned the ENTIRE WORLD.W x (z1-z0) rectangle
+    // (2400x560, mostly flat deep-sea quads) — i.e. even a "bounded" water pool was still floating
+    // over an unbounded terrain floor stretching to the far WORLD edge, which is exactly why a
+    // bounded pool alone reads as an unchanged infinite landscape. Clipping here is what actually
+    // turns the world into a finite floating OBJECT. heightAt()/genField()/FIELD are untouched —
+    // this only decides which already-computed heights get emitted as mesh.
+    var quads = 0, slabMargin = 1.05;
     for (var j = 0; j < nz - 1; j++) {
       var z0 = WORLD.z0 + j * WORLD.cell, z1 = z0 + WORLD.cell;
       for (var i = 0; i < nx - 1; i++) {
         var x0 = -WORLD.W / 2 + i * WORLD.cell, x1 = x0 + WORLD.cell;
+        var qcx = (x0 + x1) / 2, qcz = (z0 + z1) / 2;
+        var slabT = Math.hypot((qcx - SLAB.cx) / SLAB.rx, (qcz - SLAB.cz) / SLAB.rz);
+        if (slabT > slabMargin) continue;                                     // outside the floating slab — no terrain here, the skirt/void take over
         var ya = H[j * nx + i], yb = H[j * nx + i + 1], yc = H[(j + 1) * nx + i], yd = H[(j + 1) * nx + i + 1];
         // flat facet normal from the quad's two edge vectors (a->c "up", a->b "across")
         var e1y = yc - ya, e2y = yb - ya;
@@ -1609,12 +1620,109 @@
     return [{ x: Math.round(best.x), z: Math.round(best.z), yaw: portYaw(best.x, best.z), stars: 3, name: 'Great Harbour', score: +best.score.toFixed(2) }];
   }
 
+  // ---------------- Phase 20a: THE FLOATING DIORAMA — the world slab ----------------
+  // The world stops being an infinite-sea landscape and becomes a finite floating OBJECT. SLAB
+  // describes an elliptical boundary (well inside the WORLD/heightfield extent, so heightAt() stays
+  // fully valid at every sampled perimeter point) that encloses the island + its offshore islets.
+  // buildSkirtMesh extrudes a stratified cliff-skirt down from the sampled terrain edge, then a
+  // rounded rocky underside converging to a keel — all flat-shaded facets in the per-quad papercraft
+  // language used by buildFieldMesh (own 4 verts + 1 flat normal per quad, deterministic jitter).
+  // rx/rz sized to comfortably clear ISLAND (ax:560/az:270 about the same centre) plus its warp
+  // (+/-~0.42 of the nominal radius) and the offshore islets at x=-880/840 — with margin so the
+  // terrain's natural coastline/rock never gets clipped by the slab boundary before it reaches
+  // open water on its own.
+  // Refinement round (post-79da179 review): keel deepened ~2.7x (-38 -> -104) and strata thickened/
+  // recontrasted so the slab reads as a bold cartoon-thick floating mass at max zoom-out instead of a
+  // pancake; see buildSkirtMesh for the layer math and the underside-taper fix (the old ring loop
+  // snapped the final ring back UP to keelY instead of monotonically deepening into it).
+  var SLAB = { cx: 0, cz: 150, rx: 1150, rz: 340, segs: 72, keelY: -104 };
+  var SKIRT_STATS = { quads: 0, verts: 0 };
+  function slabPerim(t) {                                   // t in [0,1) -> world {x,z} on the SLAB boundary ellipse
+    var a = t * TAU;
+    return [SLAB.cx + Math.cos(a) * SLAB.rx, SLAB.cz + Math.sin(a) * SLAB.rz];
+  }
+  function buildSkirtMesh(flat, biome) {
+    var segs = SLAB.segs;
+    var kraft = mixc(biome.hill || [0.5, 0.42, 0.34], [0.6, 0.44, 0.26], 0.5);
+    // Refinement round: much stronger inter-band contrast (was a near-monochrome tan/grey/brown
+    // huddle that flattened into a single tone at distance) — kraft now brighter/warmer, slate cooler
+    // and darker, umber deeper/more saturated rust, plus a near-black 4th band right above the keel
+    // so the stack reads as 4 distinct stripes even from the 1300-unit wide framing.
+    var slate = [0.22, 0.25, 0.33], umber = [0.52, 0.22, 0.14], deepband = [0.14, 0.13, 0.17];
+    var STRATA = [kraft, slate, umber, deepband];   // 4 stratified rock-band colours, per-biome tinted top layer
+    var quads = 0;
+    function ring(y0, y1, c0, c1) {                          // one stratified band, quads unshared for flat facets (matches buildFieldMesh style)
+      for (var i = 0; i < segs; i++) {
+        var ta = i / segs, tb = (i + 1) / segs;
+        var pa = slabPerim(ta), pb = slabPerim(tb);
+        var e1y = 0, e2x = pb[0] - pa[0], e2z = pb[1] - pa[1];
+        var fnx = -e2z, fnz = e2x, fny = 0.001, fl = Math.hypot(fnx, fny, fnz) || 1; fnx /= fl; fny /= fl; fnz /= fl;
+        var jitk = 1 + (h2(i, (y0 * 10) | 0) - 0.5) * 0.14;
+        var fc = [clamp(c0[0] * jitk, 0, 1), clamp(c0[1] * jitk, 0, 1), clamp(c0[2] * jitk, 0, 1)];
+        var base = flat.P.length / 3;
+        flat.P.push(pa[0], y0, pa[1]); flat.N.push(fnx, fny, fnz); flat.U.push(0, 0); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(pb[0], y0, pb[1]); flat.N.push(fnx, fny, fnz); flat.U.push(1, 0); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(pa[0], y1, pa[1]); flat.N.push(fnx, fny, fnz); flat.U.push(0, 1); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.P.push(pb[0], y1, pb[1]); flat.N.push(fnx, fny, fnz); flat.U.push(1, 1); flat.C.push(fc[0], fc[1], fc[2]);
+        flat.I.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+        quads++;
+      }
+    }
+    // 4 stratified cliff layers from the sampled terrain edge down toward the keel
+    var edgeYs = []; for (var s = 0; s < segs; s++) { var p = slabPerim(s / segs); edgeYs.push(heightAt(p[0], p[1])); }
+    var topY = 0; for (var k = 0; k < segs; k++) topY = Math.max(topY, edgeYs[k]);   // strata start just under the highest sampled coastal edge, so no gap under the terrain
+    var y0 = Math.min(-1.0, topY - 26);
+    // Refinement round: strata bands widened ~2.4x (8 -> 19 per layer) so the 4-colour stack reads
+    // as bold stripes from wide zoom; layerYs[4] (top of the underside) scales with the new keel depth.
+    var layerYs = [y0, y0 - 19, y0 - 38, y0 - 57, y0 - 76];
+    for (var L = 0; L < 4; L++) ring(layerYs[L], layerYs[L + 1], STRATA[L], STRATA[(L + 1) % STRATA.length]);
+    // rounded rocky underside: 3 concentric fan rings converging on the keel, radii shrink toward centre.
+    // Refinement round FIX: the old formula computed y2 by subtracting from prevY each ring, then on the
+    // FINAL ring forcibly overrode y2 to SLAB.keelY — which was numerically HIGHER (shallower) than the
+    // y2 the loop had already descended to, so the underside silhouette snapped back UPWARD right before
+    // the keel tip instead of tapering into it. Now y2 is computed directly from a monotonic sqrt-eased
+    // interpolation between layerYs[4] and keelY (fast initial drop, rounding off toward the tip) so the
+    // underside is strictly non-increasing in Y and reads as a full, rounded belly before its point.
+    var ringN = 3, prevR = [SLAB.rx * 0.94, SLAB.rz * 0.86];
+    var prevY = layerYs[4];
+    for (var r = 1; r <= ringN; r++) {
+      var t = r / ringN, rx2 = SLAB.rx * 0.94 * (1 - t * 0.86), rz2 = SLAB.rz * 0.86 * (1 - t * 0.86);
+      var y2 = layerYs[4] + (SLAB.keelY - layerYs[4]) * Math.sqrt(t);
+      if (r === ringN) { rx2 = 6; rz2 = 6; y2 = SLAB.keelY; }
+      var col = mixc(umber, [0.20, 0.18, 0.20], t * 0.5);
+      for (var i2 = 0; i2 < segs; i2++) {
+        var ta2 = i2 / segs, tb2 = (i2 + 1) / segs, a2 = ta2 * TAU, b2 = tb2 * TAU;
+        var pa2 = [SLAB.cx + Math.cos(a2) * prevR[0], prevY, SLAB.cz + Math.sin(a2) * prevR[1]];
+        var pb2 = [SLAB.cx + Math.cos(b2) * prevR[0], prevY, SLAB.cz + Math.sin(b2) * prevR[1]];
+        var pc2 = [SLAB.cx + Math.cos(a2) * rx2, y2, SLAB.cz + Math.sin(a2) * rz2];
+        var pd2 = [SLAB.cx + Math.cos(b2) * rx2, y2, SLAB.cz + Math.sin(b2) * rz2];
+        var ex1 = pc2[0] - pa2[0], ey1 = pc2[1] - pa2[1], ez1 = pc2[2] - pa2[2];
+        var ex2 = pb2[0] - pa2[0], ey2 = 0, ez2 = pb2[2] - pa2[2];
+        var fnx2 = ey1 * ez2 - ez1 * ey2, fny2 = ez1 * ex2 - ex1 * ez2, fnz2 = ex1 * ey2 - ey1 * ex2;
+        var fl2 = Math.hypot(fnx2, fny2, fnz2) || 1; fnx2 /= fl2; fny2 /= fl2; fnz2 /= fl2;
+        if (fny2 > 0) { fnx2 = -fnx2; fny2 = -fny2; fnz2 = -fnz2; }   // underside facets should face outward/downward
+        var jitk2 = 1 + (h2(i2, r * 31) - 0.5) * 0.14;
+        var fc2 = [clamp(col[0] * jitk2, 0, 1), clamp(col[1] * jitk2, 0, 1), clamp(col[2] * jitk2, 0, 1)];
+        var base2 = flat.P.length / 3;
+        flat.P.push(pa2[0], pa2[1], pa2[2]); flat.N.push(fnx2, fny2, fnz2); flat.U.push(0, 0); flat.C.push(fc2[0], fc2[1], fc2[2]);
+        flat.P.push(pb2[0], pb2[1], pb2[2]); flat.N.push(fnx2, fny2, fnz2); flat.U.push(1, 0); flat.C.push(fc2[0], fc2[1], fc2[2]);
+        flat.P.push(pc2[0], pc2[1], pc2[2]); flat.N.push(fnx2, fny2, fnz2); flat.U.push(0, 1); flat.C.push(fc2[0], fc2[1], fc2[2]);
+        flat.P.push(pd2[0], pd2[1], pd2[2]); flat.N.push(fnx2, fny2, fnz2); flat.U.push(1, 1); flat.C.push(fc2[0], fc2[1], fc2[2]);
+        flat.I.push(base2, base2 + 2, base2 + 1, base2 + 1, base2 + 2, base2 + 3);
+        quads++;
+      }
+      prevR = [rx2, rz2]; prevY = y2;
+    }
+    SKIRT_STATS.quads = quads; SKIRT_STATS.verts = quads * 4;
+  }
+
   // ---------------- top-level build ----------------
   function buildStatic(B, biome, rng, era, port) {
     era = era | 0;
     var seed = (hashStr(biome.id) % 997) * 0.013;
     genField(biome, seed);
     buildFieldMesh(B.flat, biome);
+    buildSkirtMesh(B.flat, biome);   // Phase 20a: the floating diorama — stratified cliff-skirt + rocky underside around SLAB
     if (biome.hillType !== 'hill') landforms(B.flat, biome, rng);   // craggy rock props only for mountain/cliff/mesa; green/tropical use natural rolling terrain
     TREE_STATS = { broadleaf: { count: 0, verts: 0 }, pine: { count: 0, verts: 0 }, palm: { count: 0, verts: 0 } };   // 19b: reset per world build
     var treeSamplePos = null;
@@ -1693,6 +1801,6 @@
 
   // Phase 18a: LOOK 6.0 terrain/dressing telemetry — read by game.js's __harbor.terrainStats()
   // test hook (vertex-budget + per-biome feature-count + founded-port-only assertions).
-  function terrainStats() { return { terrain: { quads: TERRAIN_STATS.quads, verts: TERRAIN_STATS.verts }, dressing: DRESS_STATS, port: PORT_DRESS, trees: TREE_STATS }; }
-  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD, terrainStats: terrainStats, buildingStats: buildingStats, BLDG_KINDS: BLDG_KINDS, treeSample: function () { return TREE_SAMPLE; } };
+  function terrainStats() { return { terrain: { quads: TERRAIN_STATS.quads, verts: TERRAIN_STATS.verts }, skirt: { quads: SKIRT_STATS.quads, verts: SKIRT_STATS.verts }, dressing: DRESS_STATS, port: PORT_DRESS, trees: TREE_STATS }; }
+  g.HARBOR_MODELS = { buildStatic: buildStatic, heightAt: heightAt, rate: rate, sites: sites, portYaw: portYaw, CONT: CONT, WORLD: WORLD, SHIPYARD: SHIPYARD, SLAB: SLAB, terrainStats: terrainStats, buildingStats: buildingStats, BLDG_KINDS: BLDG_KINDS, treeSample: function () { return TREE_SAMPLE; } };
 })(window);
