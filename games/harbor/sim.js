@@ -615,8 +615,15 @@
   ];
   function evRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between events, not their resolve timer
   function evDef(id) { for (var i = 0; i < EV_DEFS.length; i++) if (EV_DEFS[i].id === id) return EV_DEFS[i]; return null; }
+  // Portal content policy: some hosts (Poki) forbid ANY wager/chance mechanic regardless of currency.
+  // A build can EXCLUDE specific events from ever being scheduled — the code (evData/resolveEvent)
+  // stays intact, the event is simply never rolled. Set by the Poki build (window.__POKI_BUILD__ →
+  // drop 'gamble') or explicitly via HARBOR_SIM.setEventExclusions([...]) for tests.
+  var EV_EXCLUDE = {};
+  try { if (typeof window !== 'undefined' && window.__POKI_BUILD__) EV_EXCLUDE.gamble = true; } catch (e) {}
+  function setEventExclusions(ids) { EV_EXCLUDE = {}; if (ids) for (var i = 0; i < ids.length; i++) EV_EXCLUDE[ids[i]] = true; }
   function evPick() {
-    var elig = EV_DEFS.filter(function (e) { return S.era >= e.minEra; });
+    var elig = EV_DEFS.filter(function (e) { return S.era >= e.minEra && !EV_EXCLUDE[e.id]; });
     var pool = elig.filter(function (e) { return e.id !== (S.evt.lastId || ''); });
     if (!pool.length) pool = elig; if (!pool.length) return null;
     var tot = 0; pool.forEach(function (e) { tot += e.w; });
@@ -1016,6 +1023,8 @@
     avertCost: function () { return S ? avertCost() : 0; }, avertHazard: avertHazard, avertCrash: avertCrash,
     forceWarn: forceWarn,                                           // debug/test: jump straight to the warn (avert-able) phase
     fireEvent: fireEvent, resolveEvent: resolveEvent, event: function () { return S && S.evt ? S.evt.active : null; },
+    setEventExclusions: setEventExclusions, eventExcluded: function (id) { return !!EV_EXCLUDE[id]; },   // portal content policy (Poki drops 'gamble')
+    __evPick: function () { var d = S ? evPick() : null; return d ? d.id : null; },   // test hook: one weighted event roll (respects exclusions)
     startVoyage: startVoyage, collectVoyage: collectVoyage, canStartVoyage: canStartVoyage, voyages: voyageState,
     unchartedCost: function (era) { return unchartedCost(era); }, unchartedSecs: unchartedSecs,           // Phase 15c: discovery expedition
     canStartUncharted: function (era) { return S ? canStartUncharted(era) : false; }, startUncharted: startUncharted,

@@ -1,100 +1,88 @@
 #!/usr/bin/env bash
-# factory/build-portal.sh — PortMaster (HARBOR) self-contained portal build.
+# factory/build-portal.sh — PortMaster (HARBOR) self-contained portal builds.
 #
 # games/harbor/* references shared libs as `../../shared/*.js` and the root icons as
-# `../../icon-*.png` — paths that only resolve when the game is served from inside the
-# full repo checkout. Web-game portals (CrazyGames, Poki) want ONE flat, self-contained
-# folder with no "reach outside itself" paths, no service worker, and no PWA manifest.
-# This script assembles that folder at dist/portmaster-portal/ and zips it.
+# `../../icon-*.png` — paths that only resolve when served from inside the full repo checkout.
+# Web-game portals (CrazyGames, Poki) want ONE flat, self-contained folder with no
+# "reach outside itself" paths, no service worker, no PWA manifest, and forced portal mode.
+# This script assembles that folder per TARGET and zips it. It is the SINGLE canonical builder
+# (supersedes factory/ship.py, which injected an SDK but forgot to strip the SW / force portal
+# mode — a half-built bundle that would ship a live service worker + privacy link).
 #
-# What it does, in order:
-#   1. Copies games/harbor/* (index.html, style.css, all *.js, fonts/, assets/,
-#      meta.json, screenshot.png, CREDITS.md — license compliance for the bundled
-#      KayKit glTF models) into dist/portmaster-portal/, EXCLUDING:
-#        - tests/          (dev-only, never shipped)
-#        - sw.js            (service workers are disallowed inside a portal iframe —
-#                             see index.html's own SW-registration comment)
-#        - assetfetch.sh    (dev-only asset downloader)
-#        - manifest.json    (PWA installability is meaningless inside a portal embed;
-#                             the <link rel="manifest"> tag is stripped from index.html
-#                             below too, so nothing references it)
-#   2. Copies the two root icons (icon-192.png, icon-512.png) that index.html points at
-#      via ../../icon-*.png, and shared/{juice,retention,portal,progression,stage}.js
-#      into dist/portmaster-portal/shared/.
-#   3. Rewrites the copied index.html:
-#        - ../../shared/       -> shared/
-#        - ../../icon-192.png  -> icon-192.png
-#        - strips <link rel="manifest">
-#        - strips the whole service-worker-registration <script> block
-#        - injects <script>window.__PORTAL_BUILD__=true</script> as the very first
-#          script tag — a cheap build fingerprint read by verify-portal-build.js
-#          (game.js never reads it; it's just a marker that this IS a portal build).
-#   4. Forces portal mode. game.js computes PORTAL_MODE once, at parse time:
-#          /[?&]portal=/.test(location.search) || (ADS.provider && ADS.provider !== 'stub')
-#      Two ways exist to force it on in a build without touching the checked-in source:
-#        (a) inject a script that runs history.replaceState(...) to rewrite the URL
-#            with a ?portal=build query param BEFORE game.js parses, so its own
-#            location.search check picks it up.
-#        (b) sed-patch the ONE line in the *copied* game.js:
-#            `var PORTAL_MODE = false;` -> `var PORTAL_MODE = true;`
-#      We use (b) — see the sed step below for why: it's one deterministic line, it's
-#      verified (the build FAILS LOUDLY if that exact line has moved rather than
-#      silently shipping a non-portal build), and it only ever touches the disposable
-#      dist/ copy — games/harbor/game.js in the repo is never modified. (a) was
-#      rejected: it depends on script execution order (fragile to a future reorder of
-#      the <script> tags), and it leaves a fake query string sitting in the address bar
-#      of whatever page embeds the build, which is confusing in devtools/screenshots
-#      and in front of a portal's own QA reviewers.
-#   5. Zips dist/portmaster-portal/ to dist/portmaster-portal.zip.
-#   6. VERIFY (static): serves the dist folder with `python3 -m http.server`, curls
-#      index.html for 200, and greps index.html for leftover `../../` references and
-#      any `serviceWorker` register() call. (Scoped to index.html deliberately: game.js
-#      still contains the literal string "../../privacy.html" inside its *non-portal*
-#      Settings-panel branch — dead code once PORTAL_MODE is forced true, verified live
-#      by verify-portal-build.js below, not a broken reference a browser would request.)
-#   7. VERIFY (headless boot): runs factory/verify-portal-build.js — a real Chromium
-#      (swiftshader) boot of the built package asserting WebGL boots, the founded-flow
-#      works, __harbor.portalMode() === true, the dead non-portal Settings rows never
-#      render, and zero console/page errors.
-#
-# Usage: bash factory/build-portal.sh
+# Usage:
+#   bash factory/build-portal.sh [crazygames|poki|bare|all]   (default: all)
+# Targets (all share the flatten + SW/manifest strip + PORTAL_MODE force + headless verify):
+#   crazygames -> dist/portmaster-crazygames/  + CrazyGames SDK v3 <script> (window.CrazyGames.SDK)
+#   poki       -> dist/portmaster-poki/         + PokiSDK <script> AND window.__POKI_BUILD__=true
+#                                                 (the marker makes sim.js drop the 'gamble' wager
+#                                                  event — Poki forbids ANY gambling mechanic)
+#   bare       -> dist/portmaster-portal/        no SDK (itch.io / a CrazyGames no-SDK basic launch)
+# The injected SDK <script> is the ONE allowed external reference (the portal's own CDN); offline
+# (e.g. in headless verify) it simply fails to load and shared/portal.js no-ops, so the game still
+# boots identically — window.ADS falls back to the free stub. On the real portal the CDN loads and
+# window.ADS routes rewarded/commercial/gameplay to the SDK (see games/harbor/ads.js activeSDK()).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 SRC="$REPO/games/harbor"
-OUT="$REPO/dist/portmaster-portal"
-ZIP="$REPO/dist/portmaster-portal.zip"
 NODE="$(command -v node || echo /opt/node22/bin/node)"
 
-STEP_OK=1
-note() { echo "-- $*"; }
-fail() { echo "FAIL: $*" >&2; STEP_OK=0; }
+TARGETS_ARG="${1:-all}"
+case "$TARGETS_ARG" in
+  all) TARGETS=(crazygames poki bare) ;;
+  crazygames|poki|bare) TARGETS=("$TARGETS_ARG") ;;
+  *) echo "unknown target '$TARGETS_ARG' (want: crazygames | poki | bare | all)" >&2; exit 2 ;;
+esac
 
-note "[1/7] clean output dir"
-rm -rf "$OUT" "$ZIP"
-mkdir -p "$OUT/shared"
+CG_SDK='  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>'
+POKI_SDK='  <script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>'
 
-note "[2/7] copy games/harbor/* (excluding tests/, sw.js, assetfetch.sh, manifest.json)"
-EXCLUDE=(tests sw.js assetfetch.sh manifest.json)
-for entry in "$SRC"/*; do
-  name="$(basename "$entry")"
-  skip=0
-  for ex in "${EXCLUDE[@]}"; do [ "$name" = "$ex" ] && skip=1 && break; done
-  [ "$skip" -eq 1 ] && continue
-  cp -R "$entry" "$OUT/"
-done
-[ -f "$OUT/CREDITS.md" ] || fail "CREDITS.md missing from build (license compliance)"
+OVERALL_OK=1
 
-note "[3/7] copy root icons + shared libs"
-cp "$REPO/icon-192.png" "$REPO/icon-512.png" "$OUT/"
-for f in juice retention portal progression stage; do
-  cp "$REPO/shared/$f.js" "$OUT/shared/$f.js"
-done
+build_one() {
+  local target="$1"
+  local name sdk_tag poki_marker
+  case "$target" in
+    crazygames) name="portmaster-crazygames"; sdk_tag="$CG_SDK";   poki_marker="" ;;
+    poki)       name="portmaster-poki";        sdk_tag="$POKI_SDK"; poki_marker="1" ;;
+    bare)       name="portmaster-portal";      sdk_tag="";          poki_marker="" ;;
+  esac
+  local OUT="$REPO/dist/$name"
+  local ZIP="$REPO/dist/$name.zip"
+  local STEP_OK=1
+  fail() { echo "FAIL[$target]: $*" >&2; STEP_OK=0; }
 
-note "[4/7] rewrite index.html (paths, strip manifest link + SW block, inject build marker)"
-python3 - "$OUT/index.html" <<'PY'
-import re, sys
+  echo "======================================"
+  echo "BUILD TARGET: $target  ->  dist/$name/"
+  echo "-- [1/7] clean output dir"
+  rm -rf "$OUT" "$ZIP"
+  mkdir -p "$OUT/shared"
+
+  echo "-- [2/7] copy games/harbor/* (excluding tests/, sw.js, assetfetch.sh, manifest.json)"
+  local EXCLUDE=(tests sw.js assetfetch.sh manifest.json)
+  local entry name0 ex skip
+  for entry in "$SRC"/*; do
+    name0="$(basename "$entry")"; skip=0
+    for ex in "${EXCLUDE[@]}"; do [ "$name0" = "$ex" ] && skip=1 && break; done
+    [ "$skip" -eq 1 ] && continue
+    cp -R "$entry" "$OUT/"
+  done
+  [ -f "$OUT/CREDITS.md" ] || fail "CREDITS.md missing from build (license compliance for the bundled KayKit glTF)"
+
+  echo "-- [3/7] copy root icons + shared libs + license files"
+  cp "$REPO/icon-192.png" "$REPO/icon-512.png" "$OUT/"
+  local f
+  for f in juice retention portal progression stage; do
+    cp "$REPO/shared/$f.js" "$OUT/shared/$f.js"
+  done
+  # Font licences (OFL) travel with the bundle so a copyright review is self-service. Copy any
+  # LICENSE/OFL file living in fonts/ if present; never fatal (fonts are all OFL Google Fonts).
+  [ -d "$SRC/fonts" ] && find "$SRC/fonts" -maxdepth 1 -iname '*licen*' -exec cp {} "$OUT/fonts/" \; 2>/dev/null || true
+
+  echo "-- [4/7] rewrite index.html (paths, strip manifest+SW, inject build marker${sdk_tag:+ + SDK}${poki_marker:+ + poki flag})"
+  SDK_TAG="$sdk_tag" POKI_MARKER="$poki_marker" python3 - "$OUT/index.html" <<'PY'
+import os, re, sys
 path = sys.argv[1]
 with open(path) as f:
     html = f.read()
@@ -102,35 +90,44 @@ with open(path) as f:
 html = html.replace('../../shared/', 'shared/')
 html = html.replace('../../icon-192.png', 'icon-192.png')
 
-# strip the <link rel="manifest" ...> tag
+# strip the <link rel="manifest" ...> tag (PWA install is meaningless inside a portal embed)
 html = re.sub(r'\s*<link rel="manifest"[^>]*>\n?', '\n', html)
 
-# strip the service-worker-registration <script>...</script> block specifically (leave
-# every other <script> tag untouched) by splitting on script tags and dropping the one
-# whose body calls serviceWorker.register(...).
+# strip the service-worker-registration <script>...</script> block specifically (leave every other
+# <script> tag untouched) by splitting on script tags and dropping the one that registers the SW.
 parts = re.split(r'(<script\b[^>]*>.*?</script>)', html, flags=re.DOTALL)
 parts = [p for p in parts if 'serviceWorker.register' not in p]
 html = ''.join(parts)
 
-# inject the build-marker script immediately before the first remaining <script> tag
-marker = '<script>window.__PORTAL_BUILD__=true</script>\n  '
+# inject the portal-SDK <script> (if any) into <head> so window.CrazyGames.SDK / window.PokiSDK is
+# available before shared/portal.js's Portal.init() runs at boot.
+sdk = os.environ.get('SDK_TAG', '')
+if sdk and 'sdk.crazygames.com' not in html and 'poki-sdk.js' not in html:
+    if '</head>' in html:
+        html = html.replace('</head>', sdk + '\n</head>', 1)
+
+# build markers injected immediately before the first remaining <script> tag (so they run before
+# any game script — critically before sim.js reads window.__POKI_BUILD__ to drop the gamble event).
+markers = '<script>window.__PORTAL_BUILD__=true'
+if os.environ.get('POKI_MARKER'):
+    markers += ';window.__POKI_BUILD__=true'
+markers += '</script>\n  '
 idx = html.find('<script')
 if idx == -1:
     sys.exit('build-portal.sh: no <script> tag found to inject the portal-build marker before')
-html = html[:idx] + marker + html[idx:]
+html = html[:idx] + markers + html[idx:]
 
 with open(path, 'w') as f:
     f.write(html)
 PY
 
-note "[5/7] force PORTAL_MODE true in the copied game.js (see script header for rationale)"
-GJS="$OUT/game.js"
-# game.js sets PORTAL_MODE in TWO statements — an initial `= false` declaration, then an
-# unconditional reassignment from location.search / ADS.provider inside a try block. Both
-# must be neutralised (patching only the first left the second silently overwriting it
-# back to false on every load) — replaced as one exact two-line block so the build FAILS
-# LOUDLY if this text has moved, rather than silently shipping a non-portal build.
-if ! python3 - "$GJS" <<'PY'
+  echo "-- [5/7] force PORTAL_MODE true in the copied game.js"
+  # game.js sets PORTAL_MODE in TWO statements — an initial `= false` declaration, then an
+  # unconditional reassignment from location.search / ADS.provider. Both must be neutralised
+  # (replaced as one exact block) so the build FAILS LOUDLY if this text moved, rather than
+  # silently shipping a non-portal build.
+  local GJS="$OUT/game.js"
+  if ! python3 - "$GJS" <<'PY'
 import sys
 path = sys.argv[1]
 with open(path) as f:
@@ -150,90 +147,56 @@ js = js.replace(needle, replacement, 1)
 with open(path, 'w') as f:
     f.write(js)
 PY
-then
-  fail "expected PORTAL_MODE declaration block not found (verbatim) in games/harbor/game.js — build-portal.sh's patch needs updating to match the current source (refusing to silently ship a non-portal build)"
-fi
-if [ "$STEP_OK" -eq 1 ] && ! grep -q 'var PORTAL_MODE = true;' "$GJS"; then
-  fail "PORTAL_MODE patch did not take effect"
-fi
-if [ "$STEP_OK" -eq 1 ] && grep -q 'PORTAL_MODE = /\[?&\]portal=/' "$GJS"; then
-  fail "PORTAL_MODE reassignment still present — the force-patch didn't remove it"
-fi
+  then
+    fail "expected PORTAL_MODE declaration block not found (verbatim) in games/harbor/game.js — build-portal.sh's patch needs updating to match the current source (refusing to silently ship a non-portal build)"
+  fi
+  if [ "$STEP_OK" -eq 1 ] && ! grep -q 'var PORTAL_MODE = true;' "$GJS"; then
+    fail "PORTAL_MODE patch did not take effect"
+  fi
+  if [ "$STEP_OK" -eq 1 ] && grep -q 'PORTAL_MODE = /\[?&\]portal=/' "$GJS"; then
+    fail "PORTAL_MODE reassignment still present — the force-patch didn't remove it"
+  fi
 
-if [ "$STEP_OK" -ne 1 ]; then
-  echo "======================================"
-  echo "BUILD FAILED — see FAIL lines above. Aborting before zip/verify."
-  exit 1
-fi
+  if [ "$STEP_OK" -ne 1 ]; then
+    echo "BUILD[$target] FAILED — see FAIL lines above. Skipping zip/verify."
+    OVERALL_OK=0
+    return
+  fi
 
-note "[6/7] zip"
-mkdir -p "$REPO/dist"
-( cd "$REPO/dist" && zip -rq portmaster-portal.zip portmaster-portal )
+  echo "-- [6/7] zip"
+  mkdir -p "$REPO/dist"
+  ( cd "$REPO/dist" && zip -rq "$name.zip" "$name" )
 
-note "[7/7] verify"
-echo "======================================"
-echo "STATIC VERIFY"
-STATIC_OK=1
+  echo "-- [7/7] verify (static + headless iframe boot)"
+  local STATIC_OK=1
+  # a leftover ../../ or a live serviceWorker.register() in the SERVED entry file would be a real
+  # broken/portal-disallowed reference (grep is scoped to index.html — game.js legitimately still
+  # contains the dead non-portal "../../privacy.html" string, proven unreachable by the headless run).
+  grep -q '\.\./\.\./' "$OUT/index.html" && { fail "index.html still contains a ../../ reference"; STATIC_OK=0; } || echo "  PASS  index.html has no ../../ references"
+  grep -q 'serviceWorker'  "$OUT/index.html" && { fail "index.html still references serviceWorker"; STATIC_OK=0; } || echo "  PASS  index.html has no serviceWorker reference"
+  grep -q '<link rel="manifest"' "$OUT/index.html" && { fail "index.html still links a manifest"; STATIC_OK=0; } || echo "  PASS  index.html has no manifest link"
+  if [ -n "$sdk_tag" ]; then
+    grep -q 'crazygames-sdk\|poki-sdk' "$OUT/index.html" && echo "  PASS  portal SDK <script> injected" || { fail "portal SDK <script> missing for target $target"; STATIC_OK=0; }
+  fi
 
-# leftover ../../ or a live serviceWorker.register() call in the *served entry file*
-# (index.html) would mean a real broken/portal-disallowed reference a browser would
-# actually request — grep is deliberately scoped to index.html, not the whole tree,
-# because game.js legitimately still contains the string "../../privacy.html" inside
-# its dead non-portal Settings branch (never reached now PORTAL_MODE is forced true;
-# verify-portal-build.js below asserts that live, in a real browser).
-if grep -q '\.\./\.\./' "$OUT/index.html"; then
-  fail "index.html still contains a ../../ reference"; STATIC_OK=0
-else
-  echo "  PASS  index.html has no ../../ references"
-fi
-if grep -q 'serviceWorker' "$OUT/index.html"; then
-  fail "index.html still references serviceWorker"; STATIC_OK=0
-else
-  echo "  PASS  index.html has no serviceWorker reference"
-fi
-if grep -q '<link rel="manifest"' "$OUT/index.html"; then
-  fail "index.html still links a manifest"; STATIC_OK=0
-else
-  echo "  PASS  index.html has no manifest link"
-fi
+  local HEADLESS_OK=1
+  VERIFY_OUT="$name" VERIFY_TARGET="$target" "$NODE" "$HERE/verify-portal-build.js" || HEADLESS_OK=0
 
-PORT="$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")"
-SERVE_LOG="$(mktemp)"
-( cd "$OUT" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 ) >"$SERVE_LOG" 2>&1 &
-SRV_PID=$!
-trap 'kill "$SRV_PID" 2>/dev/null || true; rm -f "$SERVE_LOG"' EXIT
+  if [ "$STATIC_OK" -eq 1 ] && [ "$HEADLESS_OK" -eq 1 ]; then
+    echo "BUILD[$target] PASS — dist/$name/ and dist/$name.zip ready to upload."
+  else
+    echo "BUILD[$target] FAIL — see failures above."
+    OVERALL_OK=0
+  fi
+}
 
-CODE=""
-for _ in $(seq 1 30); do
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/index.html" || true)"
-  [ "$CODE" = "200" ] && break
-  sleep 0.2
-done
-if [ "$CODE" = "200" ]; then
-  echo "  PASS  curl http://127.0.0.1:$PORT/index.html -> 200"
-else
-  fail "curl http://127.0.0.1:$PORT/index.html -> ${CODE:-no response}"; STATIC_OK=0
-fi
-kill "$SRV_PID" 2>/dev/null || true
-trap - EXIT
-rm -f "$SERVE_LOG"
-
-if [ "$STATIC_OK" -eq 1 ]; then
-  echo "STATIC VERIFY: PASS"
-else
-  echo "STATIC VERIFY: FAIL"
-fi
+for t in "${TARGETS[@]}"; do build_one "$t"; done
 
 echo "======================================"
-echo "HEADLESS BOOT VERIFY (Chromium/swiftshader)"
-HEADLESS_OK=1
-"$NODE" "$HERE/verify-portal-build.js" || HEADLESS_OK=0
-
-echo "======================================"
-if [ "$STATIC_OK" -eq 1 ] && [ "$HEADLESS_OK" -eq 1 ]; then
-  echo "BUILD PASS — dist/portmaster-portal/ and dist/portmaster-portal.zip are ready to upload."
+if [ "$OVERALL_OK" -eq 1 ]; then
+  echo "ALL BUILDS PASS."
   exit 0
 else
-  echo "BUILD FAIL — see failures above."
+  echo "ONE OR MORE BUILDS FAILED — see failures above."
   exit 1
 fi

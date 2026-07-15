@@ -80,6 +80,16 @@
   // so browser tests don't have to eat REWARD_DELAY_MS six-plus times. Never read by real players.
   function fastMode() { return !!global.__ADS_TEST_FAST__; }
 
+  // Phase (portal-readiness): the default provider auto-ROUTES to a real portal SDK when one is
+  // hosting us. shared/portal.js exposes window.Portal — a unified CrazyGames/Poki adapter that is
+  // .available only after its init() resolves with a real SDK present (never on our own site / itch).
+  // When available, rewarded + commercial + gameplay-bracket calls go to the SDK; otherwise the
+  // charm-delay stub behaviour below is used unchanged. This keeps ONE integration surface, needs no
+  // ?adprovider wiring or fragile script order, and works for whichever portal actually embeds us.
+  function activeSDK() {
+    try { return (global.Portal && global.Portal.available) ? global.Portal : null; } catch (e) { return null; }
+  }
+
   var STUB = {
     provider: 'stub',
     // Phase 12b: invocation counters for the three portal lifecycle hooks + commercialBreak, so
@@ -89,6 +99,14 @@
     rewardedAvailable: function () { return todayCount() < DAILY_CAP; },
     showRewarded: function (onReward, onFail) {
       if (todayCount() >= DAILY_CAP) { setTimeout(function () { if (onFail) onFail('cap'); }, 0); return; }
+      var sdk = activeSDK();
+      if (sdk && typeof sdk.rewardedAd === 'function') {
+        // real portal rewarded ad — still honour PortMaster's own daily cap (player-friendly), and
+        // only bump the count on an actually-earned reward, never on skip/no-fill/error.
+        sdk.rewardedAd(function () { if (todayCount() >= DAILY_CAP) { if (onFail) onFail('cap'); return; } bumpCount(); if (onReward) onReward(); },
+                       function () { if (onFail) onFail('skip'); });
+        return;
+      }
       var delay = fastMode() ? 0 : REWARD_DELAY_MS;
       setTimeout(function () {
         // re-check the cap at resolution time too (in case another tab/claim landed meanwhile)
@@ -97,11 +115,18 @@
         if (onReward) onReward();
       }, delay);
     },
-    commercialBreak: function (onDone) { STUB._counts.commercialBreak++; setTimeout(function () { if (onDone) onDone(); }, 0); },
-    // ---- Phase 12b portal lifecycle events (see file header) — stub just counts them. ----
+    commercialBreak: function (onDone) {
+      STUB._counts.commercialBreak++;
+      var sdk = activeSDK();
+      if (sdk && typeof sdk.commercialBreak === 'function') { sdk.commercialBreak(function () { if (onDone) onDone(); }); return; }
+      setTimeout(function () { if (onDone) onDone(); }, 0);
+    },
+    // ---- Phase 12b portal lifecycle events (see file header) — count them AND, when a real portal
+    // SDK is hosting us, forward the gameplay bracket to it (loading bracket is driven directly from
+    // game.js boot via window.Portal, so loadingFinished stays a counter here to avoid double-driving). ----
     loadingFinished: function () { STUB._counts.loadingFinished++; },
-    gameplayStart: function () { STUB._counts.gameplayStart++; },
-    gameplayStop: function () { STUB._counts.gameplayStop++; }
+    gameplayStart: function () { STUB._counts.gameplayStart++; var sdk = activeSDK(); if (sdk && typeof sdk.gameStart === 'function') sdk.gameStart(); },
+    gameplayStop: function () { STUB._counts.gameplayStop++; var sdk = activeSDK(); if (sdk && typeof sdk.gameStop === 'function') sdk.gameStop(); }
   };
 
   function pickProvider() {

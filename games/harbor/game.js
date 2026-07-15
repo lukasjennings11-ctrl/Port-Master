@@ -3833,7 +3833,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v77';
+  var BUILD_TAG = 'v78';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4496,7 +4496,12 @@
     // the welcome card is dismissed (see showWelcome() below); a slow orbit drift while the card is
     // up (see frame()) keeps the "presented object" feel alive instead of a static screenshot.
     if (window.Retention && !Retention.get(GAME, 'seen', false)) { welcomeFraming = true; C.dist = C.distT = CAM_DIST_MAX; }
-    try { var q = window.location.search; var m;
+    // Debug/dev query-param overrides (jump era/biome, auto-found, pose the camera, freeze). Gated
+    // OFF in portal builds so a reviewer can't append ?found / ?era=5 and skip the intended first-run
+    // onboarding — a "testing artifact" a portal's QA can flag. On our own site (PORTAL_MODE false)
+    // they stay for dev + screenshot tooling. (window.__harbor stays regardless — it's invisible and
+    // our own verify-portal-build.js drives the build through it.)
+    if (!PORTAL_MODE) try { var q = window.location.search; var m;
       if ((m = /[?&]era=(\d+)/.exec(q))) { era = +m[1] | 0; }
       if ((m = /[?&]biome=(\w+)/.exec(q))) { buildBiome(m[1]); buildSelector._set && buildSelector._set(); }
       else if (/[?&]era=/.test(q)) buildBiome(biomeId);   // rebuild for forced era
@@ -4519,8 +4524,14 @@
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
     if (window.Portal) Portal.init().then(function () {
-      Portal.loadingStop(); if (loader) loader.classList.add('hidden'); Portal.gameStart();
+      Portal.loadingStop(); if (loader) loader.classList.add('hidden');
       adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
+      // Gameplay bracket flows through adsGameplayStart/Stop (→ window.ADS → the portal SDK) — the same
+      // choke point the founding/resume/visibility paths already use — so it opens on ACTUAL gameplay,
+      // never merely at boot. A resumed founded save is already "playing" the instant the SDK is ready,
+      // so open it here (AFTER loadingStop, preserving the required loading→gameplay order); a brand-new
+      // player opens it when they found their first port instead.
+      if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
       installErrorCapture();     // …and only now start listening for real runtime errors
     });
   }

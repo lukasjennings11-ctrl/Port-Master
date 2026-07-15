@@ -4,20 +4,37 @@
 concrete, ordered checklist of the account/business steps that only you can do. Read
 [`MONETIZATION.md`](MONETIZATION.md) first for the why; this doc is the how.*
 
-Build the submission package before doing anything else:
+Build the submission packages before doing anything else:
 
 ```bash
-bash factory/build-portal.sh
+bash factory/build-portal.sh            # builds ALL targets (crazygames + poki + bare)
+# …or one at a time:
+bash factory/build-portal.sh crazygames
+bash factory/build-portal.sh poki
 ```
 
-This produces `dist/portmaster-portal/` (a flat, self-contained copy of the game with no
-service worker, no PWA manifest, and no `../../` paths — everything a portal disallows or
-doesn't need, stripped) and `dist/portmaster-portal.zip` (825 KB zipped / ~1.8 MB
-unzipped — comfortably under both portals' size limits, see below). The script ends with
-a PASS/FAIL summary that includes a real headless Chromium boot of the built package —
-don't upload if it didn't say `BUILD PASS`.
+`factory/build-portal.sh` is the single canonical builder (it supersedes the old
+`factory/ship.py`, which injected an SDK but forgot to strip the service worker / force portal
+mode — a half-built bundle). Each target is a flat, self-contained copy of the game with **no
+service worker, no PWA manifest, no `../../` paths, and portal mode forced on** — everything a
+portal disallows, stripped — with the correct portal SDK injected:
 
-`dist/` is git-ignored — the zip is a build artifact, not something to commit. Re-run the
+| Target | Output | What's baked in |
+|---|---|---|
+| `crazygames` | `dist/portmaster-crazygames{,.zip}` | CrazyGames SDK v3 `<script>` in `<head>` |
+| `poki` | `dist/portmaster-poki{,.zip}` | Poki SDK `<script>` **and the `gamble` event dropped** (Poki forbids any gambling mechanic) |
+| `bare` | `dist/portmaster-portal{,.zip}` | no SDK — itch.io, or a CrazyGames no-SDK "basic launch" |
+
+Each is ~0.9 MB zipped / ~2.1 MB unzipped — comfortably under both portals' size limits (see
+below). When a portal's own CDN serves the injected SDK, `games/harbor/ads.js` auto-routes the
+rewarded ("Captain's Bonus") + interstitial (era-ascension) + gameplay-bracket calls to it (see
+`activeSDK()`); off-portal the SDK simply isn't there and everything falls back to the free stub,
+so the game plays identically. Each build ends with a PASS/FAIL summary that includes a real
+headless Chromium boot of the package **both top-level AND embedded in an `<iframe>`** (the way a
+portal actually hosts it — the classic "broken in their iframe" rejection cause) — don't upload a
+target that didn't print `BUILD[...] PASS`.
+
+`dist/` is git-ignored — the zips are build artifacts, not something to commit. Re-run the
 script any time `games/harbor/` changes and re-upload.
 
 ---
@@ -26,7 +43,8 @@ script any time `games/harbor/` changes and re-upload.
 
 - **Account:** [developer.crazygames.com](https://developer.crazygames.com/) — free
   developer account, no fee.
-- **Upload:** `dist/portmaster-portal.zip` via the developer portal's "Add game" flow.
+- **Upload:** `dist/portmaster-crazygames.zip` (SDK baked in) via the developer portal's
+  "Add game" flow. (Or `dist/portmaster-portal.zip` for a no-SDK basic launch — see the SDK note.)
 - **Form fields to expect:**
   - Title: `PortMaster` (see `factory/store-copy.md`)
   - Short description / tagline, full description → copy from `factory/store-copy.md`
@@ -46,28 +64,28 @@ script any time `games/harbor/` changes and re-upload.
     in-game-currency wager honestly where asked.
 - **Review timeline:** fast relative to Poki — games can go live in days once uploaded
   and passing automated checks; a human review follows for "Full Launch" promotion.
-- **SDK note — two honest paths:**
-  1. **No-SDK first submission (what this build does today):** CrazyGames explicitly
-     allows submitting *without* the SDK integrated, subject to a stricter file-size cap
-     (≤50 MB total, ≤20 MB to be eligible for their mobile homepage — our build is
-     ~1.8 MB, nowhere close). This gets PortMaster live and gathering data fastest.
-  2. **Full SDK integration (needed before "Full Launch"/rev-share):** once selected for
-     Full Launch, CrazyGames *requires* their SDK — analytics, ads, loading/gameplay
-     events. Phase 12a/12b already built the `window.ADS` abstraction and the
-     `Portal.*` lifecycle hooks (`loadingFinished`/`gameplayStart`/`gameplayStop`/
-     `commercialBreak`) that a `crazygames.js` adapter would plug into with zero game
-     logic changes — that adapter itself isn't written yet (it's the natural next
-     phase once CrazyGames says yes to path 1).
-  - **Recommendation:** submit path 1 now (fast, honest, zero extra engineering), then
-    build the CrazyGames SDK adapter once you have a developer account and can read
-    their exact current SDK version/init code from the dashboard.
+- **SDK note — the adapter is now built.** `shared/portal.js` is a unified CrazyGames + Poki
+  SDK adapter (`window.Portal`), and `games/harbor/ads.js` routes rewarded/interstitial/gameplay
+  calls to it whenever a real SDK is hosting the page. The `crazygames` build injects the
+  CrazyGames SDK v3 `<script>` so this all wires up automatically — loading bracket
+  (`sdkGameLoadingStart/Stop`), gameplay bracket (`gameplayStart` on found/resume/visibility,
+  `gameplayStop` on background), interstitial at era-ascension, and rewarded video for the
+  Captain's Bonus, all with audio muted for the ad's duration.
+  - **Two paths remain, both valid:** upload `dist/portmaster-crazygames.zip` (SDK baked in →
+    eligible for Full Launch / rev-share immediately), or `dist/portmaster-portal.zip` (no SDK →
+    a faster "basic launch"; ads/rev-share come later by switching to the crazygames zip). Both
+    clear the size caps (≤50 MB total, ≤20 MB for the mobile homepage; our builds are ~2 MB).
+  - **Before uploading, confirm the SDK URL/version** on the CrazyGames dashboard and update
+    `CG_SDK` in `factory/build-portal.sh` if it has changed — the adapter is written defensively
+    (feature-detected, wrapped in try/catch) so a renamed method degrades to a no-op, but the
+    `<script src>` must point at a real, current SDK build.
 
 ## 2. Poki submission
 
 - **Account:** apply via [developers.poki.com](https://developers.poki.com/) — Poki is
   **hand-curated**: every game is reviewed by a human before acceptance, so expect
   feedback loops rather than an instant yes/no.
-- **Upload:** same `dist/portmaster-portal.zip`.
+- **Upload:** `dist/portmaster-poki.zip` (Poki SDK baked in, gambling event removed).
 - **Form fields to expect:** same shape as CrazyGames (title, description, category,
   controls, cover art) — reuse `factory/store-copy.md`. Poki's own review stages, in
   order, each with its own turnaround: Player Fit Test (need ≥25% of 500 players to play
@@ -79,20 +97,24 @@ script any time `games/harbor/` changes and re-upload.
   play with no login wall, kid-safe with **no gambling or crypto**, no in-app purchases,
   initial download target **under 8 MB** (our build is ~1.8 MB — comfortably clears
   this), all cutscenes/intros skippable, and platform-appropriate control hints shown.
-- **The Merchant's Gamble flag:** Poki's own language is "no gambling" full stop — it
-  doesn't carve out in-game-currency-only wagers. PortMaster's Merchant's Gamble event
-  (wager in-game £ for a chance to double it, always skippable via "Decline") is honest,
-  optional, and uses no real currency — but Poki's reviewers may still flag it. Disclose
-  it plainly in the submission notes rather than let them find it; be ready to discuss,
-  gate it further, or drop it from the Poki build specifically if they push back.
-- **SDK note:** unlike CrazyGames, Poki's docs are explicit that SDK integration
-  (`commercialBreak()`/`rewardedBreak()`, audio auto-mute during ads) is **required for
-  Web Fit testing and all releases** — there is no "submit without the SDK" path here.
-  Phase 12a's `window.ADS` abstraction is built to make a `poki.js` adapter a drop-in
-  (same five-method contract, zero game.js changes) — but that adapter doesn't exist yet.
-  **Recommendation:** apply now to start the (slow) Poki review clock, but expect to need
-  the `poki.js` adapter written before you can pass their Web Fit Test — plan that as
-  the next engineering phase once CrazyGames data suggests it's worth the extra build.
+- **The Merchant's Gamble — handled: the Poki build removes it.** Poki's rule is "no gambling"
+  with no carve-out for in-game-currency wagers, so the `poki` build sets `window.__POKI_BUILD__`,
+  which makes `sim.js` drop the `gamble` event from its scheduler entirely (the code stays; it's
+  just never rolled — see `setEventExclusions`). The verify step asserts
+  `HARBOR_SIM.eventExcluded('gamble') === true` in the built Poki bundle, so it cannot regress.
+  You can still mention in the submission notes that the CrazyGames build keeps it (they allow it)
+  and the Poki build omits it — a point in your favour, not a risk. (The `crazygames`/`bare`
+  builds keep the event.)
+- **SDK note — the adapter is now written.** Poki *requires* their SDK
+  (`PokiSDK.init()`/`gameplayStart`/`gameplayStop`/`commercialBreak`/`rewardedBreak`, with the SDK
+  handling its own loading splash + ad audio) for the Web Fit Test and all releases. `shared/portal.js`
+  is the unified adapter — it detects `window.PokiSDK` and maps every call onto it (promise-style
+  ad breaks, `gameLoadingFinished` on loader hide) — and the `poki` build injects the PokiSDK
+  `<script>`. `games/harbor/ads.js` routes the Captain's Bonus + era interstitial through it. So you
+  can apply AND pass the Web Fit Test with `dist/portmaster-poki.zip` as-is.
+  - **Before uploading, confirm the PokiSDK URL** on developers.poki.com and update `POKI_SDK` in
+    `factory/build-portal.sh` if it differs; the adapter is feature-detected so a missing method
+    degrades to a no-op, but the `<script src>` must be a real current build.
 
 ## 3. Native (Capacitor — Android + iOS)
 
@@ -179,9 +201,12 @@ disclosure), and the support-contact placeholder.
 - `screenshot-mobile.png` (390×844, portrait) — mobile screenshot.
 - `factory/store-copy.md` — all text copy.
 
-**Still needed for some portal/store forms — a 16:9 landscape cover (e.g. 1920×1080):**
-None of the existing assets are landscape; CrazyGames in particular wants a landscape
-cover in addition to portrait/square. Capture one from the live game:
+**16:9 landscape cover — a raw starting capture now exists:**
+- `factory/cover-16x9.png` (1600×900) — a straight in-game capture of the floating papercraft
+  port at midday, generated by the cover script. It's a usable placeholder (CrazyGames accepts
+  gameplay screenshots), but **refine it before submitting**: capture a more built-up port (a few
+  eras in, buildings + boats on screen), at a hero camera angle, with transient toasts/hint cards
+  dismissed, and ideally add a title treatment. Re-capture the same way:
 
 ```bash
 python3 -m http.server 8000   # from repo root

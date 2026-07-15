@@ -96,6 +96,23 @@ var S = SIM.raw();
   ok('smuggler: buy adds stock & spends cash', SIM.port('green').res[sd.res] === f0 + sd.amt && S.money === 100000 - sd.cost);
 })();
 
+// ---------------------------------------------------------------- portal content policy (Poki: no gambling)
+(function eventExclusions() {
+  SIM.__setRng(mulberry32(999));
+  SIM.setEventExclusions(['gamble']);
+  ok('exclude: eventExcluded(gamble) true after setEventExclusions', SIM.eventExcluded('gamble') === true);
+  var ROLLS = 400, sawGamble = false, others = {};
+  for (var i = 0; i < ROLLS; i++) { var id = SIM.__evPick(); if (id === 'gamble') sawGamble = true; if (id) others[id] = 1; }
+  ok('exclude: gamble NEVER scheduled while excluded (' + ROLLS + ' rolls)', sawGamble === false);
+  ok('exclude: other events still schedule normally while gamble excluded', Object.keys(others).length >= 3);
+  // clearing the exclusion restores gamble to the pool
+  SIM.setEventExclusions([]);
+  ok('exclude: eventExcluded(gamble) false after clearing', SIM.eventExcluded('gamble') === false);
+  var sawAgain = false;
+  for (var j = 0; j < ROLLS; j++) { if (SIM.__evPick() === 'gamble') { sawAgain = true; break; } }
+  ok('exclude: gamble CAN schedule again once the exclusion is cleared', sawAgain === true);
+})();
+
 // ---------------------------------------------------------------- expeditions
 (function voyages() {
   S.money = 1e6;
