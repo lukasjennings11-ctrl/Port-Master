@@ -16,14 +16,18 @@ Character counts are for the field limit named in each heading; re-count if you 
 
 (75 characters)
 
+Alternate, leaning on the differentiator (72 chars):
+
+> Grow a fishing village into a futuristic megaport. Honest, free idle.
+
 ## Medium description (~300 chars — portal "short description" fields)
 
-> PortMaster is a free browser idle tycoon: found a harbour on a wild coast and grow it
-> from a humble fishing village into a global port empire. Build and upgrade, send ships
-> on expeditions, trade across a network of ports, weather storms, race a rival baron, and
-> prestige for permanent bonuses.
+> PortMaster is a free browser idle tycoon: found a harbour on a wild coast and grow it from
+> a fishing village all the way to a neon-futuristic megaport. Build and upgrade, evolve a
+> living fleet, send expeditions, trade between ports, weather storms and pirate raids, and
+> prestige for permanent bonuses. No ads-gate, no pay-to-win.
 
-(303 characters)
+(~305 characters)
 
 ## Long description (~1200 chars — portal "full description" / store listing body)
 
@@ -31,9 +35,13 @@ Character counts are for the field limit named in each heading; re-count if you 
 > PortMaster is a free browser-based idle tycoon — no install, no account, no paywall.
 > Open it and play.
 >
-> **Build & grow** — fishing huts, cottages, markets, factories and docks across five
-> hand-authored eras, from fishing village to global trade hub, each unlocking new
-> buildings, biomes and mechanics.
+> **Build & grow** — fishing huts, cottages, markets, factories and docks across eight
+> hand-authored ages, from a fishing village through a near-future automated harbour to a
+> neon-futuristic megaport, each unlocking new buildings, biomes and mechanics.
+>
+> **Living timeline & fleet** — advancing the ages remodels your harbour and modernises a
+> fleet you commission and evolve, from rowboats to solar trimarans; build a navy to
+> auto-defend your coast.
 >
 > **Trade network** — link your founded ports together into routes for passive income
 > across the map.
@@ -41,8 +49,9 @@ Character counts are for the field limit named in each heading; re-count if you 
 > **Expeditions & relics** — send ships on timed voyages that pay out even while you're
 > away; relics drop from voyages and crates, and completing a set grants a permanent bonus.
 >
-> **Dynamic events & storms** — choice-driven events and weather hazards damage your port
-> and call for rebuilding, so every run plays out a little differently.
+> **Storms & pirate raids you can watch** — storms darken the sky and whip up the sea,
+> corsairs sail up to your quay, and buildings rise behind paper scaffolds; choice-driven
+> events and hazards keep every run a little different.
 >
 > **The Rival** — Baron Krall periodically challenges you to races for prizes and bragging
 > rights.
@@ -59,8 +68,30 @@ Character counts are for the field limit named in each heading; re-count if you 
 > No pay-to-win, no loot boxes for real money, no expiring pressure — PortMaster stays
 > generous and lets you play at your own pace.
 
-(~1250 characters — trim the last paragraph slightly if a portal's field is hard-capped
-at 1200.)
+(~1600 characters. For a hard 1200 cap, drop the "Living world" and "The Rival" bullets
+first — they're the least load-bearing — and keep the closing honest-pace line, which is
+the differentiator.)
+
+## Positioning — why PortMaster stands out
+
+For anyone writing a listing, pitch, or reply: the big incumbent in this space is a
+200 MB free-to-play app built on the usual live-service scaffolding. Don't name it or
+attack it — position PortMaster *positively* on the three things it is that the incumbent
+structurally is not:
+
+1. **The honest port game.** No energy timers, no gacha, no real-money loot boxes, no
+   pay-to-win, no expiring-FOMO events. Everything that touches the game is earned. This is
+   the lead line — it's the promise the genre routinely breaks.
+2. **Instant, everywhere.** Under 1 MB, opens in a browser tab in seconds on any phone or
+   desktop — no store, no download, no account. Installs as an offline PWA if you want it.
+3. **A world with its own identity.** A floating papercraft diorama you turn like a model in
+   your hand; a civilization timeline from fishing village to neon-futuristic megaport; and
+   a live, visible fleet — you *watch* the storms, raids, construction and voyages, not read
+   about them in a toast.
+
+One-sentence version: *"PortMaster is the honest port game — a floating papercraft world you
+grow from fishing village to futuristic megaport, instantly in your browser, with no energy
+timers, gacha, or pay-to-win."*
 
 ## Tags / categories
 
