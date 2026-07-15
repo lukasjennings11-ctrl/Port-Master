@@ -3037,7 +3037,7 @@
     'Impossible… how are you keeping pace with me?!'
   ];
   var RIVAL_LOSE = ['“Pathetic. The sea favours the bold — and that’s me.”', '“Was that your best? My grandmother ships faster.”', '“Run home, harbourmaster.”'];
-  var RIVAL_WIN = ['“You… beat me? Bah! A fluke!”', '“Impossible! I’ll have my revenge, PortMaster.”', '“Enjoy your trophy. It won’t happen again.”'];
+  var RIVAL_WIN = ['“You… beat me? Bah! A fluke!”', '“Impossible! I’ll have my revenge, Port Boss.”', '“Enjoy your trophy. It won’t happen again.”'];
   var rivalModal = null, rivalPending = false, raceBanner = null;
   function rivalGet() { var d = { stage: 0, wins: 0, losses: 0, race: null }; return (window.Retention && Retention.get(GAME, 'rival', d)) || d; }
   function rivalSet(r) { if (window.Retention) Retention.set(GAME, 'rival', r); }
@@ -3833,7 +3833,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v78';
+  var BUILD_TAG = 'v79';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3932,7 +3932,7 @@
          '🧭 At 3+ charters, pick a <b>Doctrine</b> in Legacy to specialise your run.<br>' +
          '🖐️ Drag to pan · pinch to zoom · twist to rotate.</div>';
     h += '<div class="mp-sec">About</div>';
-    h += '<div class="set-about">PortMaster · build ' + BUILD_TAG +
+    h += '<div class="set-about">Port Boss · build ' + BUILD_TAG +
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
          (charters > 0 ? ' · ' + charters + ' charter' + (charters > 1 ? 's' : '') : '') +
          (leg > 0 ? ' · ✦' + fmt(leg) + ' Legacy' : '') + '</div>';
@@ -3942,7 +3942,7 @@
     // Phase 12b: portal builds get no external links and no PWA install prompt (both disallowed
     // by portal hosts) — just a plain version line instead of the privacy/install row.
     if (PORTAL_MODE) {
-      h += '<div class="set-about set-portal-ver">PortMaster ' + BUILD_TAG + '</div>';
+      h += '<div class="set-about set-portal-ver">Port Boss ' + BUILD_TAG + '</div>';
     } else {
       h += '<div class="mp-grid"><a class="mp-item set-link" href="../../privacy.html" target="_blank" rel="noopener"><span class="mi-n">Privacy policy</span><span class="mi-c">↗</span></a>' +
            '<button class="mp-item set-link" data-set="install"><span class="mi-n">Add to home screen</span><span class="mi-c">⤓</span></button></div>';
@@ -3994,7 +3994,7 @@
   }
   function promptInstall() {
     if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(function () { deferredPrompt = null; }); }
-    else { showHint('Use your browser menu → “Add to Home Screen” to install PortMaster'); }
+    else { showHint('Use your browser menu → “Add to Home Screen” to install Port Boss'); }
   }
 
   // ---- Phase 13d: local fun-funnel metrics — a tiny, privacy-safe launch-analytics instrument.
@@ -4463,7 +4463,7 @@
     metricsInit();   // Phase 13d: local fun-funnel metrics — one row per boot, never blocks/throws
     if (window.Portal) Portal.loadingStart();
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
-    if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play PortMaster.</div>'; return; }
+    if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play Port Boss.</div>'; return; }
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
@@ -4549,7 +4549,7 @@
     if (!window.Retention || Retention.get(GAME, 'seen', false)) return false;
     Retention.set(GAME, 'seen', true);
     var ov = document.createElement('div'); ov.id = 'welcomemodal';
-    ov.innerHTML = '<div class="wm-card"><div class="wm-logo">PortMaster</div>' +
+    ov.innerHTML = '<div class="wm-card"><div class="wm-logo">Port Boss</div>' +
       '<div class="wm-body">Found a harbour on the glowing coast, then grow a humble fishing village into a global trade empire.</div>' +
       '<div class="wm-feat">⚓ Build &amp; trade · ⛵ Expeditions &amp; relics · 🏴‍☠️ race a rival · 🎟️ seasons &amp; ✦ prestige <i>forever</i></div>' +
       '<button class="wm-btn">Begin ⚓</button></div>';

@@ -1,4 +1,4 @@
-/* PortMaster — headless browser integration regression (swiftshader Playwright).
+/* Port Boss — headless browser integration regression (swiftshader Playwright).
  * Drives the full stack via window.__harbor: found → build → advance → event → voyage → relics →
  * rival race → fever → season/pass → daily fortune → prestige, asserting correct outcomes,
  * meta-persistence through prestige, and ZERO console errors. Exit 0 = pass.
@@ -935,7 +935,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   });
   ok('portal mode: ?portal=1 → PORTAL_MODE true, SW not registered, install/privacy rows hidden, plain version shown',
     portalState.portalMode === true && portalState.swRegs === 0 && portalState.installRow === false &&
-    portalState.privacyLink === false && /PortMaster v\d+/.test(portalState.aboutText));
+    portalState.privacyLink === false && /Port Boss v\d+/.test(portalState.aboutText));
   ok('portal mode: zero console/page errors', portalErrs.length === 0);
   await portalPage.close();
 

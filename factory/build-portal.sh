@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# factory/build-portal.sh — PortMaster (HARBOR) self-contained portal builds.
+# factory/build-portal.sh — Port Boss (HARBOR) self-contained portal builds.
 #
 # games/harbor/* references shared libs as `../../shared/*.js` and the root icons as
 # `../../icon-*.png` — paths that only resolve when served from inside the full repo checkout.
@@ -12,11 +12,11 @@
 # Usage:
 #   bash factory/build-portal.sh [crazygames|poki|bare|all]   (default: all)
 # Targets (all share the flatten + SW/manifest strip + PORTAL_MODE force + headless verify):
-#   crazygames -> dist/portmaster-crazygames/  + CrazyGames SDK v3 <script> (window.CrazyGames.SDK)
-#   poki       -> dist/portmaster-poki/         + PokiSDK <script> AND window.__POKI_BUILD__=true
+#   crazygames -> dist/portboss-crazygames/  + CrazyGames SDK v3 <script> (window.CrazyGames.SDK)
+#   poki       -> dist/portboss-poki/         + PokiSDK <script> AND window.__POKI_BUILD__=true
 #                                                 (the marker makes sim.js drop the 'gamble' wager
 #                                                  event — Poki forbids ANY gambling mechanic)
-#   bare       -> dist/portmaster-portal/        no SDK (itch.io / a CrazyGames no-SDK basic launch)
+#   bare       -> dist/portboss-portal/        no SDK (itch.io / a CrazyGames no-SDK basic launch)
 # The injected SDK <script> is the ONE allowed external reference (the portal's own CDN); offline
 # (e.g. in headless verify) it simply fails to load and shared/portal.js no-ops, so the game still
 # boots identically — window.ADS falls back to the free stub. On the real portal the CDN loads and
@@ -44,9 +44,9 @@ build_one() {
   local target="$1"
   local name sdk_tag poki_marker
   case "$target" in
-    crazygames) name="portmaster-crazygames"; sdk_tag="$CG_SDK";   poki_marker="" ;;
-    poki)       name="portmaster-poki";        sdk_tag="$POKI_SDK"; poki_marker="1" ;;
-    bare)       name="portmaster-portal";      sdk_tag="";          poki_marker="" ;;
+    crazygames) name="portboss-crazygames"; sdk_tag="$CG_SDK";   poki_marker="" ;;
+    poki)       name="portboss-poki";        sdk_tag="$POKI_SDK"; poki_marker="1" ;;
+    bare)       name="portboss-portal";      sdk_tag="";          poki_marker="" ;;
   esac
   local OUT="$REPO/dist/$name"
   local ZIP="$REPO/dist/$name.zip"

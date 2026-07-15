@@ -12,14 +12,14 @@
  *     expected to fail offline in this sandbox; on the real portal it loads and window.ADS routes to it)
  *   - poki target: window.__POKI_BUILD__ === true AND HARBOR_SIM.eventExcluded('gamble') === true
  *
- * Env: VERIFY_OUT (dist subdir, default 'portmaster-portal'), VERIFY_TARGET ('crazygames'|'poki'|'bare').
+ * Env: VERIFY_OUT (dist subdir, default 'portboss-portal'), VERIFY_TARGET ('crazygames'|'poki'|'bare').
  * Run: node factory/verify-portal-build.js   (wired as the last step of build-portal.sh per target)
  * Exit 0 = pass, non-zero = fail.
  */
 'use strict';
 const http = require('http'), fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const OUT = path.join(ROOT, 'dist', process.env.VERIFY_OUT || 'portmaster-portal');
+const OUT = path.join(ROOT, 'dist', process.env.VERIFY_OUT || 'portboss-portal');
 const TARGET = process.env.VERIFY_TARGET || '';
 const PORT = Number(process.env.VERIFY_PORT) || 8299;
 

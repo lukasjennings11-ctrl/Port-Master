@@ -1,4 +1,4 @@
-# PortMaster — Launch KPI Scorecard
+# Port Boss — Launch KPI Scorecard
 
 *Phase 13d. Thresholds below are written now, before CrazyGames/Poki submission — see
 [`DISTRIBUTION.md`](DISTRIBUTION.md) for the submission steps and
