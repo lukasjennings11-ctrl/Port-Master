@@ -4,15 +4,21 @@
 ## post flaired **Prototype**; read the sub rules first — self-promo outside FF needs the flair)
 
 **Title:**
-PortMaster — a cartoon 3D port-builder idle (WebGL, free, no ads/accounts) — brutal feedback wanted
+PortMaster — a papercraft 3D port-builder idle (WebGL, free, no ads/accounts/pay-to-win) — brutal feedback wanted
 
 **Body:**
 Hey r/incremental_games — I've been building **PortMaster**, a free browser idle/tycoon where
-you found a harbour on a wild coast and grow it into a global trade empire. Cartoon 3D
-(hand-rolled WebGL2, tilt-shift "miniature" look), works on phones, no install/account/ads.
+you found a harbour on a wild coast and grow it from a fishing village all the way to a
+neon-futuristic megaport. The whole world is a floating **papercraft diorama** — a hand-cut
+island slab adrift in space with waterfalls off the edges, that you turn like a model in your
+hand (hand-rolled WebGL2). Works on phones, no install/account/ads, and I'm holding a hard
+line on it: no energy timers, no gacha, no pay-to-win.
 
-Systems: production chains with building synergies + per-port specialisation · trade routes
-between islands · timed expeditions that resolve offline · storms & defenses · a rival baron
+Systems: production chains with building synergies + per-port specialisation · a civilization
+timeline across eight ages that remodels the harbour and your ships as you advance · a fleet
+registry & navy (commission and evolve a working fleet, from rowboats to solar trimarans) ·
+trade routes between islands · timed expeditions that resolve offline · **visible** storms,
+pirate raids and construction (you watch them happen, not just read a banner) · a rival baron
 with races · relic collections & loadouts · endless prestige with branching doctrines ·
 seasons with a free pass · daily fortune/missions/market tide.
 
@@ -32,17 +38,20 @@ patch fast based on this thread. Thanks! ⚓
 
 ## itch.io page blurb (create as "released" or "in development", price: free / donations on)
 
-**Tagline:** Grow a fishing village into a global trade empire — a cosy cartoon idle port-builder.
+**Tagline:** Grow a fishing village into a futuristic megaport — a cosy papercraft idle port-builder.
 
 **Description:**
 Found your harbour on a wild coastline. Build huts, markets and shipyards; watch your little
-port come alive — boats sailing, gulls wheeling, storms rolling in at dusk. Send expeditions
-over the horizon, run trade routes between islands, outsmart Baron Krall, collect relics, and
-when your empire peaks — sign a new charter and prestige into a stronger one, forever.
+paper port come alive — boats sailing, gulls wheeling, storms rolling in at dusk, corsairs at
+the quay. Send expeditions over the horizon, run trade routes between islands, outsmart Baron
+Krall, collect relics, march your harbour up a timeline from fishing village to a neon-future
+megaport, and when your empire peaks — sign a new charter and prestige into a stronger one,
+forever.
 
 - Plays in any modern browser, phone-first. Installs as an app, works offline.
-- No ads, no accounts, no paywalls, no pay-to-win. Free.
-- Day/night cycle, painted-light graphics with a tilt-shift miniature look, living audio.
+- No ads, no accounts, no paywalls, no pay-to-win, no energy timers. Free.
+- A floating papercraft-diorama world you turn like a model in your hand, with a full day/night
+  cycle and living audio.
 
 **Feedback wanted:** pacing, clarity, and your quit moment — comment or use the community tab.
 
