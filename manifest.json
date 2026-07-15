@@ -1,6 +1,6 @@
 {
-  "name": "PortMaster",
-  "short_name": "PortMaster",
+  "name": "Port Boss",
+  "short_name": "Port Boss",
   "description": "Ten browser games. No installs. No accounts. Pick one and play.",
   "start_url": ".",
   "display": "standalone",

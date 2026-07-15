@@ -1,4 +1,4 @@
-/* PortMaster — headless economy/systems regression (Node, no DOM).
+/* Port Boss — headless economy/systems regression (Node, no DOM).
  * Deterministic: seeds HARBOR_SIM.__setRng so events/voyages/crates are reproducible.
  * Covers: core economy, the event engine, expeditions, META application (relic/legacy bonuses),
  * save migration from a pre-Phase-7 blob, and asserted balance bounds.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PortMaster regression suite — run from anywhere.
+# Port Boss regression suite — run from anywhere.
 #   bash games/harbor/tests/run.sh
 # Runs: headless sim/systems test (Node) + headless browser integration (Playwright) +
 # the portal pre-flight (factory/playtest.py). Non-zero exit if any stage fails.

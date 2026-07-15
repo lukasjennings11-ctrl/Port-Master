@@ -1,19 +1,19 @@
-# PortMaster
+# Port Boss
 
-**[Play PortMaster free →](https://lukasjennings11-ctrl.github.io/Port-Master/games/harbor/)**
+**[Play Port Boss free →](https://lukasjennings11-ctrl.github.io/Port-Master/games/harbor/)**
 
-PortMaster is a free, browser-based idle tycoon game: found a harbour on a wild coastline and grow
+Port Boss is a free, browser-based idle tycoon game: found a harbour on a wild coastline and grow
 it from a humble fishing village into a global trade empire — build and upgrade a living port, send
 ships on expeditions, weather storms, fend off pirate raids, race a rival baron, and prestige for
 permanent multipliers. The whole world is a floating papercraft diorama — a hand-cut island slab
 adrift in soft space, waterfalls spilling off its edges — rendered in a zero-dependency WebGL2
 engine. No install, no account, no paywall — open the link and play.
 
-![PortMaster screenshot](games/harbor/screenshot.png)
+![Port Boss screenshot](games/harbor/screenshot.png)
 
 ## What makes it different
 
-PortMaster is the **honest** port game. It runs instantly in a browser tab (well under 1 MB, no
+Port Boss is the **honest** port game. It runs instantly in a browser tab (well under 1 MB, no
 200 MB download, no store gate), and it holds a hard line the free-to-play port genre usually
 crosses: **no energy timers, no gacha, no real-money loot boxes, no pay-to-win, no expiring-FOMO
 pressure.** You play at your own pace and everything that affects the game is earned.
@@ -49,7 +49,7 @@ ships cast off, not just read about them in a banner.
   behind a pluggable ad-provider abstraction — free on our own site, real rewarded ads on portals.
 - **Living world** — ambient boats, gulls, chimney smoke, weather and a full day/night audio and
   lighting cycle that reacts to what you've built.
-- **Installable PWA** — add PortMaster to your home screen and keep playing fully offline.
+- **Installable PWA** — add Port Boss to your home screen and keep playing fully offline.
 
 ## Tech
 

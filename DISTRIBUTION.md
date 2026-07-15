@@ -1,4 +1,4 @@
-# PortMaster — Distribution Kit
+# Port Boss — Distribution Kit
 
 *Phase 12c. Everything below is either already built (the portal package, this doc) or a
 concrete, ordered checklist of the account/business steps that only you can do. Read
@@ -21,9 +21,9 @@ portal disallows, stripped — with the correct portal SDK injected:
 
 | Target | Output | What's baked in |
 |---|---|---|
-| `crazygames` | `dist/portmaster-crazygames{,.zip}` | CrazyGames SDK v3 `<script>` in `<head>` |
-| `poki` | `dist/portmaster-poki{,.zip}` | Poki SDK `<script>` **and the `gamble` event dropped** (Poki forbids any gambling mechanic) |
-| `bare` | `dist/portmaster-portal{,.zip}` | no SDK — itch.io, or a CrazyGames no-SDK "basic launch" |
+| `crazygames` | `dist/portboss-crazygames{,.zip}` | CrazyGames SDK v3 `<script>` in `<head>` |
+| `poki` | `dist/portboss-poki{,.zip}` | Poki SDK `<script>` **and the `gamble` event dropped** (Poki forbids any gambling mechanic) |
+| `bare` | `dist/portboss-portal{,.zip}` | no SDK — itch.io, or a CrazyGames no-SDK "basic launch" |
 
 Each is ~0.9 MB zipped / ~2.1 MB unzipped — comfortably under both portals' size limits (see
 below). When a portal's own CDN serves the injected SDK, `games/harbor/ads.js` auto-routes the
@@ -43,10 +43,10 @@ script any time `games/harbor/` changes and re-upload.
 
 - **Account:** [developer.crazygames.com](https://developer.crazygames.com/) — free
   developer account, no fee.
-- **Upload:** `dist/portmaster-crazygames.zip` (SDK baked in) via the developer portal's
-  "Add game" flow. (Or `dist/portmaster-portal.zip` for a no-SDK basic launch — see the SDK note.)
+- **Upload:** `dist/portboss-crazygames.zip` (SDK baked in) via the developer portal's
+  "Add game" flow. (Or `dist/portboss-portal.zip` for a no-SDK basic launch — see the SDK note.)
 - **Form fields to expect:**
-  - Title: `PortMaster` (see `factory/store-copy.md`)
+  - Title: `Port Boss` (see `factory/store-copy.md`)
   - Short description / tagline, full description → copy from `factory/store-copy.md`
   - Category: **Idle** (secondary: Strategy/Simulation) — see `factory/store-copy.md`
     for the full tag list
@@ -59,7 +59,7 @@ script any time `games/harbor/` changes and re-upload.
     We don't have a 16:9 landscape cover yet — see the Asset Inventory below for how
     to capture one.
   - Age rating questionnaire → answer from `factory/store-copy.md`'s age-rating table.
-    CrazyGames requires PEGI 12 compliance at minimum; PortMaster (no violence, no real
+    CrazyGames requires PEGI 12 compliance at minimum; Port Boss (no violence, no real
     gambling, no UGC) clears that easily — just disclose the Merchant's Gamble
     in-game-currency wager honestly where asked.
 - **Review timeline:** fast relative to Poki — games can go live in days once uploaded
@@ -71,8 +71,8 @@ script any time `games/harbor/` changes and re-upload.
   (`sdkGameLoadingStart/Stop`), gameplay bracket (`gameplayStart` on found/resume/visibility,
   `gameplayStop` on background), interstitial at era-ascension, and rewarded video for the
   Captain's Bonus, all with audio muted for the ad's duration.
-  - **Two paths remain, both valid:** upload `dist/portmaster-crazygames.zip` (SDK baked in →
-    eligible for Full Launch / rev-share immediately), or `dist/portmaster-portal.zip` (no SDK →
+  - **Two paths remain, both valid:** upload `dist/portboss-crazygames.zip` (SDK baked in →
+    eligible for Full Launch / rev-share immediately), or `dist/portboss-portal.zip` (no SDK →
     a faster "basic launch"; ads/rev-share come later by switching to the crazygames zip). Both
     clear the size caps (≤50 MB total, ≤20 MB for the mobile homepage; our builds are ~2 MB).
   - **Before uploading, confirm the SDK URL/version** on the CrazyGames dashboard and update
@@ -85,7 +85,7 @@ script any time `games/harbor/` changes and re-upload.
 - **Account:** apply via [developers.poki.com](https://developers.poki.com/) — Poki is
   **hand-curated**: every game is reviewed by a human before acceptance, so expect
   feedback loops rather than an instant yes/no.
-- **Upload:** `dist/portmaster-poki.zip` (Poki SDK baked in, gambling event removed).
+- **Upload:** `dist/portboss-poki.zip` (Poki SDK baked in, gambling event removed).
 - **Form fields to expect:** same shape as CrazyGames (title, description, category,
   controls, cover art) — reuse `factory/store-copy.md`. Poki's own review stages, in
   order, each with its own turnaround: Player Fit Test (need ≥25% of 500 players to play
@@ -111,7 +111,7 @@ script any time `games/harbor/` changes and re-upload.
   is the unified adapter — it detects `window.PokiSDK` and maps every call onto it (promise-style
   ad breaks, `gameLoadingFinished` on loader hide) — and the `poki` build injects the PokiSDK
   `<script>`. `games/harbor/ads.js` routes the Captain's Bonus + era interstitial through it. So you
-  can apply AND pass the Web Fit Test with `dist/portmaster-poki.zip` as-is.
+  can apply AND pass the Web Fit Test with `dist/portboss-poki.zip` as-is.
   - **Before uploading, confirm the PokiSDK URL** on developers.poki.com and update `POKI_SDK` in
     `factory/build-portal.sh` if it differs; the adapter is feature-detected so a missing method
     degrades to a no-op, but the `<script src>` must be a real current build.
@@ -132,10 +132,10 @@ npx cap open android              # opens Android Studio
 
 **`webDir` — change this before adding a platform.** `capacitor.config.json` currently
 sets `"webDir": "."` (the entire repo root: every game, `tests/`, `factory/`, `README.md`,
-etc). Point it at a clean build instead so the shipped app is just PortMaster:
+etc). Point it at a clean build instead so the shipped app is just Port Boss:
 
 ```json
-"webDir": "dist/portmaster-portal"
+"webDir": "dist/portboss-portal"
 ```
 
 Handily, the portal build already strips the service worker and PWA manifest — both are
@@ -146,7 +146,7 @@ as the native web asset build. Run it before every `npx cap sync`.
 `capacitor.config.json` currently has `com.prismplay.arcade`, left over from an earlier
 project name. Once an app is published under an `appId`, it cannot be changed without
 publishing as an entirely new app listing (losing reviews/rankings/updates path). Rename
-it now, before `cap add`, e.g. to `com.portmaster.arcade` or `com.portmaster.app` —
+it now, before `cap add`, e.g. to `com.portboss.arcade` or `com.portboss.app` —
 pick the final name deliberately.
 
 **Android (Google Play):**

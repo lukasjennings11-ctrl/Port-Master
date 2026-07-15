@@ -1,9 +1,9 @@
-/* PortMaster — game-scoped service worker.
+/* Port Boss — game-scoped service worker.
    Scope: /games/harbor/. Precaches the full game shell + runtime assets so
-   PortMaster installs as a standalone app and runs entirely offline.
+   Port Boss installs as a standalone app and runs entirely offline.
    Network-first: always try the live file (so new builds show up immediately),
    fall back to cache when offline. Bump CACHE on every asset/version change. */
-const CACHE = 'portmaster-v44';
+const CACHE = 'portboss-v45';
 const PRECACHE = [
   './',
   'index.html',
@@ -13,17 +13,17 @@ const PRECACHE = [
   '../../icon-512.png',
   '../../shared/juice.js?v=1',
   '../../shared/retention.js?v=1',
-  '../../shared/portal.js?v=2',
+  '../../shared/portal.js?v=3',
   '../../shared/progression.js?v=1',
   '../../shared/stage.js?v=1',
-  'gl.js?v=78',
-  'gltf.js?v=78',
-  'biomes.js?v=78',
-  'assets.js?v=78',
-  'models.js?v=78',
-  'sim.js?v=78',
-  'ads.js?v=78',
-  'game.js?v=78',
+  'gl.js?v=79',
+  'gltf.js?v=79',
+  'biomes.js?v=79',
+  'assets.js?v=79',
+  'models.js?v=79',
+  'sim.js?v=79',
+  'ads.js?v=79',
+  'game.js?v=79',
   'fonts/Fredoka-400.woff2',
   'fonts/Fredoka-600.woff2',
   'fonts/Fredoka-700.woff2',

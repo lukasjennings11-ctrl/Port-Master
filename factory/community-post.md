@@ -4,10 +4,10 @@
 ## post flaired **Prototype**; read the sub rules first — self-promo outside FF needs the flair)
 
 **Title:**
-PortMaster — a papercraft 3D port-builder idle (WebGL, free, no ads/accounts/pay-to-win) — brutal feedback wanted
+Port Boss — a papercraft 3D port-builder idle (WebGL, free, no ads/accounts/pay-to-win) — brutal feedback wanted
 
 **Body:**
-Hey r/incremental_games — I've been building **PortMaster**, a free browser idle/tycoon where
+Hey r/incremental_games — I've been building **Port Boss**, a free browser idle/tycoon where
 you found a harbour on a wild coast and grow it from a fishing village all the way to a
 neon-futuristic megaport. The whole world is a floating **papercraft diorama** — a hand-cut
 island slab adrift in space with waterfalls off the edges, that you turn like a model in your
