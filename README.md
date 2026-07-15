@@ -3,22 +3,43 @@
 **[Play PortMaster free →](https://lukasjennings11-ctrl.github.io/Port-Master/games/harbor/)**
 
 PortMaster is a free, browser-based idle tycoon game: found a harbour on a wild coastline and grow
-it from a humble fishing village into a global trade empire — build and upgrade a living cartoon
-port, send ships on expeditions, weather storms, race a rival baron, and prestige for permanent
-multipliers, all rendered in a warm, hand-tuned WebGL2 scene. No install, no account, no paywall —
-open the link and play.
+it from a humble fishing village into a global trade empire — build and upgrade a living port, send
+ships on expeditions, weather storms, fend off pirate raids, race a rival baron, and prestige for
+permanent multipliers. The whole world is a floating papercraft diorama — a hand-cut island slab
+adrift in soft space, waterfalls spilling off its edges — rendered in a zero-dependency WebGL2
+engine. No install, no account, no paywall — open the link and play.
 
 ![PortMaster screenshot](games/harbor/screenshot.png)
 
+## What makes it different
+
+PortMaster is the **honest** port game. It runs instantly in a browser tab (well under 1 MB, no
+200 MB download, no store gate), and it holds a hard line the free-to-play port genre usually
+crosses: **no energy timers, no gacha, no real-money loot boxes, no pay-to-win, no expiring-FOMO
+pressure.** You play at your own pace and everything that affects the game is earned.
+
+On top of that honesty it has its own identity: a **floating papercraft diorama** you turn like a
+model in your hand; a **civilization timeline** that carries a fishing village all the way to a
+near-future automated harbour and a neon-futuristic megaport; and a **live, visible fleet** that
+evolves as you advance the ages — you watch storms roll in, pirates sail up to the quay, and your
+ships cast off, not just read about them in a banner.
+
 ## Features
 
-- **Build & grow** — fishing huts, cottages, markets, factories and docks across five hand-authored
-  eras (fishing village → global trade hub), each unlocking new buildings, biomes and mechanics.
+- **Build & grow** — fishing huts, cottages, markets, factories and docks across eight hand-authored
+  ages, from a humble fishing village through an automated harbour to a neon-futuristic megaport,
+  each unlocking new buildings, biomes and mechanics.
+- **Empire Timeline** — a visible age ladder tracks your journey; advancing an era changes the
+  architecture, the technology and the ships in your harbour, not just the numbers.
+- **Fleet Registry & Navy** — commission and evolve your working fleet across a deep matrix of ship
+  classes (fishing, trade and expedition ladders that modernise with the ages), and build a navy to
+  auto-defend against raiders.
 - **Trade network** — link founded ports together into routes for passive income across the map.
 - **Expeditions & relics** — send ships on timed voyages that pay out even while you're away; relics
   drop from voyages and crates, and complete sets grant permanent bonuses.
-- **Dynamic events & storms** — choice-driven events and weather hazards that damage and require
-  rebuilding your port, keeping every run a little different.
+- **Visible world drama** — storms darken the sky and whip up the sea, pirate corsairs sail up to
+  your quay for a confetti-cannon stand-off, buildings rise behind paper scaffolds, and expeditions
+  cast off from the dock — the events the game describes are events you watch happen.
 - **The Rival** — Baron Krall periodically challenges you to races for prizes and bragging rights.
 - **Legacy & doctrines** — prestige for permanent multipliers, then specialise your next run down a
   branching doctrine tree with capstones and an equippable relic loadout.
