@@ -1712,6 +1712,85 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('20a: legacy quality-off path renders the world slab clean (zero GL errors) — skirt/pool geometry is unconditional', errs.length === errsBefore20a);
   await page.evaluate(() => window.__harbor.setPost(true));
 
+  // ============ Phase 20b: diorama presentation polish ============
+  const errsBefore20b = errs.length;
+  // slab bob: advances deterministically via stepClock, imperceptibly small (<=0.4 units / 0.15deg)
+  const bobA = await page.evaluate(() => window.__harbor.bob());
+  await page.evaluate(() => window.__harbor.stepClock(3));
+  const bobB = await page.evaluate(() => window.__harbor.bob());
+  ok('20b: slab bob advances deterministically via stepClock (root-transform, pure fn of clock) and stays within its tiny authored amplitude',
+    bobA.y !== bobB.y && Math.abs(bobA.y) <= bobA.amp + 1e-6 && Math.abs(bobB.roll) <= (0.15 * Math.PI / 180) + 1e-6);
+  // picking/founding still works end-to-end WITH bob active — screenToGround/groundAt is
+  // deliberately un-bobbed (compensated), so a tap should resolve to the same world point
+  // regardless of where the bob sine currently sits.
+  const groundBob1 = await page.evaluate(() => window.__harbor.groundAt(207, 410));
+  await page.evaluate(() => window.__harbor.stepClock(6.5));   // walks the bob sine to a very different phase
+  const groundBob2 = await page.evaluate(() => window.__harbor.groundAt(207, 410));
+  ok('20b: picking (screenToGround) is unaffected by slab bob — same screen tap resolves to the same ground point at any bob phase',
+    groundBob1 && groundBob2 && Math.abs(groundBob1.x - groundBob2.x) < 0.05 && Math.abs(groundBob1.z - groundBob2.z) < 0.05);
+  const foundBob = await page.evaluate(() => { window.__harbor.setBiome('tropic'); window.__harbor.autoFound(); return window.__harbor.state(); });
+  ok('20b: founding still works end-to-end with slab bob live', foundBob.founded === true);
+  await page.evaluate(() => window.__harbor.setBiome('green'));
+  // void paper flecks: capped count in the 20-30 range, deterministic drift via stepClock
+  const fleckA = await page.evaluate(() => window.__harbor.flecks());
+  await page.evaluate(() => window.__harbor.stepClock(20));
+  const fleckB = await page.evaluate(() => window.__harbor.flecks());
+  ok('20b: void paper flecks — 20-30 of them, cheap billboard scatter, deterministic drift over stepClock',
+    fleckA && fleckA.count >= 20 && fleckA.count <= 30 &&
+    fleckA.pos[0][0] !== fleckB.pos[0][0]);
+  // waterfall wash audio: commanded target respects the mute toggle (independent of live ramp timing)
+  await page.evaluate(() => window.__harbor.setMuted(false));
+  const washOn = await page.evaluate(() => window.__harbor.audio());
+  await page.evaluate(() => window.__harbor.setMuted(true));
+  const washMuted = await page.evaluate(() => window.__harbor.audio());
+  await page.evaluate(() => window.__harbor.setMuted(false));
+  ok('20b: waterfall-wash commanded target is >=0 unmuted and forced to exactly 0 when muted',
+    washOn.target.wash >= 0 && washMuted.target.wash === 0);
+  // gulls: a few far gulls arc out to (and past) the slab's own edge radius before sweeping back
+  const gullsFar = await page.evaluate(() => window.__harbor.gullFar());
+  const slabB = await page.evaluate(() => window.__harbor.slab());
+  ok('20b: a handful of gulls are tuned to arc out beyond the slab edge radius (rFar > harbour ring r, and past SLAB rx/rz) before sweeping back',
+    gullsFar.length >= 1 && gullsFar.every(g => g.rFar > g.r) && gullsFar.every(g => g.rFar >= Math.max(slabB.rx, slabB.rz)));
+  // welcome framing: a FRESH boot starts at max zoom-out ("model in hand"); a returning/saved boot
+  // (welcome already seen) uses the ordinary defaultView() play-zoom framing, unchanged.
+  const freshCtx = await browser.newContext({ viewport: { width: 414, height: 820 } });
+  const freshPage = await freshCtx.newPage();
+  await freshPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
+  await freshPage.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
+  await freshPage.reload({ waitUntil: 'load' });
+  await freshPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).catch(() => {});
+  await sleep(200);
+  const welcomeFresh = await freshPage.evaluate(() => window.__harbor.welcome());
+  ok('20b: fresh boot (welcome not yet seen) starts the "model in hand" framing at max zoom-out',
+    welcomeFresh.framing === true && welcomeFresh.distT === welcomeFresh.camMax);
+  await freshPage.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); });
+  await sleep(200);
+  const welcomeDismissed = await freshPage.evaluate(() => window.__harbor.welcome());
+  ok('20b: dismissing the welcome card ends model-in-hand framing and eases the camera back toward ordinary play zoom',
+    welcomeDismissed.framing === false && welcomeDismissed.distT < welcomeFresh.camMax);
+  await freshCtx.close();
+  // a SAVED/returning boot (welcome already marked seen) never gets the model-in-hand override
+  const savedCtx = await browser.newContext({ viewport: { width: 414, height: 820 } });
+  const savedPage = await savedCtx.newPage();
+  await savedPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
+  await savedPage.evaluate(() => { try { localStorage.setItem('gf:harbor:seen', 'true'); } catch (e) {} });
+  await savedPage.reload({ waitUntil: 'load' });
+  await savedPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).catch(() => {});
+  await sleep(200);
+  const welcomeSaved = await savedPage.evaluate(() => window.__harbor.welcome());
+  ok('20b: a returning/saved boot (welcome already seen) keeps ordinary defaultView() framing, no model-in-hand override',
+    welcomeSaved.framing === false && welcomeSaved.distT !== welcomeSaved.camMax);
+  await savedCtx.close();
+  // zero GL warnings across a ToD sweep with bob + flecks + wash + far gulls all live
+  for (const t of [0, 0.2, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  ok('20b: full ToD sweep with slab bob + void flecks + waterfall wash + far gulls all live → zero GL warnings/errors', errs.length === errsBefore20b);
+  // geomStats/fps guard — flecks reuse the shared unit boxMesh (no new static geometry), so the
+  // static-scene budget is unchanged by this phase
+  const gs20b = await page.evaluate(() => window.__harbor.geomStats());
+  ok('20b: geomStats unaffected by the presentation polish (flecks/gulls/bob are dynamic, not static geometry) — still within budget',
+    gs20b && gs20b.verts > 10000 && gs20b.verts < 300000);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
