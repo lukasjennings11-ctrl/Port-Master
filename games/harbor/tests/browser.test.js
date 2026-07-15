@@ -887,6 +887,32 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   const cbAfter = await page.evaluate(() => window.ADS._counts.commercialBreak);
   ok('ads: commercialBreak() fires on era advance, before the ascension cinematic', cbAfter === cbBefore + 1);
 
+  // portal SDK routing (rejection guard): when a real portal SDK is hosting us (window.Portal.available),
+  // window.ADS must ROUTE rewarded/commercial/gameplay to it — never grant a reward via the free stub
+  // with NO ad shown (the "watch ad → reward, no ad" flow a portal QA rejects). Mock window.Portal to
+  // prove the routing without a live SDK, then restore it.
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); });
+  const route = await page.evaluate(() => {
+    var P = window.Portal, saved = { av: P.available, ra: P.rewardedAd, cb: P.commercialBreak, gs: P.gameStart, gt: P.gameStop };
+    var calls = { reward: 0, commercial: 0, start: 0, stop: 0 };
+    P.available = true;
+    P.rewardedAd = function (onR) { calls.reward++; onR(); };
+    P.commercialBreak = function (done) { calls.commercial++; done(); };
+    P.gameStart = function () { calls.start++; };
+    P.gameStop = function () { calls.stop++; };
+    var granted = 0, broke = 0;
+    window.ADS.showRewarded(function () { granted++; }, function () {});
+    window.ADS.commercialBreak(function () { broke++; });
+    window.ADS.gameplayStart();
+    window.ADS.gameplayStop();
+    P.available = saved.av; P.rewardedAd = saved.ra; P.commercialBreak = saved.cb; P.gameStart = saved.gs; P.gameStop = saved.gt;
+    return { calls: calls, granted: granted, broke: broke };
+  });
+  ok('portal-route: window.ADS.showRewarded → Portal.rewardedAd when a real SDK is present (reward comes only from the SDK)', route.calls.reward === 1 && route.granted === 1);
+  ok('portal-route: window.ADS.commercialBreak → Portal.commercialBreak', route.calls.commercial === 1 && route.broke === 1);
+  ok('portal-route: gameplayStart/Stop forward to Portal.gameStart/gameStop', route.calls.start === 1 && route.calls.stop === 1);
+  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); });
+
   // portal mode (?portal=1): service worker not registered, "Add to home screen" + privacy link
   // hidden, plain version line shown instead. Fresh context/page — independent of `page` above.
   const portalPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
@@ -1726,8 +1752,11 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   const groundBob1 = await page.evaluate(() => window.__harbor.groundAt(207, 410));
   await page.evaluate(() => window.__harbor.stepClock(6.5));   // walks the bob sine to a very different phase
   const groundBob2 = await page.evaluate(() => window.__harbor.groundAt(207, 410));
+  // tolerance 0.15 world-units: un-compensated picking would drift by ~the bob amplitude (±0.4u), so
+  // 0.15 still cleanly proves the compensation while absorbing swiftshader's per-frame FP jitter in
+  // the projection (a tighter 0.05 occasionally flaked without ever indicating a real regression).
   ok('20b: picking (screenToGround) is unaffected by slab bob — same screen tap resolves to the same ground point at any bob phase',
-    groundBob1 && groundBob2 && Math.abs(groundBob1.x - groundBob2.x) < 0.05 && Math.abs(groundBob1.z - groundBob2.z) < 0.05);
+    groundBob1 && groundBob2 && Math.abs(groundBob1.x - groundBob2.x) < 0.15 && Math.abs(groundBob1.z - groundBob2.z) < 0.15);
   const foundBob = await page.evaluate(() => { window.__harbor.setBiome('tropic'); window.__harbor.autoFound(); return window.__harbor.state(); });
   ok('20b: founding still works end-to-end with slab bob live', foundBob.founded === true);
   await page.evaluate(() => window.__harbor.setBiome('green'));

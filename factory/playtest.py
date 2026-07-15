@@ -47,7 +47,7 @@ def main():
         check("viewport" in html, "has viewport meta (mobile)")
         check("shared/juice.js" in html, "includes shared/juice.js")
         check("shared/retention.js" in html, "includes shared/retention.js")
-        check("shared/portal.js" in html, "includes shared/portal.js (CrazyGames SDK adapter)")
+        check("shared/portal.js" in html, "includes shared/portal.js (CrazyGames + Poki SDK adapter)")
         check('id="loader"' in html, "has a loading screen (#loader)")
 
         # portal compliance: NO external links anywhere (instant CrazyGames reject)
@@ -76,8 +76,22 @@ def main():
         check(re.search(r"window\.__\w+\s*=", js) is not None,
               "exposes a window.__<slug> test hook")
         check("Portal.init" in js, "calls Portal.init() (SDK boot)")
-        check("Portal.gameStart" in js, "calls Portal.gameStart() (gameplay event)")
+        # The gameplay bracket is wired through adsGameplayStart/Stop (called on found / resume /
+        # visibility) → window.ADS → the portal SDK's gameStart/gameStop — a single choke point, so
+        # the bracket opens on ACTUAL gameplay, not merely at boot. (Older builds called
+        # Portal.gameStart() directly at boot, which opened the CrazyGames bracket too early.)
+        check("adsGameplayStart" in js and "adsGameplayStop" in js,
+              "wires the gameplay bracket (found/resume/visibility → window.ADS → SDK)")
         check("itch.io" not in js, "no itch.io references in game.js")
+
+    # ads.js must ROUTE rewarded/commercial/gameplay to the real portal SDK when one is hosting us —
+    # otherwise a "watch ad" button grants a reward with no ad shown (a portal-QA rejection risk).
+    ajs = os.path.join(gdir, "ads.js")
+    if os.path.isfile(ajs):
+        with open(ajs) as f:
+            aj = f.read()
+        check("activeSDK" in aj and "rewardedAd" in aj and "gameStart" in aj,
+              "ads.js routes rewarded/commercial/gameplay to the portal SDK (window.Portal)")
 
     # --- HTTP smoke (only if the dev server is running) ---
     base = "http://localhost:%d" % args.port
