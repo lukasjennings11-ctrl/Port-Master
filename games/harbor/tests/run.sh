@@ -17,7 +17,9 @@ echo "== [2/3] browser integration (headless swiftshader) =="
 
 echo "== [3/3] portal pre-flight (factory/playtest.py) =="
 if command -v python3 >/dev/null 2>&1; then
-  ( cd "$REPO" && python3 factory/playtest.py harbor 2>&1 | tail -1 ) || fail=1
+  # NB: `set -o pipefail` so playtest.py's exit code propagates through the `| tail` (without it the
+  # pipeline always reported tail's 0, silently masking pre-flight failures).
+  ( cd "$REPO" && set -o pipefail && python3 factory/playtest.py harbor 2>&1 | tail -1 ) || fail=1
 else
   echo "  (python3 unavailable — skipped)"
 fi
