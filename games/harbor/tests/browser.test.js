@@ -1372,8 +1372,12 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
 
   await page.evaluate(() => window.__harbor.setEra(3));   // deterministic era for the port-dressing checks below
   const ts18a = await page.evaluate(() => window.__harbor.terrainStats());
-  ok('18a: terrain vert count reflects per-face duplication — 4 verts/quad (~4x the old ~54k shared-vertex mesh), within budget',
-    ts18a && ts18a.terrain.quads > 50000 && ts18a.terrain.verts === ts18a.terrain.quads * 4 && ts18a.terrain.verts > 160000 && ts18a.terrain.verts < 260000);
+  // Phase 20a: the quad-count floor dropped from 50000->30000 — buildFieldMesh now CLIPS terrain
+  // quads to the SLAB ellipse (THE FLOATING DIORAMA), so the old unbounded-ocean-plate flat quads
+  // stretching to the far WORLD.W edge are gone; the vert-per-quad contract and the vert budget
+  // window are otherwise unchanged (see terrainStats().skirt for the new cliff-skirt geometry).
+  ok('18a/20a: terrain vert count reflects per-face duplication — 4 verts/quad, clipped to the SLAB (no more unbounded ocean plate), within budget',
+    ts18a && ts18a.terrain.quads > 30000 && ts18a.terrain.verts === ts18a.terrain.quads * 4 && ts18a.terrain.verts > 120000 && ts18a.terrain.verts < 260000);
   ok('18a: coastal/biome dressing present for the active (green) world — rocks + shelves + beach speckle',
     ts18a && ts18a.dressing && ts18a.dressing.rock > 0 && ts18a.dressing.shelf > 0 && ts18a.dressing.speckle > 0);
   ok('18a: founded-port dressing present at era3 (apron/dock/path/fence/quay clutter), clutter capped at 14 props',
@@ -1645,6 +1649,67 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // legacy quality-off path with the 19c water fade + paper UI live
   await page.evaluate(() => window.__harbor.setPost(false)); await sleep(300);
   ok('19c: legacy quality-off path renders clean with the band-contrast fade + paper UI live (zero GL errors)', errs.length === errsBefore19c);
+  await page.evaluate(() => window.__harbor.setPost(true));
+
+  // ============ Phase 20a: THE FLOATING DIORAMA — the world slab ============
+  // The world stops being an infinite-sea landscape and becomes a finite floating OBJECT: a
+  // stratified cliff-skirt + rocky underside around a SLAB boundary, a bounded sea pool with paper
+  // waterfalls spilling over the rim, a pure card-gradient sky backdrop with NO horizon line, a
+  // reframed camera that can see the slab edge/underside, and departure paper-fold at the boundary.
+  const errsBefore20a = errs.length;
+  // skirt/underside geometry present per biome — terrainStats().skirt (models.js buildSkirtMesh)
+  const ts20aGreen = await page.evaluate(() => { window.__harbor.setBiome('green'); return window.__harbor.terrainStats(); });
+  const ts20aMtn = await page.evaluate(() => { window.__harbor.setBiome('mountain'); return window.__harbor.terrainStats(); });
+  const ts20aDesert = await page.evaluate(() => { window.__harbor.setBiome('desert'); return window.__harbor.terrainStats(); });
+  ok('20a: skirt (cliff-strata + rocky underside) geometry present for every sampled biome, hundreds of quads',
+    ts20aGreen.skirt && ts20aGreen.skirt.quads > 400 && ts20aGreen.skirt.verts === ts20aGreen.skirt.quads * 4 &&
+    ts20aMtn.skirt && ts20aMtn.skirt.quads > 400 && ts20aDesert.skirt && ts20aDesert.skirt.quads > 400);
+  // bounded sea pool + waterfall strips + rim lip, and the pool is FAR smaller than the old
+  // infinite 2900x300 plane (~90.6k verts) — a real structural boundary, not just a visual trick
+  const water20a = await page.evaluate(() => window.__harbor.water());
+  ok('20a: water is a bounded pool (not the old infinite plane) with a rim lip and paper waterfall strips around the boundary',
+    water20a.bounded === true && water20a.rimLip === true && water20a.waterfallSegs >= 24 && water20a.poolVerts > 500 && water20a.poolVerts < 20000);
+  // waterfall scroll advances deterministically via stepClock (no wall-clock sleep)
+  const fall20aA = await page.evaluate(() => window.__harbor.water().waterfallScroll);
+  await page.evaluate(() => window.__harbor.stepClock(3));
+  const fall20aB = await page.evaluate(() => window.__harbor.water().waterfallScroll);
+  ok('20a: waterfall downward-scroll phase advances with stepClock (deterministic, matches F_WATER\'s vFallMask term)', fall20aA !== fall20aB);
+  // sky horizon-line REMOVED sentinel — read the served shader source directly: the old authored
+  // horizon-glow term is gone, replaced by a plain vignette; no horizon band mixed in anywhere.
+  const glSrc20a = await page.evaluate(() => fetch('gl.js').then(r => r.text()).catch(() => ''));
+  ok('20a: F_SKY horizon band removed from the shader source (no more hb=exp horizon-glow mix) + a void vignette term now ships instead',
+    !/hb=exp\(-pow\(max\(vUv\.y-uHorizonY/.test(glSrc20a) && !/c=mix\(c,uHorizon,hb/.test(glSrc20a) && /vig=1\.0-dot\(vc,vc\)/.test(glSrc20a));
+  // camera max-zoom frames the whole slab; pitch can go low enough to see the underside
+  const camB20a = await page.evaluate(() => window.__harbor.camBounds());
+  const slab20a = await page.evaluate(() => window.__harbor.slab());
+  ok('20a: camera bounds widened to frame the floating slab (raised max zoom-out, lowered min pitch) and SLAB geometry is sane',
+    camB20a.distMax >= 1000 && camB20a.distMax <= 1600 && camB20a.elMin <= 0.10 &&
+    slab20a && slab20a.rx > 500 && slab20a.rz > 100);
+  // found-flow still works end-to-end on a fresh (unfounded) biome with the new camera/world intact
+  const found20a = await page.evaluate(() => {
+    window.__harbor.setBiome('nordic'); window.__harbor.autoFound();
+    return window.__harbor.state();
+  });
+  ok('20a: found-village flow still works end-to-end on the rebuilt world (fresh biome founds via autoFound)', found20a.founded === true);
+  await page.evaluate(() => window.__harbor.setBiome('green'));   // restore for the rest of the sweep
+  // departure fold-out: a forced mid-boundary distance folds partially; well inside/outside are 1/0
+  const fold20a = await page.evaluate(() => ({ mid: window.__harbor.departureFold(155), near: window.__harbor.departureFold(50), far: window.__harbor.departureFold(200) }));
+  ok('20a: ship departure paper-fold — 0 well inside the boundary is unfolded (1), well past it is fully folded (0), mid-crossing is partial',
+    fold20a.near === 1 && fold20a.far === 0 && fold20a.mid > 0 && fold20a.mid < 1);
+  // zero GL warnings across a full ToD sweep with the rebuilt sky/water/skirt all live
+  for (const t of [0, 0.2, 0.5, 0.755, 0.9]) { await page.evaluate(tt => window.__harbor.setTod(tt), t); await sleep(140); }
+  await page.evaluate(() => window.__harbor.setTod(0.5));
+  ok('20a: full ToD sweep over the floating-diorama world (skirt + bounded sea + waterfalls + void sky) → zero GL warnings/errors', errs.length === errsBefore20a);
+  // geomStats within the re-derived ceiling — the skirt/underside quads are cheap (~1-2k verts) next
+  // to the terrain's own ~200k+, and the bounded water pool REMOVES ~85k CPU-side verts vs the old
+  // infinite plane (water isn't part of geomStats, but confirms no regression pushed past budget)
+  const gs20a = await page.evaluate(() => window.__harbor.geomStats());
+  ok('20a: geomStats within the re-derived 300k ceiling (unchanged — skirt/underside geometry is a small addition, hard cap 400k)',
+    gs20a && gs20a.verts > 10000 && gs20a.verts < 300000);
+  // legacy quality-off path renders the slab/void/waterfalls clean too (only rims/post are gated —
+  // the skirt/underside/bounded-pool geometry itself is unconditional on both paths)
+  await page.evaluate(() => window.__harbor.setPost(false)); await sleep(300);
+  ok('20a: legacy quality-off path renders the world slab clean (zero GL errors) — skirt/pool geometry is unconditional', errs.length === errsBefore20a);
   await page.evaluate(() => window.__harbor.setPost(true));
 
   // live ticking after everything — no late errors

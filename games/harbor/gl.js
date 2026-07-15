@@ -257,10 +257,14 @@
   // aspect-corrected distance: vUv is 0..1 in BOTH axes over a non-square viewport, so a plain
   // distance() would draw every disc as an ellipse — squash x back to real screen proportions first.
   float discDist(vec2 uv, vec2 c){ vec2 d=uv-c; d.x*=uAspect; return length(d); }
+  // Phase 20a THE FLOATING DIORAMA: NO HORIZON. The old 3rd "authored horizon band" stop (a glow
+  // anchored to the projected sea horizon, uHorizonY) is GONE — sentinel for tests/screenshots:
+  // this shader source no longer references uHorizonY or mixes in uHorizon at all. F_SKY is now a
+  // pure 2-stop vertical card gradient + a soft vignette — a BACKDROP a floating object sits in
+  // front of, not a landscape with a line where sea meets sky. uHorizon/uHorizonY uniforms are kept
+  // declared (game.js still sets them harmlessly) so no call-site plumbing had to change.
   void main(){ vec3 c=mix(uBot,uTop,pow(vUv.y,0.85));
-    // 3rd stop: a soft authored horizon band anchored to the projected sea horizon (uHorizonY) — a glow, not a stripe
-    float hb=exp(-pow(max(vUv.y-uHorizonY,0.0)*4.2,1.5));
-    c=mix(c,uHorizon,hb*0.60);
+    vec2 vc=vUv-0.5; float vig=1.0-dot(vc,vc)*0.35; c*=clamp(vig,0.72,1.0);   // subtle void vignette, no horizon line anywhere
     // paper sun disc: crisp circle (not a soft glow blob) + a thin white cut-paper rim. Explicitly
     // faded out by (1-uNight) — the sun's screen track never truly dips off-card (todKeys clamps
     // its apparent height above the horizon), so relying on uSunCol alone left a dim ghost disc
@@ -344,6 +348,30 @@
     // one mid card-blue so the distant sea settles into a single flat sheet, no visible band line.
     float bandFarFlat=smoothstep(220.0,760.0,dist);
     water=mix(water,mix(uDeep,uShallow,0.30),bandFarFlat*0.85);
+    // Phase 20a: WATERFALL sheets — game.js's buildWaterMesh() bakes a sentinel vLandH<-30 onto the
+    // strips that spill over the SLAB boundary. Reusing this same shader (no new program) for them:
+    // a banded pattern keyed off world-space Y and uTime scrolls DOWNWARD (falling water), mixed
+    // toward white — the "paper waterfall" read, still fully deterministic via the existing uTime.
+    // Refinement round: previously BOTH the mask AND the visible band only lit up right at the lip
+    // (top vertex vLandH=-40 vs bottom vertex vLandH=-0.05, so only the sliver interpolating below
+    // -30 near the top ever qualified) — it read as a flat white rim, not falling water. Now BOTH
+    // strip endpoints carry a sentinel (top -46, bottom -31, from game.js), so the mask covers the
+    // WHOLE strip, and that same interpolated value doubles as a taper signal (bright at the lip,
+    // fading out approaching the base) without any new vertex attribute. 2-3 finer streaks are layered
+    // on top of the broad scroll band via a higher-frequency lateral tent wave, so each sheet reads as
+    // a few distinct ribbons rather than one flat plane, and the flare/curl at the base is geometric
+    // (see WATER_FALL_FLARE in game.js).
+    float vFallMask=step(30.0,-vLandH);
+    if(vFallMask>0.5){
+      float fallTaper=smoothstep(31.0,44.0,-vLandH);              // 1 at the lip (-46), fades to 0 near the base (-31)
+      float fallPhase=fract(vW.y*0.18-uTime*0.6+lateral*0.4);
+      float fallBand=smoothstep(0.55,0.15,abs(fallPhase-0.5));
+      float streakA=triW(lateral*2.6+uTime*0.08);
+      float streakB=triW(lateral*4.1-uTime*0.05+1.3);
+      float streaks=0.45+0.55*max(1.0-streakA*2.0,0.0)+0.35*max(1.0-streakB*2.0,0.0);
+      float fallStrength=clamp((0.35+0.65*fallBand)*streaks*fallTaper,0.0,1.0);
+      water=mix(water,vec3(0.96,0.99,1.0),fallStrength*0.8);
+    }
     // thin white scissor-cut rim right at each band boundary — wobbly, like the 19a paper edges
     float edgeDist=min(bandFrac,1.0-bandFrac);
     float rim=(1.0-smoothstep(0.0,0.05,edgeDist))*wobFade*(1.0-bandFarFlat);
@@ -388,7 +416,7 @@
   var F_POST = `#version 300 es
   precision highp float; in vec2 vUv;
   uniform sampler2D uTex; uniform sampler2D uDepth; uniform vec2 uTexel;
-  uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt;
+  uniform float uFocusY, uFocusW, uBloomThresh, uBloomAmt, uDofAmt;
   uniform float uNear, uFar, uFovY, uAspect;
   uniform float uOutlineOn, uOutlineDepthT, uOutlineNormT, uOutlineFade, uOutlineMaxDist, uOutlineWidth, uOutlineWobble;
   uniform vec3 uOutlineTint;
@@ -399,7 +427,11 @@
     return mix(mix(dth(i),dth(i+vec2(1.0,0.0)),u.x), mix(dth(i+vec2(0.0,1.0)),dth(i+vec2(1.0,1.0)),u.x), u.y); }
   void main(){
     // blur strength: 0 inside the focus band, easing to 1 at the screen edges (quadratic onset keeps the band edge creamy)
-    float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b;
+    // Review fix: DoF strength now scales with uDofAmt (driven by camera zoom in game.js) — at
+    // full zoom-out (near CAM_DIST_MAX) uDofAmt eases to ~0 so the whole slab reads crisp with
+    // legible strata, instead of the old fixed-strength blur mushing the cliff bands together.
+    // Play-zoom keeps uDofAmt near 1 for the tilt-shift miniature look.
+    float b = smoothstep(0.0, 0.42, max(abs(vUv.y - uFocusY) - uFocusW, 0.0)); b *= b * uDofAmt;
     vec3 sharp = texture(uTex, vUv).rgb;
     // 12 taps: centre + 4 inner ring (r=0.45) + 7 outer ring (r=1.0), rotated so no axis lines up
     vec2 T[12];

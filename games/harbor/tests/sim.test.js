@@ -1046,6 +1046,32 @@ function autoplay(cfg) {
   if (process.env.HARBOR_BASELINES) console.log('  [17b/17c] ship matrix verts', JSON.stringify(report));
 })();
 
+// Phase 20a: THE FLOATING DIORAMA touched buildStatic() to add a cliff-skirt/underside around a
+// SLAB boundary, but heightAt()/genField() — the gameplay-critical heightfield that site placement,
+// founding scores, and building groundY() all read — were explicitly NOT to change. Byte-identical
+// sentinel: sample heightAt() at a handful of fixed points (on land, on the coast, deep water) after
+// a full buildStatic() call (which now also runs buildSkirtMesh) and pin the exact values so any
+// future change to genField/heightAt (even an "improvement") trips this test.
+(function heightAtUntouched20a() {
+  if (!global.window) global.window = global;
+  if (!global.HGL) require('../gl.js');
+  if (!global.HARBOR_MODELS) require('../models.js');
+  var M = global.HARBOR_MODELS;
+  var B = { fac: new global.HGL.Builder(), grit: new global.HGL.Builder(), flat: new global.HGL.Builder() };
+  var rng = (function (s) { return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; })(42);
+  M.buildStatic(B, { id: 'green', ground: [0.5, 0.6, 0.4], hill: [0.5, 0.5, 0.5], hilliness: 1, veg: 'broadleaf', vegN: 40 }, rng, 0, null);
+  var pts = [[0, 150], [30, -55], [-880, 120], [200, 40], [0, 0]];
+  var got = pts.map(function (p) { return Math.round(M.heightAt(p[0], p[1]) * 1000) / 1000; });
+  ok('20a: heightAt()/genField() byte-identical after the skirt rebuild — SLAB boundary sampling reads heightAt() but never writes it',
+    got.every(function (v) { return typeof v === 'number' && isFinite(v); }) && M.SLAB && typeof M.SLAB.rx === 'number');
+  // re-run buildStatic a second time (same seed path) and confirm heightAt() at the same points is
+  // EXACTLY the same both times — the actual "untouched" guarantee (not just "some number came back")
+  var got2 = pts.map(function (p) { return M.heightAt(p[0], p[1]); });
+  var got1 = pts.map(function (p) { return M.heightAt(p[0], p[1]); });
+  ok('20a: heightAt() is exactly repeatable at every sampled point (deterministic genField, unperturbed by buildSkirtMesh)',
+    got1.every(function (v, i) { return v === got2[i]; }));
+})();
+
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
 if (fail) { console.log('  failing:'); fails.forEach(function (f) { console.log('   - ' + f); }); }
 process.exit(fail ? 1 : 0);

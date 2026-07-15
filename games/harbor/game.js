@@ -22,7 +22,16 @@
   var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false;
   // camera: current + targets + fling velocity
   var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4, txT: 0, tzT: 4, vTx: 0, vTz: 0 };
-  var PANX = 1140, PANZ0 = -90, PANZ1 = 280;   // pan clamp over the long coast
+  // Phase 20a: pan clamp now follows the SLAB footprint (with a small margin) instead of the old
+  // hand-tuned coast-strip numbers — the camera target can never wander out past the floating
+  // island's own edge.
+  var SLAB0 = (window.HARBOR_MODELS && HARBOR_MODELS.SLAB) || { cx: 0, cz: 150, rx: 1150, rz: 340 };
+  var PANX = SLAB0.rx * 1.05, PANZ0 = SLAB0.cz - SLAB0.rz * 1.05, PANZ1 = SLAB0.cz + SLAB0.rz * 1.05;
+  // Phase 20a: THE FLOATING DIORAMA camera bounds — CAM_EL_MIN lowered (0.14->0.07) so the player
+  // can pitch down far enough to catch the rocky underside at the slab edge; CAM_DIST_MAX raised
+  // (560->1300, still inside CAM_FAR=1600) so max zoom-out frames the ENTIRE floating slab,
+  // cliff-skirt included, instead of cropping it. Pan is clamped to the slab footprint below.
+  var CAM_EL_MIN = 0.07, CAM_DIST_MIN = 45, CAM_DIST_MAX = 1300;
   var biomeId = 'green', biome = null, unlocked = ['green'];
 
   // ---- Phase 10c/14a: quality-gated post pass (tilt-shift miniature DoF + bloom-lite +,
@@ -41,6 +50,18 @@
   // '?nopost-probe' query flag disarms the probe, and __harbor.setPost() disarms it too (forced
   // state). Any FBO failure → direct path (legacy look: no DoF/bloom/outlines/shadows).
   var POST_FOCUS_Y = 0.44, POST_FOCUS_W = 0.17, POST_BLOOM_T = 0.78, POST_BLOOM_A = 0.35;
+  // Review fix (post-20a): the tilt-shift DoF used to blur at fixed strength regardless of zoom,
+  // so pulling all the way out to CAM_DIST_MAX (see the "wide" framing, dist~1300) mushed the
+  // slab's cliff strata into an indistinct blur instead of reading as a crisp miniature object.
+  // dofAmt() eases the blur strength to ~0 as the camera nears max zoom-out (full slab shot =
+  // crisp model) while staying at full strength through the normal play-zoom range (the tilt-shift
+  // "miniature" read is exactly what you want up close). DOF_FADE_START is comfortably above the
+  // default founded/wild framing distances (150/520) so ordinary play is never affected.
+  var DOF_FADE_START = 700, DOF_FADE_END = 1300;
+  function dofAmt() {
+    var d = C.dist, t = clamp((d - DOF_FADE_START) / (DOF_FADE_END - DOF_FADE_START), 0, 1);
+    return 1 - t * t * (3 - 2 * t);   // smoothstep ease-out, 1 at/under DOF_FADE_START, 0 at DOF_FADE_END
+  }
   // edge-line tuning (Phase 14a detector) — see F_POST in gl.js for how these are used. NOTE: the
   // "distant" massif skyline sits at only ~60–100 VIEW units in the default framing (camera
   // orbits at ~110), inside the playable port's own depth range — so terrain cleanliness comes
@@ -61,6 +82,10 @@
   // "does the boundary phase advance" signal without any pixel readback.
   var WATER_BAND_BASE_SPD = 0.05, WATER_BAND_SPD_STEP = 0.035;
   function waterBandPhase(k, t) { return (t * (WATER_BAND_BASE_SPD + WATER_BAND_SPD_STEP * k)) % 1; }
+  // Phase 20a: mirrors F_WATER's vFallMask downward-scroll term (gl.js) — fract(vW.y*0.18-uTime*0.6)
+  // — purely so __harbor.water().waterfallScroll gives tests a deterministic "does it advance"
+  // signal (via stepClock) without a pixel readback, same pattern as waterBandPhase() above.
+  function fallScrollPhase(t) { return (1 - (t * 0.6) % 1 + 1) % 1; }
   // Phase 19a: papercraft grade — F_MAIN's diffuse ramp is quantized to TOON_BANDS steps (2: a
   // card face is lit or shaded, nothing between — documented here for the paper() test hook, the
   // constant lives in the F_MAIN source), and every pass gets a static screen-anchored
@@ -174,6 +199,7 @@
 
   // ---- scene ----
   var meshFac, meshGrit, meshFlat, waterMesh, boxMesh, facTex, gritTex, gullMesh;
+  var WATER_STATS = null;   // Phase 20a: bounded-pool/waterfall telemetry — see buildWaterMesh() + __harbor.water()
   // Phase 18b: the port's BUILDINGS live in their own two meshes (grit/flat split, LOCAL port
   // space — models.js scene.bldg) drawn each frame with a composeRYS transform at the port frame,
   // so the squash-and-stretch pop can scale the whole settlement via the draw transform. Quay/
@@ -258,10 +284,89 @@
   // fringe right at the coastline. HARBOR_MODELS.buildStatic() (just above) already regenerated
   // the heightfield for THIS biome, so heightAt() is valid here. A one-time ~90k-vertex CPU bake
   // per biome switch (not per frame) — trivial next to the noise-heightfield generation it reads.
+  // Phase 20a: THE FLOATING DIORAMA — the sea is no longer an infinite 2900x300 plane running to
+  // the world edge; it's a BOUNDED radial pool clipped to (an inset of) the SLAB ellipse, so the
+  // water visibly ENDS at the floating island's boundary instead of fading toward a horizon. The
+  // R channel of aColor still carries vLandH (heightAt at that vertex) exactly as before — F_WATER
+  // reads it back unchanged for the shore-band/foam signal, so the paper-sea shading is untouched.
+  // Three merged pieces, one Builder, one draw call (same F_WATER program, no new shader needed):
+  //  1. the pool itself (radial grid, shared verts, ~4.4k verts vs the old plane's ~90k)
+  //  2. a thin raised RIM LIP at the pool's outer edge (pale card curb — reuses F_WATER's existing
+  //     foam trigger by setting vLandH just inside the shoreBand window)
+  //  3. WATERFALL sheets spilling over the rim: vertical strips whose top verts carry a "falling"
+  //     sentinel vLandH (< -30) that F_WATER's new vFallMask term reads to scroll a banded pattern
+  //     downward with clock/uTime, and whose bottom verts sit in the same foam-trigger window as
+  //     the rim lip for a small foam curl where the fall lands.
+  // Refinement round (post-79da179 review): the falls previously read as a flat white rim band because
+  // only the very top sliver of each strip carried the "falling" sentinel colour (top vertex vLandH=-40,
+  // bottom vertex vLandH=-0.05 — the fall shader term only triggers below -30, so almost the entire strip
+  // was excluded and the visible band was just the rim-lip foam trigger). Both endpoints now carry
+  // sentinel values (top -46, bottom -31) so the WHOLE strip renders as falling water, with the two
+  // values letting F_WATER (gl.js) derive a taper (strong at the lip, fading as it nears the bottom) via
+  // simple interpolation — no new attribute needed. Bottom verts also flare outward for an outward curl
+  // at the base of each sheet.
+  // Defect fix (review pass): WATER_POOL_INSET was 0.90 — the pool's outer edge sat 10% short of
+  // the SLAB boundary (where buildFieldMesh's terrain clip and buildSkirtMesh's cliff-top both
+  // begin, both anchored at normalized radius 1.0). That left an uncovered annulus of "deep"-
+  // coloured seabed terrain (flat, khaki/tan — see buildFieldMesh's yavg<-0.2 colour band) exposed
+  // between the pool's rim and the cliff top. At grazing/low-pitch angles that thin physical ring
+  // (172 units wide at the x-extreme, 51 at the z-extreme) foreshortens into what reads as a vast
+  // checkerboard ground plane filling the frame — the "checkered ground plane" review defect. The
+  // pool now reaches all the way to the SLAB boundary (radius 1.0, matching slabPerim()/the skirt's
+  // top edge exactly) so the waterfall lip coincides with the cliff top and no seabed is ever
+  // exposed, at any camera angle.
+  var WATER_POOL_INSET = 1.0, WATER_FALL_DROP = 22, WATER_FALL_FLARE = 1.07;
   function buildWaterMesh() {
-    var wd = HGL.geom.plane(2900, 300);
-    for (var i = 0; i < wd.positions.length; i += 3) wd.colors[i] = HARBOR_MODELS.heightAt(wd.positions[i], wd.positions[i + 2]);
-    waterMesh = E.mesh(wd);
+    var SL = (HARBOR_MODELS && HARBOR_MODELS.SLAB) || SLAB0, B = new HGL.Builder();
+    var rings = 40, segs = 96, prx = SL.rx * WATER_POOL_INSET, prz = SL.rz * WATER_POOL_INSET;
+    var grid = [];
+    for (var r = 0; r <= rings; r++) {
+      var row = [], t = r / rings;
+      for (var s = 0; s <= segs; s++) {
+        var a = s / segs * Math.PI * 2, x = SL.cx + Math.cos(a) * prx * t, z = SL.cz + Math.sin(a) * prz * t;
+        var lh = HARBOR_MODELS.heightAt(x, z);
+        B.P.push(x, -0.12, z); B.N.push(0, 1, 0); B.U.push(t, s / segs); B.C.push(lh, lh, lh);
+        row.push(B.P.length / 3 - 1);
+      }
+      grid.push(row);
+    }
+    for (r = 0; r < rings; r++) for (s = 0; s < segs; s++) {
+      var i0 = grid[r][s], i1 = grid[r][s + 1], i2 = grid[r + 1][s], i3 = grid[r + 1][s + 1];
+      B.I.push(i0, i2, i1, i1, i2, i3);
+    }
+    // rim lip: a thin raised pale-card curb right at the pool's outer edge (foam-trigger vLandH)
+    for (s = 0; s < segs; s++) {
+      var a0 = s / segs * Math.PI * 2, a1 = (s + 1) / segs * Math.PI * 2;
+      var x0 = SL.cx + Math.cos(a0) * prx, z0 = SL.cz + Math.sin(a0) * prz;
+      var x1 = SL.cx + Math.cos(a1) * prx, z1 = SL.cz + Math.sin(a1) * prz;
+      var base = B.P.length / 3;
+      B.P.push(x0, -0.12, z0); B.N.push(0, 1, 0); B.U.push(0, 0); B.C.push(-0.05, -0.05, -0.05);
+      B.P.push(x1, -0.12, z1); B.N.push(0, 1, 0); B.U.push(1, 0); B.C.push(-0.05, -0.05, -0.05);
+      B.P.push(x0, 0.22, z0 * 1); B.N.push(0, 1, 0); B.U.push(0, 1); B.C.push(-0.05, -0.05, -0.05);
+      B.P.push(x1, 0.22, z1); B.N.push(0, 1, 0); B.U.push(1, 1); B.C.push(-0.05, -0.05, -0.05);
+      B.I.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    }
+    // waterfall sheets: vertical strips all the way around the boundary (the SLAB is set well
+    // outside the island, so every boundary segment is open water — no land ever touches the edge)
+    var nfall = 48;
+    for (s = 0; s < nfall; s++) {
+      a0 = s / nfall * Math.PI * 2; a1 = (s + 1) / nfall * Math.PI * 2;
+      x0 = SL.cx + Math.cos(a0) * prx; z0 = SL.cz + Math.sin(a0) * prz;
+      x1 = SL.cx + Math.cos(a1) * prx; z1 = SL.cz + Math.sin(a1) * prz;
+      var yb = -0.12 - WATER_FALL_DROP;
+      // outward flare/curl at the lip: bottom verts pushed out from the pool centre so the sheet
+      // visibly kicks outward as it falls, instead of hanging as a dead-straight vertical curtain.
+      var fx0 = SL.cx + (x0 - SL.cx) * WATER_FALL_FLARE, fz0 = SL.cz + (z0 - SL.cz) * WATER_FALL_FLARE;
+      var fx1 = SL.cx + (x1 - SL.cx) * WATER_FALL_FLARE, fz1 = SL.cz + (z1 - SL.cz) * WATER_FALL_FLARE;
+      base = B.P.length / 3;
+      B.P.push(x0, -0.12, z0); B.N.push(0, 0, 1); B.U.push(0, 0); B.C.push(-46, -46, -46);
+      B.P.push(x1, -0.12, z1); B.N.push(0, 0, 1); B.U.push(1, 0); B.C.push(-46, -46, -46);
+      B.P.push(fx0, yb, fz0); B.N.push(0, 0, 1); B.U.push(0, 1); B.C.push(-31, -31, -31);
+      B.P.push(fx1, yb, fz1); B.N.push(0, 0, 1); B.U.push(1, 1); B.C.push(-31, -31, -31);
+      B.I.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    }
+    WATER_STATS = { poolVerts: B.P.length / 3, bounded: true, waterfallSegs: nfall, rimLip: true, poolRx: prx, poolRz: prz };
+    waterMesh = E.mesh(B.data());
   }
   function loadFounded() { var f = window.Retention && Retention.get(GAME, 'founded', null); if (f && typeof f === 'object') founded = f; }
   function saveFounded() { if (window.Retention) Retention.set(GAME, 'founded', founded); }
@@ -658,11 +763,18 @@
   // with uVCol toggled to 1 so its own vertex colours win over uBase), then each sail as its own
   // mesh billowing/swaying on phase (sd.phase + phaseBase) so a two-masted ship's sails never move
   // in lockstep. sailC may be a single colour (every sail) or an array indexed per sail.
-  function drawShip(M, cls, x, y, z, yaw, scale, hullC, sailC, phaseBase) {
+  // Phase 20a: optional foldY/fadeXZ (both default 1) — the paper fold-out transform used when a
+  // ship's path crosses the world boundary (see drawShipFolded/foldFactor above). foldY squashes
+  // the vertical scale (mast/hull height) toward 0 like a book closing; fadeXZ shrinks the whole
+  // hull footprint toward 0 alongside it, standing in for an alpha fade since this flat-colour
+  // ship program carries no blend state.
+  function drawShip(M, cls, x, y, z, yaw, scale, hullC, sailC, phaseBase, foldY, fadeXZ) {
     var S = getShip(cls); if (!S) return;
+    var sY = scale * (foldY == null ? 1 : foldY), sXZ = scale * (fadeXZ == null ? 1 : fadeXZ);
+    scale = sXZ;   // downstream billow/pennant scale math (unchanged) now rides the faded footprint scale
     y -= S.meta.draft * scale;                    // ride IN the water: waterline ~1/3 up the hull
     gl.uniform3fv(M.u.uBase, hullC);
-    composeRYS(mModel, x, y, z, scale, scale, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
+    composeRYS(mModel, x, y, z, scale, sY, scale, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, S.hull);
     gl.uniform1f(M.u.uVCol, 1); drawMesh(M, S.trim);
     for (var i = 0; i < S.sails.length; i++) {
       var sm = S.sails[i], ph = sm.phase + (phaseBase || 0), billow = scale * sailBillow(ph);
@@ -818,6 +930,19 @@
   // expedition → expedition ladder (tier-tinted sails kept), route → trade ladder (resource-tinted
   // hull + kept deck cargo where the class still has a deck to keep it on), rival → corsair (off
   // every ladder, unchanged).
+  // Phase 20a: ship departures at the world boundary now PAPER FOLD-OUT rather than simply
+  // vanishing past a hidden edge — a pure draw-transform (no pathing rework: fleet.exp/routes'
+  // existing dx/dz/prog paths are untouched). foldFactor(d) returns 1 well inside the pool, easing
+  // to 0 over FOLD_START..FOLD_END (a scale-y "closing book" fold + an overall shrink standing in
+  // for the alpha fade, since the flat-colour ship program has no blend state) — ~0.6s of travel
+  // at typical fleet speeds. Symmetric outbound/inbound: same easing unfolds ships back in on return.
+  var FOLD_START = 138, FOLD_END = 160;
+  function foldFactor(d) { return 1 - smooth01(clamp((d - FOLD_START) / (FOLD_END - FOLD_START), 0, 1)); }
+  function smooth01(t) { return t * t * (3 - 2 * t); }
+  function drawShipFolded(M, cls, x, y, z, yaw, d, hullC, sailC, ph) {
+    var f = foldFactor(d); if (f <= 0.01) return;
+    drawShip(M, cls, x, y, z, yaw, 1.0, hullC, sailC, ph, f * f * f, f);   // scaleY-fold (cube-eased, "closing book") + overall fade-shrink
+  }
   function drawFleet(M) {
     var p = scene.port; if (!p) return;
     if (clock - fleet.at > 1) refreshFleet();
@@ -829,7 +954,7 @@
       x = p.x + e.dx * d; z = p.z + e.dz * d;
       yaw = e.prog < 0.5 ? e.yawOut : e.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + e.ph) * 0.3;
-      drawShip(M, eCls, x, bob, z, yaw, 1.0, EXP_HULL, e.sail, e.ph);
+      drawShipFolded(M, eCls, x, bob, z, yaw, d, EXP_HULL, e.sail, e.ph);
     }
     for (i = 0; i < fleet.routes.length; i++) {                    // trade-route freighters: brig (+ kept deck cargo) or late-era steamer
       r = fleet.routes[i];
@@ -838,7 +963,7 @@
       x = p.x + r.dx * dd; z = p.z + r.dz * dd;
       yaw = ph < 1 ? r.yawOut : r.yawOut + Math.PI;
       bob = Math.sin(clock * 1.3 + r.ph * 3) * 0.3;
-      drawShip(M, r.cls, x, bob, z, yaw, 1.0, r.hull, RTE_SAIL, r.ph * 3);
+      drawShipFolded(M, r.cls, x, bob, z, yaw, dd, r.hull, RTE_SAIL, r.ph * 3);
       if (r.cls === 'brig') {                                      // kept: a tinted cargo crate riding the deck (steamer bakes its own containers)
         gl.uniform3fv(M.u.uBase, r.cargo);
         composeRYS(mModel, x, 2.2 + bob, z, 1.7, 0.9, 1.1, yaw); gl.uniformMatrix4fv(M.u.uModel, false, mModel); drawMesh(M, boxMesh);   // brig deck y ≈ H*0.99 - draft + crate half-height
@@ -1162,6 +1287,7 @@
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rt.depthTex); gl.uniform1i(PP.u.uDepth, 1);
       gl.uniform2fv(PP.u.uTexel, [1 / rt.w, 1 / rt.h]);
       gl.uniform1f(PP.u.uFocusY, POST_FOCUS_Y); gl.uniform1f(PP.u.uFocusW, POST_FOCUS_W);
+      gl.uniform1f(PP.u.uDofAmt, dofAmt());
       gl.uniform1f(PP.u.uBloomThresh, POST_BLOOM_T); gl.uniform1f(PP.u.uBloomAmt, POST_BLOOM_A);
       gl.uniform1f(PP.u.uNear, CAM_NEAR); gl.uniform1f(PP.u.uFar, CAM_FAR); gl.uniform1f(PP.u.uFovY, CAM_FOVY); gl.uniform1f(PP.u.uAspect, canvas.width / canvas.height);
       gl.uniform1f(PP.u.uOutlineOn, quality ? 1 : 0);
@@ -1235,9 +1361,13 @@
   // 2-finger twist (or right-drag / Shift+drag) = rotate; tap = scout; arrow keys / WASD pan. ----
   var ptrs = new Map(), pinchPrev = 0, panPrev = null, twistPrev = null, twistAcc = 0, lastTap = 0, downPt = null, moved = false, multi = false, orbitMode = false;
   function pxy(e) { var b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+  // Phase 20a: THE FLOATING DIORAMA reframe — default pitch lowered (0.5->0.42 founded, 0.56->0.46
+  // wild) so the slab edge/skirt sits in frame instead of being cropped by the top of the screen,
+  // and the wild "whole island" framing pulls back further (360->520) so the SLAB's far edge (and
+  // its cliff-skirt) reads as an object's boundary, not a landscape fading off-screen.
   function defaultView() {
-    if (founded[biomeId]) { C.azT = 2.42; C.elT = 0.5; C.distT = 150; C.txT = founded[biomeId].x; C.tzT = founded[biomeId].z; }
-    else { C.azT = 2.42; C.elT = 0.56; C.distT = 360; C.txT = 0; C.tzT = 120; }   // frame the whole island
+    if (founded[biomeId]) { C.azT = 2.42; C.elT = 0.42; C.distT = 150; C.txT = founded[biomeId].x; C.tzT = founded[biomeId].z; }
+    else { C.azT = 2.42; C.elT = 0.46; C.distT = 520; C.txT = 0; C.tzT = 120; }   // frame the whole floating island
   }
   // content-follows-finger pan: move the focus so the world point grabbed at (ax,ay) ends up
   // under (bx,by). Uses real ground-ray hits, so it's never inverted at any angle/zoom.
@@ -1264,13 +1394,13 @@
       if (ptrs.size === 1) {
         var dx = p.x - prev.x, dy = p.y - prev.y;
         if (downPt && Math.hypot(p.x - downPt.x, p.y - downPt.y) > 8) { moved = true; if (hintEl) hintEl.classList.add('gone'); }
-        if (orbitMode) { C.azT -= dx * 0.0045; C.elT = clamp(C.elT - dy * 0.0035, 0.14, 1.3); C.vAz = -dx * 0.0045; C.vEl = -dy * 0.0035; }
+        if (orbitMode) { C.azT -= dx * 0.0045; C.elT = clamp(C.elT - dy * 0.0035, CAM_EL_MIN, 1.3); C.vAz = -dx * 0.0045; C.vEl = -dy * 0.0035; }
         else panDrag(prev.x, prev.y, p.x, p.y);              // pan-first: drag travels along the coast (natural)
       } else if (ptrs.size >= 2) {
         var pts = Array.from(ptrs.values()), a = pts[0], b = pts[1];
         var d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         // ZOOM: gentle + smooth (cap per-event change so fast pinches don't jump)
-        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.82, 1.22); C.distT = clamp(C.distT * f, 45, 560); }
+        if (pinchPrev) { var f = clamp(pinchPrev / d, 0.82, 1.22); C.distT = clamp(C.distT * f, CAM_DIST_MIN, CAM_DIST_MAX); }
         pinchPrev = d;
         // TWIST -> rotate, but only past a deadzone so a normal pinch never accidentally spins the camera
         var ang = Math.atan2(a.y - b.y, a.x - b.x);
@@ -1291,7 +1421,7 @@
       if (ptrs.size < 2) { pinchPrev = 0; panPrev = null; twistPrev = null; multi = false; }
     }
     window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
-    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, 45, 560); }, { passive: false });
+    canvas.addEventListener('wheel', function (e) { e.preventDefault(); var f = clamp(1 + e.deltaY * 0.0012, 0.8, 1.25); C.distT = clamp(C.distT * f, CAM_DIST_MIN, CAM_DIST_MAX); }, { passive: false });
     window.addEventListener('keydown', function (e) {
       var k = e.key, step = C.dist * 0.06, dx = 0, dz = 0;
       if (k === 'ArrowRight' || k === 'd' || k === 'D') dx = step;
@@ -3360,7 +3490,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v74';
+  var BUILD_TAG = 'v75';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4079,7 +4209,14 @@
     // lateral slide phase of boundary k (mirrors F_WATER's per-band uTime*spd term, see
     // waterBandPhase() above), sampled live off `clock` so a test can call stepClock() between two
     // reads and assert the phases actually advance (deterministic, no wall-clock sleep needed).
-    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandFarFade: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }) }; },
+    water: function () { var en = env(); return { deep: m3(biome.deep, en.water), shallow: m3(biome.shallow, en.water), shoreBands: WATER_SHORE_BANDS, gradientOn: true, paperBands: true, bandFarFade: true, bandPhase: [0, 1, 2, 3].map(function (k) { return waterBandPhase(k, clock); }), bounded: WATER_STATS ? WATER_STATS.bounded : false, waterfallSegs: WATER_STATS ? WATER_STATS.waterfallSegs : 0, rimLip: WATER_STATS ? WATER_STATS.rimLip : false, poolVerts: WATER_STATS ? WATER_STATS.poolVerts : 0, waterfallScroll: fallScrollPhase(clock) }; },
+    // Phase 20a: camera-bounds + world-slab telemetry (test/debug hooks)
+    camBounds: function () { return { distMin: CAM_DIST_MIN, distMax: CAM_DIST_MAX, elMin: CAM_EL_MIN, panX: PANX, panZ0: PANZ0, panZ1: PANZ1 }; },
+    slab: function () { return HARBOR_MODELS ? HARBOR_MODELS.SLAB : null; },
+    // departure fold-out (test/debug hook): foldFactor(d) at a given path-distance-from-port; a
+    // forced 155 sits inside FOLD_START..FOLD_END so a test can assert 0<factor<1 without needing
+    // a real voyage to be mid-flight at exactly the right moment.
+    departureFold: function (d) { return foldFactor(d == null ? 155 : +d); },
     // Phase 19b: sun/moon screen-space UV tracks (F_SKY's uSun/uMoon uniforms mirror these exactly)
     // + flags documenting the paper-sky rebuild (crisp cut-paper discs, static-size no-twinkle stars).
     sky: function () { var en = env(), sd = sunDir(), md = moonDir(); return { sunUV: [0.5 + sd[0] * 0.42, 0.32 + sd[1] * 0.5], moonUV: [0.5 + md[0] * 0.42, 0.32 + md[1] * 0.5], night: en.night, cutPaperSun: true, starTwinkleOff: true }; },
