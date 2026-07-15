@@ -1,6 +1,6 @@
 {
   "appId": "com.prismplay.arcade",
-  "appName": "PortMaster",
+  "appName": "Port Boss",
   "webDir": ".",
   "bundledWebRuntime": false,
   "plugins": {

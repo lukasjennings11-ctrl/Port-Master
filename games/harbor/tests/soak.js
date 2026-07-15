@@ -1,4 +1,4 @@
-/* PortMaster — long-session soak test (Playwright monkey run).
+/* Port Boss — long-session soak test (Playwright monkey run).
  * Proves an evening session survives: drives the real UI (Manage/Expeditions/Legacy panels,
  * crate/bonus buttons, event/rival modals, fever, ToD/biome/viewport churn, prestige) via a
  * weighted-random "monkey" for ~22 minutes of real wall time, sampling heap/fps/DOM-node-count
@@ -207,7 +207,7 @@ function fmtRow(s) {
   page.on('console', m => { if (m.type() === 'error' && !/404|favicon/.test(m.text())) errs.push('CONSOLE ' + m.text()); });
   page.on('console', m => { if (m.type() === 'warning' && /GL_INVALID|INVALID_OPERATION|INVALID_ENUM|INVALID_VALUE|[Ff]eedback loop/.test(m.text())) errs.push('GLWARN ' + m.text()); });
 
-  console.log('PortMaster soak — target ' + MINS + ' min, sampling every 30s. Port ' + PORT + '.');
+  console.log('Port Boss soak — target ' + MINS + ' min, sampling every 30s. Port ' + PORT + '.');
 
   // ---- 1. setup: fresh state, found the port, seed a modest bankroll once ----
   await page.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
@@ -347,7 +347,7 @@ function fmtRow(s) {
 
   // write the run record
   const outLines = [];
-  outLines.push('PortMaster soak run — ' + new Date().toISOString());
+  outLines.push('Port Boss soak run — ' + new Date().toISOString());
   outLines.push('target: ' + MINS + ' min, actual: ' + finalT + 's (' + (finalT / 60).toFixed(1) + ' min), samples: ' + samples.length);
   outLines.push('');
   outLines.push('=== sample table ===');

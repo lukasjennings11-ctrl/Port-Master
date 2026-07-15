@@ -1,4 +1,4 @@
-# PortMaster — store copy
+# Port Boss — store copy
 
 Ready-to-paste copy for CrazyGames, Poki, itch.io and app-store listings. Kept honest and
 free of hype words ("addictive", "epic", "amazing") — see PRODUCT.md's zero-slop line.
@@ -8,7 +8,7 @@ Character counts are for the field limit named in each heading; re-count if you 
 
 ## Title
 
-**PortMaster**
+**Port Boss**
 
 ## Short pitch (≤80 chars — target for CrazyGames/Poki tagline fields)
 
@@ -22,7 +22,7 @@ Alternate, leaning on the differentiator (72 chars):
 
 ## Medium description (~300 chars — portal "short description" fields)
 
-> PortMaster is a free browser idle tycoon: found a harbour on a wild coast and grow it from
+> Port Boss is a free browser idle tycoon: found a harbour on a wild coast and grow it from
 > a fishing village all the way to a neon-futuristic megaport. Build and upgrade, evolve a
 > living fleet, send expeditions, trade between ports, weather storms and pirate raids, and
 > prestige for permanent bonuses. No ads-gate, no pay-to-win.
@@ -32,7 +32,7 @@ Alternate, leaning on the differentiator (72 chars):
 ## Long description (~1200 chars — portal "full description" / store listing body)
 
 > Found a harbour on a wild, glowing coastline and grow it into a global trade empire.
-> PortMaster is a free browser-based idle tycoon — no install, no account, no paywall.
+> Port Boss is a free browser-based idle tycoon — no install, no account, no paywall.
 > Open it and play.
 >
 > **Build & grow** — fishing huts, cottages, markets, factories and docks across eight
@@ -65,18 +65,18 @@ Alternate, leaning on the differentiator (72 chars):
 > **Living world** — ambient boats, gulls, chimney smoke, weather and a full day/night
 > lighting and audio cycle that reacts to what you've built.
 >
-> No pay-to-win, no loot boxes for real money, no expiring pressure — PortMaster stays
+> No pay-to-win, no loot boxes for real money, no expiring pressure — Port Boss stays
 > generous and lets you play at your own pace.
 
 (~1600 characters. For a hard 1200 cap, drop the "Living world" and "The Rival" bullets
 first — they're the least load-bearing — and keep the closing honest-pace line, which is
 the differentiator.)
 
-## Positioning — why PortMaster stands out
+## Positioning — why Port Boss stands out
 
 For anyone writing a listing, pitch, or reply: the big incumbent in this space is a
 200 MB free-to-play app built on the usual live-service scaffolding. Don't name it or
-attack it — position PortMaster *positively* on the three things it is that the incumbent
+attack it — position Port Boss *positively* on the three things it is that the incumbent
 structurally is not:
 
 1. **The honest port game.** No energy timers, no gacha, no real-money loot boxes, no
@@ -89,7 +89,7 @@ structurally is not:
    a live, visible fleet — you *watch* the storms, raids, construction and voyages, not read
    about them in a toast.
 
-One-sentence version: *"PortMaster is the honest port game — a floating papercraft world you
+One-sentence version: *"Port Boss is the honest port game — a floating papercraft world you
 grow from fishing village to futuristic megaport, instantly in your browser, with no energy
 timers, gacha, or pay-to-win."*
 
@@ -120,11 +120,11 @@ truthfully per-platform; the underlying facts are:
 | Blood/gore | None. |
 | Sexual content | None. |
 | Profanity | None. |
-| Realistic/simulated gambling for real money | **No.** PortMaster has no real-money purchases tied to chance on the web build, and no real-money gambling anywhere. |
+| Realistic/simulated gambling for real money | **No.** Port Boss has no real-money purchases tied to chance on the web build, and no real-money gambling anywhere. |
 | Simulated gambling with in-game currency | **Yes — flag this honestly.** The "Merchant's Gamble" random event offers the player a choice to wager in-game money (£, the game's own currency — no real-world value, not purchasable with real money) for a chance to double it. It is entirely optional (a "Decline" option is always offered) and uses only the game's internal currency. Some questionnaires (notably Poki's, which states "kid-safe, no gambling") treat *any* wager-and-chance mechanic as gambling regardless of currency — disclose this event plainly rather than omit it, and expect it may need to be flagged, adjusted, or (for Poki specifically) discussed with their review team before acceptance. |
 | User-generated content / chat / social features | None. No UGC, no chat, no multiplayer, no user-submitted content of any kind. |
 | Ads | The web/portal build shows no ads unless the platform's own ad SDK is integrated (CrazyGames/Poki show their own ads around/within the embed per their standard revenue-share terms). The native app (not yet published) is planned to show optional rewarded ads via AdMob. |
-| In-app purchases | **None on the web/portal build.** The native app (not yet published) is planned to offer one optional one-time purchase ("PortMaster Pro" — removes ad prompts, adds a cosmetic flag/badge). No pay-to-win, nothing purchasable affects game balance. |
+| In-app purchases | **None on the web/portal build.** The native app (not yet published) is planned to offer one optional one-time purchase ("Port Boss Pro" — removes ad prompts, adds a cosmetic flag/badge). No pay-to-win, nothing purchasable affects game balance. |
 | Data collection | None. No accounts, no sign-ups, no tracking cookies. Progress is stored in `localStorage` on-device only. See `privacy.html`. |
 | Suggested age rating | Everyone / PEGI 3, with the gambling-mechanic disclosure above answered honestly per platform — expect some platforms to bump this to a "mild fantasy gambling" note similar to a loot-crate disclosure. |
 

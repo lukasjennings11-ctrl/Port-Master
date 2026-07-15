@@ -1,4 +1,4 @@
-/* PortMaster — pluggable ad-provider abstraction (Phase 12a).
+/* Port Boss — pluggable ad-provider abstraction (Phase 12a).
  * window.ADS is the ONLY surface game.js talks to for monetized attention. It ships today as a
  * free "stub" (no ad account, no network call — just a short charming delay) so Captain's Bonus
  * works on our own site right now. A future portal adapter (poki.js / crazygames.js / admob.js)
@@ -15,7 +15,7 @@
  *   rewardedAvailable()    — bool, cheap + synchronous (may be polled every HUD tick — no I/O, no
  *                             promises). True only when a reward could plausibly be granted right
  *                             now: network up, an ad is actually ready, and under any provider- or
- *                             game-side daily cap. The stub enforces PortMaster's 6/day cap here via
+ *                             game-side daily cap. The stub enforces Port Boss's 6/day cap here via
  *                             Retention('harbor','bonusDay',{date,count}) so the button simply hides
  *                             once the player has claimed enough today — no nagging, no dead click.
  *   showRewarded(onReward, onFail) — opens the ad experience (or, in the stub, a short delay standing
@@ -101,7 +101,7 @@
       if (todayCount() >= DAILY_CAP) { setTimeout(function () { if (onFail) onFail('cap'); }, 0); return; }
       var sdk = activeSDK();
       if (sdk && typeof sdk.rewardedAd === 'function') {
-        // real portal rewarded ad — still honour PortMaster's own daily cap (player-friendly), and
+        // real portal rewarded ad — still honour Port Boss's own daily cap (player-friendly), and
         // only bump the count on an actually-earned reward, never on skip/no-fill/error.
         sdk.rewardedAd(function () { if (todayCount() >= DAILY_CAP) { if (onFail) onFail('cap'); return; } bumpCount(); if (onReward) onReward(); },
                        function () { if (onFail) onFail('skip'); });

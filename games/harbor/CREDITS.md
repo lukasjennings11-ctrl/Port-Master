@@ -1,4 +1,4 @@
-# PortMaster — third-party asset credits
+# Port Boss — third-party asset credits
 
 All bundled 3D assets are redistributed under permissive licences and committed locally
 (`games/harbor/assets/`) so the game stays self-contained (no external requests at runtime).
@@ -12,7 +12,7 @@ All bundled 3D assets are redistributed under permissive licences and committed 
   (`addons/kaykit_city_builder_bits/Assets/gltf/building_*_lit.glb`), which carries an MIT LICENSE.
 - **Notice:** "City Builder Bits" © Kay Lousberg, used under the MIT License.
 
-Everything else in PortMaster (terrain, landforms, trees, huts, quays, cranes, boats/ships, water,
+Everything else in Port Boss (terrain, landforms, trees, huts, quays, cranes, boats/ships, water,
 sky) is procedurally generated in `models.js` / `gl.js` — no third-party assets.
 
 If any asset's licence is ever in doubt it is removed and the renderer falls back to procedural

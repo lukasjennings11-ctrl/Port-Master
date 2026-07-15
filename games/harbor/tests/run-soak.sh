@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PortMaster — long-session soak test runner.
+# Port Boss — long-session soak test runner.
 #   bash games/harbor/tests/run-soak.sh [minutes]     (default 22)
 #
 # This is deliberately EXCLUDED from the fast regression suite (tests/run.sh) — it runs a

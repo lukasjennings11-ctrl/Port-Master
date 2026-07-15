@@ -1,4 +1,4 @@
-# PortMaster — Monetization & Go-To-Market Playbook
+# Port Boss — Monetization & Go-To-Market Playbook
 
 *Honest, concrete, and ordered by realism. The code side is being built (Phase 12);
 the account/business side needs you — each step below says which is which.*
@@ -41,7 +41,7 @@ highest-performing ad format in idle games.
 `capacitor.config.json` already exists (`com.prismplay.arcade`) and `privacy.html`
 already anticipates "Remove Ads" / "Pro" purchases. Phase 12c documents the Android
 (£20 one-off) and iOS (£79/yr) build+submit flow. Monetization there: rewarded ads
-(AdMob) + a single honest IAP — **"PortMaster Pro"** (~£3–4: removes ad prompts,
+(AdMob) + a single honest IAP — **"Port Boss Pro"** (~£3–4: removes ad prompts,
 adds a cosmetic golden flag + supporter badge). No pay-to-win.
 - **What you do:** Google Play / Apple Developer accounts, store listings, payout details.
 - **Recommendation:** do this *after* portal data proves retention; stores reward
