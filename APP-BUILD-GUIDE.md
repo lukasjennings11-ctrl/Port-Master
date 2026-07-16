@@ -24,7 +24,17 @@ bash factory/build-portal.sh bare  # builds the native web assets into dist/port
 npx cap add ios                    # creates the ios/ Xcode project (first time only)
 npx cap add android                # creates the android/ Studio project (first time only)
 npx cap sync                       # copies the web build + plugins into both native projects
+
+# app icon + splash (I already made the source art in assets/):
+npm i -D @capacitor/assets
+npx @capacitor/assets generate     # reads assets/icon.png + assets/splash.png and writes every
+                                   # iOS + Android icon/splash size into the native projects
 ```
+
+The `assets/` folder already contains the branded **`icon.png`** (1024²) and **`splash.png`** /
+**`splash-dark.png`** (2732²) — the generate step above turns them into every required size for
+both platforms automatically. (Optional polish for Android's adaptive icon: add
+`assets/icon-foreground.png` + `assets/icon-background.png` and re-run — not required to ship.)
 
 - **`appId`** is set to `com.lukasjennings.portboss` in `capacitor.config.json`. This is your app's
   permanent identity on both stores — **if you want a different one, change it now, before your first
