@@ -7,12 +7,14 @@ update — match by meaning, not exact wording.)
 **Files you'll need** (all in the `submit/` folder + sent to you in chat):
 | File | Where it goes |
 |---|---|
-| `portboss-crazygames.zip` | CrazyGames — the game file |
-| `portboss-poki.zip` | Poki — the game file |
-| `submit/art/cover-landscape-1920x1080.png` | CrazyGames — landscape cover |
-| `submit/art/cover-portrait-800x1200.png` | CrazyGames — portrait cover |
-| `submit/art/cover-square-800x800.png` | CrazyGames — square cover |
-| `submit/art/poki-thumbnail-1080x1080.png` | Poki — thumbnail |
+| `submit/crazygames/portboss-crazygames.zip` | CrazyGames — the game file |
+| `submit/crazygames/cover-landscape-1920x1080.png` | CrazyGames — landscape cover |
+| `submit/crazygames/cover-portrait-800x1200.png` | CrazyGames — portrait cover |
+| `submit/crazygames/cover-square-800x800.png` | CrazyGames — square cover |
+| `submit/crazygames/video-landscape-1920x1080.mp4` | CrazyGames — landscape preview video |
+| `submit/crazygames/video-portrait-1080x1920.mp4` | CrazyGames — portrait preview video |
+| `submit/poki/portboss-poki.zip` | Poki — the game file |
+| `submit/poki/poki-thumbnail-1080x1080.png` | Poki — thumbnail |
 
 ---
 
@@ -99,10 +101,13 @@ well as widescreen).
 - **Portrait (2:3, 800×1200):** `cover-portrait-800x1200.png`
 - **Square (1:1, 800×800):** `cover-square-800x800.png`
 
-### 10. Preview video (optional at first)
-You can skip this for the first submission. It's recommended later for "Full Launch" — if you want
-one, record ~15 seconds of you playing (found a port, build a couple of things) and I'll help you
-trim it. Not a blocker to submit now.
+### 10. Preview videos (both required — provided)
+The form needs a **Landscape** and a **Portrait** video. Both are ready for you:
+- **Landscape video:** `video-landscape-1920x1080.mp4`
+- **Portrait video:** `video-portrait-1080x1920.mp4`
+
+They're ~17 seconds of real gameplay (a built-up port, slow camera move) — no logos, no watermark,
+which is what CrazyGames requires. Just drag each into its matching box.
 
 ### 11. Languages
 ```

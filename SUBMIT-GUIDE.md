@@ -3,11 +3,11 @@
 You don't need to build anything, install anything, or touch the terminal. It's really just:
 **download a file → make a free account → upload the file → paste some text → submit.**
 
-I've given you three files (in our chat, and in the **`submit/`** folder of your repo):
+Everything is in the **`submit/`** folder of your repo (and sent to you in chat), sorted by portal:
 
-- **`portboss-crazygames.zip`** — upload this one to CrazyGames
-- **`portboss-poki.zip`** — upload this one to Poki
-- **`cover-16x9.png`** — a picture of the game to use as the cover image
+- **`submit/crazygames/`** — the CrazyGames game file, 3 cover images, and 2 preview videos
+- **`submit/poki/`** — the Poki game file and its thumbnail
+- **`submit/README.md`** — a one-page index of exactly which file goes in which box
 
 👉 **Do CrazyGames first.** It's faster and easier, and a good warm-up before Poki's slower review.
 
@@ -34,11 +34,14 @@ I've given you three files (in our chat, and in the **`submit/`** folder of your
 
 1. Go to **developer.crazygames.com** and click **Sign up** (it's free). Confirm your email.
 2. Once logged in, click **Add game** (sometimes called "Submit a game", or a big **+** button).
-3. When it asks for the game file, upload **`portboss-crazygames.zip`**. Wait for it to finish.
+3. When it asks for the game file, upload **`crazygames/portboss-crazygames.zip`**. Wait for it to finish.
 4. It will show your game running in a little preview window. Play it for a few seconds to check it
    loaded properly. (It should — I tested this exact file.)
 5. Fill in the text boxes using the **paste text** above (name, short description, controls, tags).
-6. Upload a **cover image** when asked — use **`cover-16x9.png`**.
+6. **Cover images** — upload all three from `submit/crazygames/`:
+   `cover-landscape-1920x1080.png`, `cover-portrait-800x1200.png`, `cover-square-800x800.png`.
+   **Preview videos** — upload both: `video-landscape-1920x1080.mp4` (Landscape) and
+   `video-portrait-1080x1920.mp4` (Portrait).
 7. **Content / age-rating questions** — answer honestly:
    - Violence? **No.** Blood/gore? **No.** Bad language? **No.** Sexual content? **No.**
    - Gambling with **real money**? **No.**
@@ -55,10 +58,10 @@ I've given you three files (in our chat, and in the **`submit/`** folder of your
 
 1. Go to **developers.poki.com** and click **Get started / Sign up**, then apply for an account.
    (Poki approves developers by hand, so this step can take a little while — that's normal.)
-2. When you can add a game, upload **`portboss-poki.zip`**
+2. When you can add a game, upload **`poki/portboss-poki.zip`**
    (⚠️ the **Poki** one — *not* the CrazyGames one).
 3. Paste the same **name, description, controls, and tags** from above.
-4. Upload the same **`cover-16x9.png`**.
+4. Upload the thumbnail **`poki/poki-thumbnail-1080x1080.png`**.
 5. **Content questions** — same honest answers as CrazyGames, with one happy difference:
    Poki says "no gambling." **You're fine** — I removed that betting event from the Poki file, so
    just answer **"No gambling."** (You can even add in the notes: "the optional wager event is
@@ -82,8 +85,8 @@ I've given you three files (in our chat, and in the **`submit/`** folder of your
 
 ## Quick checklist
 
-- [ ] **CrazyGames:** signed up → uploaded `portboss-crazygames.zip` → pasted text → added cover →
-      answered content questions → **Submit**
-- [ ] **Poki:** applied → uploaded `portboss-poki.zip` → pasted text → added cover →
+- [ ] **CrazyGames:** signed up → uploaded `crazygames/portboss-crazygames.zip` → pasted text →
+      added 3 covers + 2 videos → answered content questions → **Submit**
+- [ ] **Poki:** applied → uploaded `poki/portboss-poki.zip` → pasted text → added thumbnail →
       answered "no gambling" → **Submit**
 - [ ] Forwarded me any email that mentions "SDK" so I can patch the file

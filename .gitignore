@@ -13,8 +13,11 @@ Thumbs.db
 # build / deploy artifacts
 dist/
 *.zip
-# exception: the ready-to-upload portal bundles are committed so they're easy to download
+# exception: the ready-to-upload portal bundles + submission assets are committed so they're
+# easy to download (zips and preview videos live under submit/, including nested subfolders)
 !submit/*.zip
+!submit/**/*.zip
+!submit/**/*.mp4
 node_modules/
 
 # third-party SDK clone (has its own git repo) — used when we wire multi-portal publishing
