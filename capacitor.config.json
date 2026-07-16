@@ -1,7 +1,7 @@
 {
-  "appId": "com.prismplay.arcade",
+  "appId": "com.lukasjennings.portboss",
   "appName": "Port Boss",
-  "webDir": ".",
+  "webDir": "dist/portboss-portal",
   "bundledWebRuntime": false,
   "plugins": {
     "SplashScreen": {
