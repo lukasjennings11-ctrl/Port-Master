@@ -20,6 +20,15 @@ Two step-by-step guides live right here next to this file:
 | `video-landscape-1920x1080.mp4` | Preview videos → **Landscape video** |
 | `video-portrait-1080x1920.mp4` | Preview videos → **Portrait video** |
 
+## 📁 `itch/` — for itch.io (instant, no approval needed)
+
+| File | What to do |
+|---|---|
+| `portboss-itch.zip` | On itch.io: **Upload** it, tick **"This file will be played in the browser"**. `index.html` is already at the zip's root, so it just works. No SDK, no ads — plain playable build. |
+
+Great first home: it's instant (no approval queue), gives you a live link to share, and other
+sites (e.g. CoolMath) can discover the game from there.
+
 ## 📁 `poki/` — for developers.poki.com
 
 | File | Goes in the form box… |
