@@ -3366,15 +3366,41 @@
     setLegacyBal(legacyBal() + gain);
     if (window.Progress) Progress.addPrestige(GAME, gain);          // lifetime Legacy total (stat)
     if (window.Retention) Retention.set(GAME, 'charters', chartersCount() + 1);   // count of prestiges
+    var homeBiome = isUnlocked(biomeId) ? biomeId : 'green';        // stay on the world the player was on, not forced back to green
     computeMeta();                                                  // META now includes any newly-bought-able bonuses
     SIM.resetRun();                                                 // wipe the run; fresh() applies META start bonuses
     founded = {}; saveFounded(); era = 0; if (window.Retention) Retention.set(GAME, 'era', 0);
     closeLegacy();
-    buildBiome('green'); if (buildSelector._set) buildSelector._set();
-    autoFound();                                                   // re-found green so play continues immediately
+    buildBiome(homeBiome); if (buildSelector._set) buildSelector._set();
+    autoFound();                                                   // re-found the current world so play continues immediately
     updateHUD();
     flashT = 0.9; shakeFX(6, 0.5); sfx('win'); haptic([10, 40, 20, 40]); confettiBurst();
     showHint('New Charter signed — +' + fmt(gain) + ' Legacy banked. Multipliers are permanent!');
+  }
+  // Prestige is destructive (wipes every harbour's buildings/cash/age), so gate it behind an explicit
+  // confirmation that spells out the trade — never wipe on a single click. Reuses the .evm event-modal
+  // styling so it matches the rest of the game's dialogs.
+  var prestigeConfirmEl = null;
+  function confirmPrestige() {
+    if (!SIM || !SIM.canPrestige() || cine) { sfx('lose'); return; }
+    var gain = SIM.prestigeGain();
+    if (!prestigeConfirmEl) {
+      prestigeConfirmEl = document.createElement('div'); prestigeConfirmEl.className = 'evm'; prestigeConfirmEl.id = 'prestigeConfirm';
+      prestigeConfirmEl.innerHTML = '<div class="ev-card"><div class="ev-ic">📜</div><div class="ev-name">Sign a New Charter?</div>' +
+        '<div class="ev-desc" id="pc-desc"></div><div class="ev-btns">' +
+        '<button class="ev-btn" id="pc-cancel">Not yet</button><button class="ev-btn primary" id="pc-go"></button></div></div>';
+      wrap.appendChild(prestigeConfirmEl);
+      var close = function () { prestigeConfirmEl.classList.remove('show'); };
+      prestigeConfirmEl.addEventListener('click', function (e) { if (e.target === prestigeConfirmEl) close(); });
+      prestigeConfirmEl.querySelector('#pc-cancel').addEventListener('click', function () { close(); sfx('move'); });
+      prestigeConfirmEl.querySelector('#pc-go').addEventListener('click', function () { close(); doPrestige(); renderLegacy(); });
+    }
+    prestigeConfirmEl.querySelector('#pc-desc').innerHTML =
+      'This <b>restarts every harbour</b> — all buildings, cash and ages reset to the beginning. ' +
+      'In return you bank <b>+' + fmt(gain) + ' ✦ Legacy</b> for <b>permanent</b> multipliers that make every future run faster.' +
+      '<br><br>You <b>keep</b>: discovered worlds, all ✦ Legacy, relics, doctrines and achievements.';
+    prestigeConfirmEl.querySelector('#pc-go').textContent = 'Sign · +' + fmt(gain) + ' ✦';
+    prestigeConfirmEl.classList.add('show'); sfx('score');
   }
 
   // Legacy panel (full-screen overlay; reuses the trade-map panel pattern)
@@ -3467,7 +3493,7 @@
     ACHIEVEMENTS.forEach(function (a) { var has = achOwned(a.id); html += '<div class="lg-ach' + (has ? '' : ' locked') + '">' + (has ? '🏆' : '🔒') + '<span>' + (has ? a.name : '???') + '</span></div>'; });
     html += '</div>';
     tree.innerHTML = html;
-    pres.querySelector('#lg-pbtn').addEventListener('click', function () { doPrestige(); renderLegacy(); });
+    pres.querySelector('#lg-pbtn').addEventListener('click', function () { confirmPrestige(); });
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
     tree.querySelectorAll('[data-pass]').forEach(function (el) { el.addEventListener('click', function () { if (claimPass(+el.getAttribute('data-pass'))) renderLegacy(); }); });
     tree.querySelectorAll('[data-doct]').forEach(function (el) { el.addEventListener('click', function () { if (pickDoctrine(el.getAttribute('data-doct'))) { sfx('win'); haptic(22); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
@@ -3833,7 +3859,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v81';
+  var BUILD_TAG = 'v82';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4275,6 +4301,19 @@
     var atCap = s.portFounded && s.slotCap && s.slotsUsed >= s.slotCap;
     var slotsTxt = s.portFounded ? '<span class="mp-slots' + (atCap ? ' full' : '') + '">Buildings ' + s.slotsUsed + '/' + s.slotCap + '</span>' : '';
     var html = '<div class="mp-head">Build & upgrade' + slotsTxt + '<button id="mp-close">✕</button></div>';
+    // Per-world specialty — surface WHY each biome plays differently (what it produces richly, and
+    // what it can't produce at all and must import) so choosing a map reads as strategy, not flavour.
+    if (s.portFounded && s.spec) {
+      var sp = s.spec, rich = [], nogo = [];
+      ['fish', 'timber', 'goods'].forEach(function (r) {
+        var lbl = r.charAt(0).toUpperCase() + r.slice(1);
+        if (sp[r] === 0) nogo.push(lbl); else if (sp[r] >= 1.3) rich.push(lbl);
+      });
+      var ws = '🌍 <b>' + wname(s.world || biomeId) + '</b> — ' + (s.worldHint || sp.hint || '');
+      if (rich.length) ws += '<br>💪 Rich in <b>' + rich.join(', ') + '</b>';
+      if (nogo.length) ws += '<br>🚫 No <b>' + nogo.join(', ') + '</b> here — import it via trade routes';
+      html += '<div style="margin:4px 10px 2px;padding:8px 11px;border-radius:9px;background:rgba(255,214,106,.10);border:1px solid rgba(255,214,106,.22);font-size:12px;line-height:1.55">' + ws + '</div>';
+    }
     // daily missions — a "come back tomorrow" loop, rewarding Legacy; today's tide shown in the header
     var dl = dailyList();
     if (dl && dl.length) {

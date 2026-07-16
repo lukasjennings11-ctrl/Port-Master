@@ -475,6 +475,23 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.drawFortune()); await sleep(120);
   ok('fortune: drawn (gated to today)', await page.evaluate(() => window.Retention.get('harbor', 'fortuneDay', null) === window.Retention.todayStr()));
 
+  // v82: prestige is gated behind a confirmation — a single click on "Sign a New Charter" must NOT
+  // wipe the run; it only opens a confirm dialog. (Regression: it used to prestige on one click.)
+  await page.evaluate(() => { window.HARBOR_SIM.raw().lifetimeMoney = 1e7; window.__harbor.openLegacy(); }); await sleep(120);
+  const chartersPre = await page.evaluate(() => window.Retention.get('harbor', 'charters', 0) | 0);
+  const gate = await page.evaluate(() => {
+    var b = document.querySelector('#lg-pbtn'); if (b) b.click();
+    var m = document.querySelector('#prestigeConfirm');
+    return { shown: !!(m && m.classList.contains('show')), charters: window.Retention.get('harbor', 'charters', 0) | 0 };
+  }); await sleep(60);
+  ok('v82 prestige: single click opens a confirm dialog, does NOT wipe', gate.shown && gate.charters === chartersPre);
+  const cancelled = await page.evaluate(() => {
+    var c = document.querySelector('#pc-cancel'); if (c) c.click();
+    var m = document.querySelector('#prestigeConfirm');
+    return { hidden: !(m && m.classList.contains('show')), charters: window.Retention.get('harbor', 'charters', 0) | 0 };
+  }); await sleep(60);
+  ok('v82 prestige: Cancel dismisses with no reset', cancelled.hidden && cancelled.charters === chartersPre);
+
   // prestige → meta persists
   const relicsBefore = await page.evaluate(() => window.__harbor.relics().count);
   await page.evaluate(() => { window.HARBOR_SIM.raw().lifetimeMoney = 1e7; window.__harbor.prestige(); }); await sleep(400);
