@@ -939,6 +939,35 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('portal mode: zero console/page errors', portalErrs.length === 0);
   await portalPage.close();
 
+  // CrazyGames SDK loading bracket (regression guard): with a mock CrazyGames.SDK present at boot,
+  // Portal.init() must run its detect() BEFORE Portal.loadingStart(), so sdkGameLoadingStart fires
+  // (and is later paired by sdkGameLoadingStop) — the earlier order fired loadingStart before the
+  // vendor was known, so NEITHER loading event reached the SDK (both stayed grey in CrazyGames' QA).
+  const cgPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
+  const cgErrs = [];
+  cgPage.on('pageerror', e => cgErrs.push('PAGEERR ' + e.message));
+  cgPage.on('console', m => { if (m.type() === 'error' && !IGNORE_CONSOLE_ERR.test(m.text())) cgErrs.push('CONSOLE ' + m.text()); });
+  await cgPage.addInitScript(() => {
+    window.__cg = [];
+    var rec = function (n) { return function () { window.__cg.push(n); }; };
+    window.CrazyGames = { SDK: {
+      init: function () { return Promise.resolve(); }, environment: 'local',
+      game: { sdkGameLoadingStart: rec('loadStart'), sdkGameLoadingStop: rec('loadStop'), gameplayStart: rec('gpStart'), gameplayStop: rec('gpStop'), happytime: rec('happy') },
+      ad: { requestAd: function () {} }
+    } };
+  });
+  await cgPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
+  await cgPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  await cgPage.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); window.__harbor.autoFound(); });
+  await sleep(400);
+  const cg = await cgPage.evaluate(() => window.__cg.slice());
+  ok('crazygames SDK: loading bracket fires — sdkGameLoadingStart AND sdkGameLoadingStop, start before stop',
+    cg.indexOf('loadStart') >= 0 && cg.indexOf('loadStop') >= 0 && cg.indexOf('loadStart') < cg.indexOf('loadStop'));
+  ok('crazygames SDK: gameplayStart fires once the player founds a port', cg.indexOf('gpStart') >= 0);
+  ok('crazygames SDK: mock-SDK boot has zero console/page errors', cgErrs.length === 0);
+  await cgPage.close();
+
   // non-portal mode: unchanged behaviour — SW registers, install row + privacy link present.
   const nonPortalState = await page.evaluate(async () => {
     document.getElementById('setbtn').click();
