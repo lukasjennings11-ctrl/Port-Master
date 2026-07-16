@@ -16,6 +16,26 @@ update — match by meaning, not exact wording.)
 
 ---
 
+# Technical / engine questions (both portals)
+
+These come up as dropdowns or checkboxes. Same answers on CrazyGames and Poki:
+
+| Question | Answer |
+|---|---|
+| **Game engine / framework / technology** | **HTML5** (if it wants an engine name: **Custom — vanilla JavaScript + WebGL2, no framework**. It is NOT Unity/Godot/Construct/Phaser/GameMaker.) |
+| **Build type** (HTML5 vs Unity/WebGL) | **HTML5** |
+| **Does it use the [portal] SDK?** | **Yes** — the SDK is already built into the zip (CrazyGames SDK v3 in the CrazyGames file, Poki SDK in the Poki file). |
+| **Multiplayer / online?** | **No** — single-player. |
+| **Does it save progress?** | **Yes** — saves automatically on the device (browser local storage). |
+| **Mobile supported?** | **Yes** — mobile + desktop, responsive. |
+| **Uses login / accounts?** | **No** — instant play, no sign-up. |
+| **Third-party ads / your own ads?** | **No** — only the portal's own ad system (via their SDK). |
+| **External links out of the game?** | **No.** |
+| **Exclusive to this portal?** | **No / non-exclusive** (it's also on your own site and you may put it on other portals). *If they offer better revenue for exclusivity, that's your business call — you can safely say non-exclusive to start.* |
+| **Data collection / tracking?** | **None** — no accounts, no tracking cookies; progress stored on-device only. |
+
+---
+
 # CrazyGames — developer.crazygames.com/submit
 
 ### 1. Game file / upload
