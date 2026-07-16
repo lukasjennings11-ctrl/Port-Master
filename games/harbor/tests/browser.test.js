@@ -1096,6 +1096,12 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('pace: Lively survives reload (applied on boot before the first tick)', pace2.mode === 'lively' && pace2.mul === 1 && pace2.day === 160);
   await page.evaluate(() => window.__harbor.setPace('relaxed'));   // back to the shipping default
 
+  // difficulty: game.js applies the chosen tier to the sim and persists it
+  await page.evaluate(() => window.__harbor.setDifficulty('hard'));
+  ok('difficulty: game applies the tier to the sim', await page.evaluate(() => window.__harbor.difficulty().mode === 'hard' && window.HARBOR_SIM.difficulty().id === 'hard'));
+  ok('difficulty: choice persists to Retention', await page.evaluate(() => window.Retention.get('harbor', 'difficulty', 'easy') === 'hard'));
+  await page.evaluate(() => window.__harbor.setDifficulty('easy'));   // restore the default for later assertions
+
   // avert: pause the sim so the 6s telegraph can't tick down under the assertions
   await page.evaluate(() => window.__harbor.pause(true));
   await page.evaluate(() => { window.HARBOR_SIM.raw().money = 1e6; window.__harbor.forceWarn('green', false); });

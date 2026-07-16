@@ -2501,6 +2501,18 @@
     if (window.Retention) Retention.set(GAME, 'pace', paceMode);
     if (settingsOpen) renderSettings();
   }
+  // Difficulty (Easy→Extreme): applies immediately + persists. prestigeGain() reads the CURRENT tier,
+  // so dropping difficulty to dodge a storm also cuts your Legacy payout — self-balancing anti-cheese.
+  var DIFF_IDS = ['easy', 'hard', 'brutal', 'extreme'];
+  var diffMode = (window.Retention && DIFF_IDS.indexOf(Retention.get(GAME, 'difficulty', 'easy')) >= 0) ? Retention.get(GAME, 'difficulty', 'easy') : 'easy';
+  function applyDifficulty(mode) {
+    if (DIFF_IDS.indexOf(mode) < 0 || mode === diffMode) return;
+    diffMode = mode;
+    if (SIM && SIM.setDifficulty) SIM.setDifficulty(mode);
+    if (window.Retention) Retention.set(GAME, 'difficulty', diffMode);
+    if (settingsOpen) renderSettings();
+    updateHUD();
+  }
   // ---- Phase 15d: Harbourmaster's Tips — quiet, situational hints that read the player's live
   // state and nudge toward whatever system they seem to be missing. Deliberately quieter than both
   // the storm banner (urgent) and the announce card (celebratory) — this is ambient guidance, not
@@ -3859,7 +3871,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v82';
+  var BUILD_TAG = 'v83';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -3938,6 +3950,14 @@
     h += '<button class="mp-item auto' + (paceMode === 'relaxed' ? ' on' : '') + '" data-set="pace-relaxed"><span class="mi-n">🌤 Relaxed</span><span class="mi-c">' + (paceMode === 'relaxed' ? 'ON' : 'Pick') + '</span></button>';
     h += '<button class="mp-item auto' + (paceMode === 'lively' ? ' on' : '') + '" data-set="pace-lively"><span class="mi-n">⚡ Lively</span><span class="mi-c">' + (paceMode === 'lively' ? 'ON' : 'Pick') + '</span></button>';
     h += '</div><div class="set-help">Relaxed spreads out storms and events. Economy speed is unchanged.</div>';
+    // Difficulty (Easy→Extreme): harder tiers slow income + ramp storms/raids so idling can't keep up
+    // and active defense/economy play becomes necessary; harder banks more Legacy on prestige.
+    h += '<div class="mp-sec">Difficulty</div><div class="mp-grid">';
+    (SIM && SIM.difficulty ? SIM.difficulty().tiers : []).forEach(function (d) {
+      var on = d.id === diffMode;
+      h += '<button class="mp-item auto' + (on ? ' on' : '') + '" data-set="diff-' + d.id + '"><span class="mi-n">' + d.name + '</span><span class="mi-d">' + d.desc + '</span><span class="mi-c">' + (on ? 'ON' : (d.prestigeMul > 1 ? '+' + Math.round((d.prestigeMul - 1) * 100) + '% ✦' : 'Pick')) + '</span></button>';
+    });
+    h += '</div><div class="set-help">Harder tiers slow income and bring more storms &amp; raids — you’ll lean on sea walls, a navy and trade routes to survive — and bank more ✦ Legacy when you sign a charter. Best chosen at the start of a run.</div>';
     // Phase 15d: Harbourmaster's Tips — a single ON/OFF toggle (default ON), following the Pace
     // section immediately above it. OFF makes tickTips() a hard no-op (no other state changes).
     h += '<div class="mp-sec">Tips</div><div class="mp-grid">';
@@ -3993,6 +4013,7 @@
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
         else if (a === 'pace-relaxed') { applyPace('relaxed'); sfx('tap'); haptic(8); }
         else if (a === 'pace-lively') { applyPace('lively'); sfx('tap'); haptic(8); }
+        else if (a.indexOf('diff-') === 0) { applyDifficulty(a.slice(5)); sfx('tap'); haptic(10); renderSettings(); }
         else if (a === 'tips') { setTipsEnabled(!tipsEnabled()); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'install') { promptInstall(); }
         else if (a === 'errlog') { copyAndClearErrLog(); sfx('tap'); haptic(8); }
@@ -4524,6 +4545,7 @@
     loadAssets();
     loadUnlocked(); loadFounded(); loadGoal();
     if (SIM && SIM.setPace) SIM.setPace(PACE_OPTIONS[paceMode].mul);  // Phase 15b: apply saved/default pace BEFORE any tick (incl. offline catch-up below)
+    if (SIM && SIM.setDifficulty) SIM.setDifficulty(diffMode);        // apply saved difficulty BEFORE any tick (offline earnings honour the tier's cap)
     if (SIM) { computeMeta(); applyTide(); }                          // Legacy multipliers + today's market tide before offline accrual
     dailyList();                                                     // materialise today's missions so event hooks can bump them
     var offGain = 0, offSec = 0;
@@ -4775,6 +4797,8 @@
     // Phase 15b: pace + avert (test/debug hooks)
     pace: function () { return { mode: paceMode, mul: SIM ? SIM.pace() : 1, day: Math.round(1 / todSpeed) }; },
     setPace: function (mode) { applyPace(mode); return paceMode; },
+    difficulty: function () { return { mode: diffMode, sim: SIM && SIM.difficulty ? SIM.difficulty() : null }; },
+    setDifficulty: function (mode) { applyDifficulty(mode); return diffMode; },
     forceWarn: function (portId, crash) { var hz = SIM ? SIM.forceWarn(portId, crash) : null; updateHUD(); return hz; },   // test-only: skip the random wait, land straight in the avert-able warn phase
     avertHazard: function () { var ok = SIM ? SIM.avertHazard() : false; if (ok) updateHUD(); return ok; },
     avertCrash: function () { var ok = SIM ? SIM.avertCrash() : false; if (ok) updateHUD(); return ok; },

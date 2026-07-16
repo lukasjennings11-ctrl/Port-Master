@@ -1089,6 +1089,23 @@ function autoplay(cfg) {
     got1.every(function (v, i) { return v === got2[i]; }));
 })();
 
+// ---------------------------------------------------------------- difficulty (Easy→Extreme)
+(function difficulty() {
+  SIM.load(); var S = SIM.raw(); S.lifetimeMoney = 1000000;
+  SIM.setDifficulty('easy');
+  var dv = SIM.difficulty();
+  ok('difficulty: exposes 4 tiers, easy active + prestigeMul 1.0', dv.id === 'easy' && dv.tiers.length === 4 && dv.prestigeMul === 1.0);
+  var gainEasy = SIM.prestigeGain();
+  SIM.setDifficulty('extreme');
+  ok('difficulty: setDifficulty switches the active tier', SIM.difficulty().id === 'extreme');
+  var gainExtreme = SIM.prestigeGain();
+  ok('difficulty: Extreme banks more prestige Legacy than Easy (strategy reward)', gainExtreme > gainEasy && gainExtreme >= Math.floor(gainEasy * 2.0));
+  SIM.setDifficulty('nope');
+  ok('difficulty: invalid id is ignored (stays on current tier)', SIM.difficulty().id === 'extreme');
+  SIM.setDifficulty('easy');
+  ok('difficulty: Easy is an exact no-op — restores baseline prestige gain', SIM.prestigeGain() === gainEasy);
+})();
+
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
 if (fail) { console.log('  failing:'); fails.forEach(function (f) { console.log('   - ' + f); }); }
 process.exit(fail ? 1 : 0);

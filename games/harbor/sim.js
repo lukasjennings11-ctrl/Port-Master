@@ -26,6 +26,22 @@
   var PACE = 1;
   function setPace(m) { PACE = (typeof m === 'number' && m > 0) ? m : 1; }
 
+  // ---- DIFFICULTY (Easy→Extreme) ----
+  // Harder tiers slow income, shrink event/hazard gaps (more storms + wars), hit harder, weight raids
+  // up, and cap offline earnings — so passive idling can't keep up and you MUST actively defend
+  // (sea walls / navy / lighthouses), avert hazards, and trade for blocked resources. Harder play
+  // banks more prestige Legacy (the reward for strategy). Easy = every lever 1.0 → an exact no-op, so
+  // today's balance + all existing tests are unchanged. Injected like PACE/META; persisted in game.js.
+  var DIFFS = {
+    easy:    { name: 'Easy',    income: 1.0,  gap: 1.0,  severity: 1.0, raidW: 1.0, offlineHours: 8, prestigeMul: 1.0, desc: 'Relaxed — build at your own pace' },
+    hard:    { name: 'Hard',    income: 0.7,  gap: 0.75, severity: 1.4, raidW: 1.5, offlineHours: 6, prestigeMul: 1.3, desc: 'Leaner cash, more storms & raids' },
+    brutal:  { name: 'Brutal',  income: 0.5,  gap: 0.55, severity: 1.9, raidW: 2.2, offlineHours: 4, prestigeMul: 1.7, desc: 'Harsh economy, frequent disasters' },
+    extreme: { name: 'Extreme', income: 0.35, gap: 0.4,  severity: 2.6, raidW: 3.0, offlineHours: 2, prestigeMul: 2.3, desc: 'Idling fails — defend or sink' }
+  };
+  var DIFF_ID = 'easy', DIFF = DIFFS.easy;
+  function setDifficulty(id) { if (DIFFS[id]) { DIFF_ID = id; DIFF = DIFFS[id]; } }
+  function difficultyView() { var o = { id: DIFF_ID, tiers: [] }; for (var k in DIFFS) { o.tiers.push({ id: k, name: DIFFS[k].name, desc: DIFFS[k].desc, prestigeMul: DIFFS[k].prestigeMul }); if (DIFFS[k] === DIFF) { o.name = DIFFS[k].name; o.desc = DIFFS[k].desc; o.prestigeMul = DIFFS[k].prestigeMul; } } return o; }
+
   // ---- era ladder (empire rank) ----
   // Phase 17a: extended past Global Hub with two technology ages — Automated Harbour (robots +
   // logistics take over the docks) and Neon Horizon (the harbour of tomorrow: solar/fusion power,
@@ -510,7 +526,7 @@
   // ---- hazards: storms damage a port's buildings + sink route cargo; market crashes floor a price.
   // Meaningful but never wipes money/era — you pay to repair and invest in defenses to weather them.
   var HAZARD = { green: 'Squall', mountain: 'Rockslide', desert: 'Sandstorm', tropical: 'Hurricane', nordic: 'Ice Storm' };
-  function hzRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between hazards, not their telegraph/strike
+  function hzRand(a, b) { return (a + _rng() * (b - a)) * PACE * DIFF.gap; }   // PACE + difficulty stretch/shrink the gap between hazards, not their telegraph/strike
   function bhp(b) { return b.hp == null ? 100 : b.hp; }
   // Phase 17a: Sky Beacon (era7 defense) adds a THIRD defense stat alongside Sea Wall/Lighthouse —
   // a further storm-damage cut (strike() below) and a raid-survival edge (evData('raid')) — a late-
@@ -527,7 +543,7 @@
     var n = Math.min(pool.length, 1 + Math.floor(_rng() * 2)), damaged = 0;     // hit 1–2 buildings
     for (var k = 0; k < n && pool.length; k++) {
       var pick = pool.splice(Math.floor(_rng() * pool.length), 1)[0], b = p.buildings[pick];
-      b.hp = clamp(bhp(b) - (25 + _rng() * 30) * dmgF, 0, 100); damaged++;
+      b.hp = clamp(bhp(b) - (25 + _rng() * 30) * dmgF * DIFF.severity, 0, 100); damaged++;   // difficulty amplifies storm damage
     }
     var lossMul = Math.max(0.2, 1 - 0.25 * def.light), sunk = 0;                        // lighthouse protects cargo
     var rs = S.network.routes;
@@ -613,7 +629,7 @@
     { id: 'commission', kind: 'choice', name: 'Royal Commission', minEra: 1, w: 2 },
     { id: 'smuggler', kind: 'choice', name: 'Smuggler’s Offer', minEra: 1, w: 2 }
   ];
-  function evRand(a, b) { return (a + _rng() * (b - a)) * PACE; }   // PACE stretches the gap between events, not their resolve timer
+  function evRand(a, b) { return (a + _rng() * (b - a)) * PACE * DIFF.gap; }   // PACE + difficulty stretch/shrink the gap between events, not their resolve timer
   function evDef(id) { for (var i = 0; i < EV_DEFS.length; i++) if (EV_DEFS[i].id === id) return EV_DEFS[i]; return null; }
   // Portal content policy: some hosts (Poki) forbid ANY wager/chance mechanic regardless of currency.
   // A build can EXCLUDE specific events from ever being scheduled — the code (evData/resolveEvent)
@@ -626,9 +642,10 @@
     var elig = EV_DEFS.filter(function (e) { return S.era >= e.minEra && !EV_EXCLUDE[e.id]; });
     var pool = elig.filter(function (e) { return e.id !== (S.evt.lastId || ''); });
     if (!pool.length) pool = elig; if (!pool.length) return null;
-    var tot = 0; pool.forEach(function (e) { tot += e.w; });
+    var ew = function (e) { return e.id === 'raid' ? e.w * DIFF.raidW : e.w; };   // difficulty weights pirate raids up (more wars)
+    var tot = 0; pool.forEach(function (e) { tot += ew(e); });
     var r = _rng() * tot;
-    for (var i = 0; i < pool.length; i++) { r -= pool[i].w; if (r <= 0) return pool[i]; }
+    for (var i = 0; i < pool.length; i++) { r -= ew(pool[i]); if (r <= 0) return pool[i]; }
     return pool[pool.length - 1];
   }
   function evData(def) {
@@ -811,7 +828,7 @@
     // Phase 9a: composition synergies + port specialisation fold in alongside the existing multipliers
     var syn = synergyMul(port), focus = port.focus || 'none';
     var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul() * syn.prod;   // managers × Legacy × tide × crate surge × synergy
-    var salesMul = mgrMul('sales') * (META.sellMul || 1) * syn.sales * focusSalesMul(focus);
+    var salesMul = mgrMul('sales') * (META.sellMul || 1) * syn.sales * focusSalesMul(focus) * DIFF.income;   // difficulty scales money income (wages unchanged → tighter margins)
     // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
     var taper = {};
     for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
@@ -920,7 +937,7 @@
   function applyOffline(maxSec) {
     if (!S) return 0;
     var elapsed = (now() - (S.lastSeen || now())) / 1000;
-    elapsed = clamp(elapsed, 0, maxSec || (META.offlineHours || 8) * 3600);
+    elapsed = clamp(elapsed, 0, maxSec || Math.min(META.offlineHours || 8, DIFF.offlineHours) * 3600);   // difficulty caps offline earnings
     if (elapsed > 1) tick(elapsed);
     S.lastSeen = now();
     return elapsed;
@@ -928,7 +945,7 @@
 
   // ---- prestige (cash the run's lifetime earnings into permanent Legacy, then start anew) ----
   var PRESTIGE_THRESHOLD = 250000;   // first prestige unlocks ~Industrial Port (~45–60 min) so the loop hooks early
-  function prestigeGain() { return S ? Math.floor(Math.pow((S.lifetimeMoney || 0) / PRESTIGE_THRESHOLD, 0.5) * 8) : 0; }
+  function prestigeGain() { return S ? Math.floor(Math.pow((S.lifetimeMoney || 0) / PRESTIGE_THRESHOLD, 0.5) * 8 * DIFF.prestigeMul) : 0; }   // harder difficulty banks more Legacy — the reward for strategy
   function canPrestige() { return !!S && (S.lifetimeMoney || 0) >= PRESTIGE_THRESHOLD && prestigeGain() >= 1; }
   function resetRun() { S = fresh(); setActive('green'); save(); return snapshot(); }   // wipe the run; META start bonuses apply via fresh()
 
@@ -1006,6 +1023,7 @@
     boostMul: function () { return boostMul(); },   // Phase 12a: current effective boost multiplier (1 when inactive) — lets callers combine/stack sensibly
     __setRng: setRng,                                               // test-only: seed all gameplay RNG for deterministic tests
     setPace: setPace, pace: function () { return PACE; },           // Phase 15b: gap-roll multiplier (device pref, not saved)
+    setDifficulty: setDifficulty, difficulty: difficultyView,       // Easy→Extreme: income/gap/severity/raid/offline/prestige scaling (device pref, not saved)
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
