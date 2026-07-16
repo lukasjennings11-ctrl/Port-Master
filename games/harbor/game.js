@@ -3833,7 +3833,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v80';
+  var BUILD_TAG = 'v81';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4461,13 +4461,14 @@
 
   function boot() {
     metricsInit();   // Phase 13d: local fun-funnel metrics — one row per boot, never blocks/throws
-    // Portal SDK: call init() FIRST — its detect() runs SYNCHRONOUSLY and sets the vendor — THEN open
-    // the loading bracket. If loadingStart() runs before init() (as it used to), the adapter doesn't
-    // yet know it's on CrazyGames, so its sdkGameLoadingStart() is skipped; the later loadingStop()
-    // then fires unpaired and the SDK ignores it, so NEITHER loading event registers in CrazyGames'
-    // QA checklist. init() returns a promise (SDK's own async init) resolved in portalReady.then below.
+    // Portal SDK: start init() now (its detect() runs synchronously, so Portal.available is set for
+    // initAds below), but DON'T open the loading bracket yet. The CrazyGames SDK ignores any game.*
+    // call made before its init() promise RESOLVES — so a sdkGameLoadingStart() fired here would be
+    // dropped and the later unpaired stop ignored, leaving both loading events grey in QA (and
+    // "Load size/time: waiting…"). So the whole loadingStart()→loadingStop() bracket is opened inside
+    // portalReady.then() below, AFTER init has resolved. Non-portal builds: init() resolves at once
+    // with no vendor, so the bracket calls are harmless no-ops.
     var portalReady = window.Portal ? Portal.init() : null;
-    if (window.Portal) Portal.loadingStart();
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
     if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play Port Boss.</div>'; return; }
     E = HGL.createEngine(gl); ensureFX();
@@ -4530,15 +4531,22 @@
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
     if (portalReady) portalReady.then(function () {
-      Portal.loadingStop(); if (loader) loader.classList.add('hidden');
-      adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
-      // Gameplay bracket flows through adsGameplayStart/Stop (→ window.ADS → the portal SDK) — the same
-      // choke point the founding/resume/visibility paths already use — so it opens on ACTUAL gameplay,
-      // never merely at boot. A resumed founded save is already "playing" the instant the SDK is ready,
-      // so open it here (AFTER loadingStop, preserving the required loading→gameplay order); a brand-new
-      // player opens it when they found their first port instead.
-      if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
-      installErrorCapture();     // …and only now start listening for real runtime errors
+      // init() has resolved — NOW the CrazyGames SDK honors game.* calls. Open the loading bracket
+      // here and pair it one frame later, so both sdkGameLoadingStart + sdkGameLoadingStop register
+      // in order (greening the QA checklist + populating Load size/time). Heavy asset loading already
+      // ran synchronously above, un-gated on init, so a slow/flaky SDK can never block the game.
+      if (window.Portal) Portal.loadingStart();
+      requestAnimationFrame(function () {
+        if (window.Portal) Portal.loadingStop(); if (loader) loader.classList.add('hidden');
+        adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
+        // Gameplay bracket flows through adsGameplayStart/Stop (→ window.ADS → the portal SDK) — the same
+        // choke point the founding/resume/visibility paths already use — so it opens on ACTUAL gameplay,
+        // never merely at boot. A resumed founded save is already "playing" the instant the SDK is ready,
+        // so open it here (AFTER loadingStop, preserving the required loading→gameplay order); a brand-new
+        // player opens it when they found their first port instead.
+        if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
+        installErrorCapture();     // …and only now start listening for real runtime errors
+      });
     });
   }
   function showOffline(gain, sec) {

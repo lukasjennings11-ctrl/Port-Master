@@ -939,19 +939,22 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('portal mode: zero console/page errors', portalErrs.length === 0);
   await portalPage.close();
 
-  // CrazyGames SDK loading bracket (regression guard): with a mock CrazyGames.SDK present at boot,
-  // Portal.init() must run its detect() BEFORE Portal.loadingStart(), so sdkGameLoadingStart fires
-  // (and is later paired by sdkGameLoadingStop) — the earlier order fired loadingStart before the
-  // vendor was known, so NEITHER loading event reached the SDK (both stayed grey in CrazyGames' QA).
+  // CrazyGames SDK loading bracket (regression guard): the real CrazyGames SDK IGNORES any game.*
+  // call made before its init() promise RESOLVES. boot() must therefore open the whole
+  // loadingStart()->loadingStop() bracket INSIDE portalReady.then() (after init resolves), not at
+  // boot. The mock below models that: rec() only records once `inited` is true, and init() flips it
+  // on a microtask (async, like the real SDK) — so the pre-v81 order (loadingStart fired before init
+  // resolved) records NOTHING and this test fails; the fixed order records both, start before stop.
   const cgPage = await (await browser.newContext({ viewport: { width: 414, height: 820 } })).newPage();
   const cgErrs = [];
   cgPage.on('pageerror', e => cgErrs.push('PAGEERR ' + e.message));
   cgPage.on('console', m => { if (m.type() === 'error' && !IGNORE_CONSOLE_ERR.test(m.text())) cgErrs.push('CONSOLE ' + m.text()); });
   await cgPage.addInitScript(() => {
     window.__cg = [];
-    var rec = function (n) { return function () { window.__cg.push(n); }; };
+    var inited = false;   // the real SDK honors game.* only after init() resolves
+    var rec = function (n) { return function () { if (inited) window.__cg.push(n); }; };
     window.CrazyGames = { SDK: {
-      init: function () { return Promise.resolve(); }, environment: 'local',
+      init: function () { return Promise.resolve().then(function () { inited = true; }); }, environment: 'local',
       game: { sdkGameLoadingStart: rec('loadStart'), sdkGameLoadingStop: rec('loadStop'), gameplayStart: rec('gpStart'), gameplayStop: rec('gpStop'), happytime: rec('happy') },
       ad: { requestAd: function () {} }
     } };
