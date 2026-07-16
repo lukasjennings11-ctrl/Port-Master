@@ -74,8 +74,9 @@ both platforms automatically. (Optional polish for Android's adaptive icon: add
 
 I can generate all of these from the game — just ask:
 - **App icon** — 1024×1024 (provided: `submit/app/icon-1024.png` once generated).
-- **Screenshots** — phone-sized. Play wants a few 1080×1920-ish; Apple wants 6.7" (1290×2796) and
-  6.5" sizes. I'll render these from the game (like your itch shots).
+- **Screenshots** — provided: `submit/app/store-screenshots/store-*.png` — four portrait 1290×2796
+  gameplay shots (iOS 6.7", also valid for Google Play). Upload these directly. (Apple also lists a
+  6.5" size — the same 1290×2796 images are accepted; ask me if you want exact 6.5" crops.)
 - **Short + full description** — reuse `submit/SUBMIT-DETAILS.md` copy (Title, tagline, long description).
 - **Category:** Games → Simulation (or Strategy). **Content rating:** Everyone / 4+.
 - **Privacy policy URL** — ⚠️ **both stores require one.** Port Boss stores progress only on-device and
