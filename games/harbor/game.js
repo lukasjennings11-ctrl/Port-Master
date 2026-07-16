@@ -3833,7 +3833,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v79';
+  var BUILD_TAG = 'v80';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4461,6 +4461,12 @@
 
   function boot() {
     metricsInit();   // Phase 13d: local fun-funnel metrics — one row per boot, never blocks/throws
+    // Portal SDK: call init() FIRST — its detect() runs SYNCHRONOUSLY and sets the vendor — THEN open
+    // the loading bracket. If loadingStart() runs before init() (as it used to), the adapter doesn't
+    // yet know it's on CrazyGames, so its sdkGameLoadingStart() is skipped; the later loadingStop()
+    // then fires unpaired and the SDK ignores it, so NEITHER loading event registers in CrazyGames'
+    // QA checklist. init() returns a promise (SDK's own async init) resolved in portalReady.then below.
+    var portalReady = window.Portal ? Portal.init() : null;
     if (window.Portal) Portal.loadingStart();
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
     if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play Port Boss.</div>'; return; }
@@ -4523,7 +4529,7 @@
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
-    if (window.Portal) Portal.init().then(function () {
+    if (portalReady) portalReady.then(function () {
       Portal.loadingStop(); if (loader) loader.classList.add('hidden');
       adsLoadingFinished();      // Phase 12b: boot fully succeeded, loader is hidden — tell the ad provider
       // Gameplay bracket flows through adsGameplayStart/Stop (→ window.ADS → the portal SDK) — the same
