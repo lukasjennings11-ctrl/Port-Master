@@ -1,7 +1,8 @@
 # Port Boss — deliverables index
 
 Everything produced for launching Port Boss (web portals + mobile app), and where it lives in this
-repo. All current as of build **v83** (difficulty levels + prestige-confirm fix).
+repo. All current as of build **v84** (per-port era — new colonies start from a fishing village —
+plus trade-network clarity; on top of v83 difficulty levels + v82 prestige-confirm fix).
 
 > One-download copies of all this are handed over in chat as **`Port Boss — Kit (1 of 2)`** and
 > **`(2 of 2)`** zips (they merge into one tidy `Port Boss/` folder).

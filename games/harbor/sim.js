@@ -208,11 +208,11 @@
     var t = fleetTier(role);
     return t >= FLEET_MAX_TIER ? null : FLEET_COST[t + 1];
   }
-  function fleetEraGated(role) { var t = fleetTier(role); return t < FLEET_MAX_TIER && (S.era || 0) < t + 1; }
+  function fleetEraGated(role) { var t = fleetTier(role); return t < FLEET_MAX_TIER && empireEra() < t + 1; }
   function canBuyShip(role) {
     if (!S || FLEET_ROLES.indexOf(role) < 0) return false;
     var t = fleetTier(role);
-    return t < FLEET_MAX_TIER && (S.era || 0) >= t + 1 && S.money >= FLEET_COST[t + 1];
+    return t < FLEET_MAX_TIER && empireEra() >= t + 1 && S.money >= FLEET_COST[t + 1];   // fleet is empire-wide → gate on your most advanced harbour
   }
   function buyShip(role) {
     if (!canBuyShip(role)) return false;
@@ -273,11 +273,11 @@
   var NAVY_MAX_TIER = NAVY_COST.length - 1;                    // 5
   function navyTier() { return (S && S.navy) || 0; }
   function navyShipCost() { var t = navyTier(); return t >= NAVY_MAX_TIER ? null : NAVY_COST[t + 1]; }
-  function navyEraGated() { var t = navyTier(); return t < NAVY_MAX_TIER && (S.era || 0) < NAVY_ERA[t + 1]; }
+  function navyEraGated() { var t = navyTier(); return t < NAVY_MAX_TIER && empireEra() < NAVY_ERA[t + 1]; }
   function canBuyNavy() {
     if (!S) return false;
     var t = navyTier();
-    return t < NAVY_MAX_TIER && (S.era || 0) >= NAVY_ERA[t + 1] && S.money >= NAVY_COST[t + 1];
+    return t < NAVY_MAX_TIER && empireEra() >= NAVY_ERA[t + 1] && S.money >= NAVY_COST[t + 1];   // navy is empire-wide
   }
   function buyNavy() {
     if (!canBuyNavy()) return false;
@@ -324,7 +324,7 @@
   // ---- construction ----
   function freshPort(id) {
     return {
-      id: id, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, focus: 'none',
+      id: id, era: 0, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, focus: 'none',
       demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0
     };
   }
@@ -342,7 +342,23 @@
       stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0, navyBought: 0, raidsRepelled: 0 }
     };
   }
-  function setActive(id) { if (id != null) S.active = id; CUR = (S.ports && S.ports[S.active]) || null; }
+  // Per-port era: each harbour advances on its own; S.era mirrors the ACTIVE port's era so every
+  // existing S.era read (build gates, slot cap, advance, contracts, HUD) means "this harbour's age".
+  function setActive(id) {
+    // Only pull S.era from the port when the ACTIVE port actually changes (a real world switch).
+    // The many defensive setActive(S.active) re-sync calls (fireEvent/resolveEvent/tick cleanup) pass
+    // the current active id and must NOT reload S.era — S.era already tracks it, and advanceEra/setEra
+    // are the authorities that move an active port's era. (tick clobbers CUR across ports; these calls
+    // just re-point it — they never went stale on era.)
+    var switching = (id != null && id !== S.active);
+    if (id != null) S.active = id;
+    CUR = (S.ports && S.ports[S.active]) || null;
+    if (switching && CUR && typeof CUR.era === 'number') S.era = CUR.era;
+  }
+  // Empire era = the most advanced harbour you own (with S.era as a floor for robustness). Empire-wide
+  // systems (fleet, navy, expedition slots, colony cost, the Uncharted-Waters discovery gate) key off
+  // THIS, not the active port — so a fresh era-0 colony never rolls back your fleet tech or discovery.
+  function empireEra() { var m = (S && S.era) || 0; if (S && S.ports) for (var pid in S.ports) { var e = S.ports[pid].era || 0; if (e > m) m = e; } return m; }
 
   // migrate older saves (incl. the pre-Phase-4 single-global economy) into empire+ports shape
   function patch() {
@@ -367,6 +383,7 @@
     for (var id in S.ports) {
       var pt = S.ports[id];
       if (!pt.id) pt.id = id;
+      if (typeof pt.era !== 'number') pt.era = S.era || 0;            // per-port era: existing saves' harbours keep the old global era
       if (!pt.res) pt.res = { fish: 0, timber: 0, goods: 0 };
       if (!pt.demand) pt.demand = { fish: 1, timber: 1, goods: 1 };
       if (!pt.buildings) pt.buildings = [];
@@ -738,7 +755,7 @@
     { id: 'trench', name: 'The Deep Trench', tier: 4, secs: 2400 }
   ];
   function destDef(id) { for (var i = 0; i < DESTINATIONS.length; i++) if (DESTINATIONS[i].id === id) return DESTINATIONS[i]; return null; }
-  function voyageSlots() { return 1 + Math.min(2, Math.floor((S.era || 0) / 2)) + (META.voyageSlots || 0); }
+  function voyageSlots() { return 1 + Math.min(2, Math.floor(empireEra() / 2)) + (META.voyageSlots || 0); }   // expeditions are empire-wide → scale on empire era
   function voyageCost(d) { return Math.round(120 * d.tier * (1 + (S.era || 0) * 0.5)); }
   function canStartVoyage(id) { var d = destDef(id); return !!(d && S && S.money >= voyageCost(d) && (S.voyages || []).length < voyageSlots()); }
   function startVoyage(id) {
@@ -888,13 +905,15 @@
   }
 
   function canAdvance() {
-    if (!S) return false;                                            // no era cap — endless
-    var req = eraReq(S.era); if (!req) return false;
-    if (S.money < req.money) return false;
-    if (req.need) { var c = empireCounts(); for (var k in req.need) if ((c[k] || 0) < req.need[k]) return false; }
+    if (!S || !CUR) return false;                                    // no era cap — endless; needs an active harbour
+    var req = eraReq(S.era); if (!req) return false;                 // S.era = the ACTIVE harbour's era
+    if (S.money < req.money) return false;                           // money is the shared empire treasury
+    // Per-port era: advancing THIS harbour needs THIS harbour's own buildings — a fresh colony can't
+    // ride your other ports' buildings to skip ahead. (Single-port play is identical to before.)
+    if (req.need) { var c = portCounts(CUR); for (var k in req.need) if ((c[k] || 0) < req.need[k]) return false; }
     return true;
   }
-  function advanceEra() { if (!canAdvance()) return false; S.era++; save(); return true; }
+  function advanceEra() { if (!canAdvance()) return false; CUR.era = (CUR.era || 0) + 1; S.era = CUR.era; save(); return true; }
 
   // ---- found a world's port ----
   // Phase 15c: the FIRST port an empire ever founds is free (the starting village); every colony
@@ -904,7 +923,7 @@
   // founding is a smaller "commit to developing this coast" toll you can pay every run. See the
   // Phase 15c commit body for the numbers this was checked against.
   function isFirstPort() { return !S || !S.ports || Object.keys(S.ports).length === 0; }
-  function colonyCost() { return Math.round(150 * Math.pow(2, S.era || 0)); }
+  function colonyCost() { return Math.round(150 * Math.pow(2, empireEra())); }   // founding cost scales with your empire's advancement, not the fresh colony you're viewing
   function foundCost() { return isFirstPort() ? 0 : colonyCost(); }
   function canFoundPort() { return isFirstPort() || (S && S.money >= colonyCost()); }
   // free: internal reconciliation (e.g. re-founding a colony you already discovered, after a
@@ -974,10 +993,11 @@
   }
   function snapshot(id) {
     if (!S) return null;
-    var pid = id || S.active, port = S.ports[pid] || null, prev = CUR;
-    CUR = port;
+    var pid = id || S.active, port = S.ports[pid] || null, prev = CUR, prevEra = S.era;
+    CUR = port; if (port && typeof port.era === 'number') S.era = port.era;   // scope era to the queried harbour, restored below
     var v = {
       era: S.era, eraName: eraName(S.era), money: Math.floor(S.money),
+      empireEra: empireEra(), empireEraName: eraName(empireEra()),    // per-port era: this harbour's age vs the empire's most advanced
       world: pid, worldHint: spec(pid).hint, spec: spec(pid),
       founded: S.founded, portFounded: !!port,
       foundCost: foundCost(), canFoundPort: canFoundPort(),           // Phase 15c: colony founding fee (0 for the empire's first port)
@@ -1008,7 +1028,7 @@
       v.synergies = SYNERGY_DEFS.map(function (d) { return { id: d.id, name: d.name, effect: d.effect, chan: d.chan, active: false }; }); v.focus = 'none';
       v.slotCap = slotCap(); v.slotsUsed = 0;
     }
-    CUR = prev;
+    CUR = prev; S.era = prevEra;
     return v;
   }
 
@@ -1027,7 +1047,7 @@
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
     buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
-    addRoute: addRoute, canAddRoute: canAddRoute, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
+    addRoute: addRoute, canAddRoute: canAddRoute, hasRoute: function (a, b, res) { return S && S.network ? hasRoute(a, b, res) : false; }, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },
     // Phase 17b: fleet registry — buy/query the three ship-tier ladders
     FLEET_ROLES: FLEET_ROLES, FLEET_COST: FLEET_COST,
@@ -1060,7 +1080,7 @@
     upgrade: upgrade, canUpgrade: canUpgrade, upCost: function (i) { return CUR && CUR.buildings[i] ? upCost(CUR.buildings[i]) : 0; },
     canAdvance: canAdvance, advanceEra: advanceEra,
     setFounded: function (v) { if (S) { S.founded = !!v; save(); } },
-    setEra: function (n) { if (S) { S.era = Math.max(0, n | 0); save(); } },
+    setEra: function (n) { if (S) { S.era = Math.max(0, n | 0); if (CUR) CUR.era = S.era; save(); } },   // per-port era: debug/test hook advances the ACTIVE harbour
     save: save, applyOffline: applyOffline, mark: function () { if (S) { S.lastSeen = now(); save(); } }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

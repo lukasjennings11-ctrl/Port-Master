@@ -69,6 +69,27 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('trade guide: selecting the first node shows the "tap another harbour" link hint', tg2.sel === 'green' && /tap another harbour/i.test(tg2.msg));
   await page.evaluate(() => window.__harbor.closeTrade());
 
+  // v84: with a SECOND harbour founded the whole route flow must work end-to-end (the user's
+  // "I click both coasts and nothing happens" was really "I only had one founded port"). Found a
+  // colony directly on the sim, then drive tap→tap→create, and check the disabled-reason label.
+  await page.evaluate(() => { var S = window.HARBOR_SIM; S.raw().money = 1e6; S.foundPort('tropical'); S.setActive('green'); window.__harbor.openTrade(); });
+  await sleep(120);
+  const rt1 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('v84 trade: guide card hides once 2 harbours are founded', rt1.founded === 2 && rt1.guide === false);
+  // tap green then tropical → the route builder opens (not a silent no-op)
+  await page.evaluate(() => { window.__harbor.tradeTapNode('green'); window.__harbor.tradeTapNode('tropical'); });
+  const rt2 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('v84 trade: tapping two founded harbours opens the route builder', /Ship from/i.test(rt2.msg));
+  // affordable → the resource buttons show the price; create a fish route
+  ok('v84 trade: an affordable resource button shows its £ price', /£/.test(rt2.msg));
+  await page.evaluate(() => window.HARBOR_SIM.addRoute('green', 'tropical', 'fish'));
+  ok('v84 trade: a route is created between the two harbours', await page.evaluate(() => window.HARBOR_SIM.network().routes.length === 1));
+  // disabled-reason: broke + a fresh pair → the button must say WHY (Need £…), not sit silently dead
+  await page.evaluate(() => { window.HARBOR_SIM.raw().money = 0; window.__harbor.tradeTapNode('green'); window.__harbor.tradeTapNode('tropical'); });
+  const rt3 = await page.evaluate(() => window.__harbor.tradeState());
+  ok('v84 trade: an unaffordable resource button explains "Need £…"', /Need £/i.test(rt3.msg));
+  await page.evaluate(() => { window.__harbor.closeTrade(); var S = window.HARBOR_SIM; S.removeRoute && S.network().routes.forEach(function (r) { S.removeRoute(r.id); }); S.setActive('green'); });
+
   // Manage panel clarity — "don't show me items I cannot click, or blank them out" (2nd playtest
   // complaint). With next to no money, every unaffordable buy row across the panel should be
   // ghosted (not just faintly dimmer) and say what's missing; the New-buildings section should
@@ -310,8 +331,8 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // Phase 15a: with a 2nd harbour now founded, the trade guide card must get out of the way.
   await page.evaluate(() => window.__harbor.openTrade());
   await sleep(120);
-  const tg3 = await page.evaluate(() => window.__harbor.tradeState());
-  ok('trade guide: card hidden once 2+ harbours are founded', tg3.founded >= 2 && tg3.guide === false);
+  const v84a = await page.evaluate(() => window.__harbor.tradeState());
+  ok('trade guide: card hidden once 2+ harbours are founded', v84a.founded >= 2 && v84a.guide === false);
 
   // ---- Phase 15c: building slots + expedition-based world discovery ----
   // Guide-card retarget: green is the only game.js-UNLOCKED world here ('tropical' above was
@@ -1343,7 +1364,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     // like that can't outrank fleetBehind (era/money below are the load-bearing state either way).
     window.Retention.set('harbor', 'legacyBal', 0); window.Retention.set('harbor', 'crates', 0);
     var raw = window.HARBOR_SIM.raw();
-    raw.era = 3;      // fresh save → every fleet ladder is still at tier0 → 3 ages behind (past the 2+ threshold)
+    window.HARBOR_SIM.setEra(3);   // v84 per-port era: sets the active harbour's era (and empireEra) to 3 → every fleet ladder still at tier0 is 3 ages behind (past the 2+ threshold)
     raw.money = 50;   // low enough that no higher-priority rule (eraReady/voyageIdle/idleGold/storageFull/unchartedReady) can also be true
     window.__harbor.resetTipRateLimit();
   });

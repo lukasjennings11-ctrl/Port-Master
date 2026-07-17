@@ -1106,6 +1106,55 @@ function autoplay(cfg) {
   ok('difficulty: Easy is an exact no-op — restores baseline prestige gain', SIM.prestigeGain() === gainEasy);
 })();
 
+// ---------------------------------------------------------------- v84: per-port era
+(function perPortEra() {
+  // a newly founded colony starts from scratch (era 0) while your current harbour keeps its era
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(4);
+  var raw = SIM.raw(); raw.money = 1e9;
+  ok('per-port: setEra advances the ACTIVE harbour', SIM.port('green').era === 4);
+  SIM.foundPort('tropical');                                        // colony #2 — foundPort makes it active
+  ok('per-port: a new colony starts at era 0 (fishing village)', SIM.port('tropical').era === 0);
+  ok('per-port: the older harbour keeps its advanced era', SIM.port('green').era === 4);
+  ok('per-port: snapshot.era follows the harbour you are viewing', SIM.state().era === 0);
+  ok('per-port: snapshot.empireEra = your MOST advanced harbour', SIM.state().empireEra === 4);
+  ok('per-port: green snapshot still reports era 4 (scoped, non-destructive)', SIM.state('green').era === 4);
+  ok('per-port: querying green did not disturb the active harbour', SIM.state().era === 0);
+
+  // advancing one harbour never touches another
+  SIM.setActive('tropical'); var t = SIM.port('tropical');
+  t.buildings.push({ type: 'fishing_hut', level: 1, hp: 100 }, { type: 'fishing_hut', level: 1, hp: 100 }, { type: 'cottage', level: 1, hp: 100 });
+  SIM.raw().money = 1e9;
+  ok('per-port: fresh colony can advance once its OWN buildings meet the era gate', SIM.canAdvance() === true);
+  SIM.advanceEra();
+  ok('per-port: advancing the colony bumps only its era', SIM.port('tropical').era === 1);
+  ok('per-port: advancing the colony left the older harbour untouched', SIM.port('green').era === 4);
+  ok('per-port: empireEra is unchanged (green still the most advanced)', SIM.state().empireEra === 4);
+
+  // empire-wide systems key off the MOST advanced harbour, not the fresh colony you're viewing
+  ok('per-port: on the era-1 colony, voyage slots still reflect empire era 4', SIM.state().voyages.slots === (1 + Math.min(2, Math.floor(4 / 2))));
+  var costOnColony = SIM.foundCost();                               // colony cost scales with empireEra(4), not the era-1 port
+  ok('per-port: colony founding cost scales with empire era, not the viewed port', costOnColony === Math.round(150 * Math.pow(2, 4)));
+})();
+
+// ---------------------------------------------------------------- v84: per-port era migration
+(function perPortEraMigration() {
+  // an OLD save whose harbours predate per-port era: each port must inherit the old global era on load
+  var legacy = {
+    era: 3, money: 5000, lifetimeMoney: 80000, lastSeen: Date.now(), founded: true,
+    managers: { fishing: 1, sales: 0, labour: 0 }, active: 'green',
+    ports: {
+      green: { id: 'green', res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 },
+      nordic: { id: 'nordic', res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 }
+      // NOTE: neither port carries a .era field — patch() must backfill from the old global era.
+    },
+    network: { xp: 0, level: 1, routes: [] }, hazard: { t: 0, next: 100, phase: 'idle', strikeId: 0, last: null }, crash: null, stats: { storms: 0, shipped: 0 }
+  };
+  STORE['harbor:sim'] = JSON.parse(JSON.stringify(legacy));
+  SIM.load();
+  ok('per-port migrate: existing harbours inherit the old global era (no lost progress)', SIM.port('green').era === 3 && SIM.port('nordic').era === 3);
+  ok('per-port migrate: empire era matches the migrated ports', SIM.state().empireEra === 3);
+})();
+
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');
 if (fail) { console.log('  failing:'); fails.forEach(function (f) { console.log('   - ' + f); }); }
 process.exit(fail ? 1 : 0);

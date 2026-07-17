@@ -2185,9 +2185,9 @@
     tradeMap = document.createElement('div'); tradeMap.id = 'trademap';
     tradeMap.innerHTML = '<div class="tm-top"><span class="tm-title">Trade Network</span><span class="tm-lvl" id="tm-lvl"></span><button class="tm-close" id="tm-close">✕</button></div>' +
       '<div class="tm-xp"><i id="tm-xpfill"></i></div>' +
-      '<div class="tm-guide" id="tm-guide"><div class="tmg-ic">🧭</div><div class="tmg-title">Open a second harbour</div>' +
-      '<div class="tmg-body">Trade routes link TWO harbours — found a second port to start trading.</div>' +
-      '<button class="tmg-btn" id="tmg-show">Show me</button></div>' +
+      '<div class="tm-guide" id="tm-guide"><div class="tmg-ic">🧭</div><div class="tmg-title">You need a second harbour</div>' +
+      '<div class="tmg-body">A route links TWO of your harbours, so you need at least two founded. To open the next one: send an <b>Uncharted Waters</b> expedition (Expeditions), then <b>Found</b> the coast it discovers. Come back here and tap one harbour, then the other.</div>' +
+      '<button class="tmg-btn" id="tmg-show">Show me how</button></div>' +
       '<canvas id="tradecanvas"></canvas>' +
       '<div class="tm-act" id="tm-act"></div>';
     wrap.appendChild(tradeMap);
@@ -2244,9 +2244,12 @@
     // building a route (source + dest selected)
     if (tradeSel.node && tradeSel.dest) {
       var a = tradeSel.node, b = tradeSel.dest, html = '<div class="ta-head">Ship from <b>' + wname(a) + '</b> → <b>' + wname(b) + '</b></div><div class="ta-res">';
+      var money = SIM.raw() ? SIM.raw().money : 0, atMax = net.routes.length >= net.maxRoutes;
       ['fish', 'timber', 'goods'].forEach(function (res) {
         var can = SIM.canAddRoute(a, b, res), cost = net.routeCreateCost;
-        html += '<button class="ta-rbtn" data-res="' + res + '"' + (can ? '' : ' disabled') + ' style="border-color:' + RESCOL_(res) + '"><span>' + res + '</span><span class="ta-cost">£' + fmt(cost) + '</span></button>';
+        // show WHY a resource can't be shipped rather than a silent disabled button
+        var label = can ? ('£' + fmt(cost)) : (SIM.hasRoute && SIM.hasRoute(a, b, res) ? 'linked' : atMax ? 'route cap' : money < cost ? 'Need £' + fmt(cost) : '£' + fmt(cost));
+        html += '<button class="ta-rbtn" data-res="' + res + '"' + (can ? '' : ' disabled') + ' style="border-color:' + RESCOL_(res) + '"><span>' + res + '</span><span class="ta-cost">' + label + '</span></button>';
       });
       html += '</div><button class="ta-cancel" data-cancel="1">Cancel</button>';
       tradeAct.innerHTML = html;
@@ -2271,7 +2274,7 @@
     var perk = 'Network Lv ' + net.level + ' — +' + net.capPct + '% capacity, +' + net.tariffPct + '% tariffs' + (net.insurance ? ', storm insurance' : ', insurance at Lv 3');
     // a selected node always gets its "tap another" hint (the guide card above already covers the
     // <2-founded case, so this stays true to what the player just did rather than re-explaining that)
-    var hint = tradeSel.node ? 'Now tap another harbour to link a route' : (founded < 2 ? 'Found a second harbour to open trade routes.' : 'Tap a harbour, then another, to build a route.');
+    var hint = tradeSel.node ? 'Now tap another harbour to link a route' : (founded < 2 ? 'Only ' + founded + ' harbour founded — a route needs two. Discover & found another (Uncharted Waters), then link them here.' : 'Tap a harbour, then another, to build a route.');
     tradeAct.innerHTML = '<div class="ta-msg">' + hint + '</div><div class="ta-perk">' + perk + '</div>';
   }
   function RESCOL_(res) { return RESCOL[res] || '#9fb0bd'; }
@@ -2357,7 +2360,7 @@
     for (var i = 0; i < HARBOR_BIOME_ORDER.length; i++) {
       var id = HARBOR_BIOME_ORDER[i];
       if (!isUnlocked(id)) {
-        var b = HARBOR_BIOMES[id], eraNow = (SIM && SIM.raw()) ? SIM.raw().era : 0;
+        var b = HARBOR_BIOMES[id], eraNow = (SIM && SIM.state) ? (SIM.state().empireEra || 0) : 0;   // per-port era: discovery gates on your MOST-ADVANCED harbour, not the one you're viewing
         return (b && eraNow >= b.unlockEra) ? id : null;
       }
     }
@@ -2604,6 +2607,15 @@
     { id: 'noFocus', cooldown: 240,
       when: function (s) { return !!(s.portFounded && s.focus === 'none' && (s.buildings || []).length >= 3); },
       text: 'Set a Port Focus in Manage — specialists out-earn generalists' },
+    // v84: only ONE harbour founded and Uncharted Waters is reachable — answers "how do I make a trade
+    // route?" (you need a second harbour first) rather than leaving the player tapping one coast.
+    { id: 'tradeNeedsSecond', cooldown: 300,
+      when: function (s) {
+        if (!((s.ports || []).length === 1)) return false;
+        var id = unchartedTarget(); if (!id) return false;
+        return !!SIM.canStartUncharted(HARBOR_BIOMES[id].unlockEra);
+      },
+      text: 'Trade routes need a second harbour — chart Uncharted Waters, found the new coast, then link them' },
     // 2+ harbours founded but never linked into a trade route
     { id: 'tradeNetwork', cooldown: 240,
       when: function (s) { return !!((s.ports || []).length >= 2 && s.network && s.network.routes.length === 0); },
@@ -2619,7 +2631,7 @@
     // Phase 17b: any fleet ladder sitting 2+ ages behind the current era — the rubber-band's -5%/age
     // floor is starting to bite, and there's a concrete fix (Registry) to point at.
     { id: 'fleetBehind', cooldown: 240,
-      when: function (s) { var f = s.fleet; return !!(f && SIM.FLEET_ROLES.some(function (r) { return (s.era - f[r].tier) >= 2; })); },
+      when: function (s) { var f = s.fleet, e = (s.empireEra != null ? s.empireEra : s.era); return !!(f && SIM.FLEET_ROLES.some(function (r) { return (e - f[r].tier) >= 2; })); },   // v84: fleet is empire-wide → measure "behind" against your most advanced harbour, not the port you're viewing
       text: 'Your fleet is falling behind the times — commission modern ships in the Registry' },
     // Phase 17c: a manual raid that wasn't won (tribute paid, or a fight lost) with a navy tier
     // affordable right now — the concrete "here's the fix" nudge toward the Navy section.
@@ -3871,7 +3883,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v83';
+  var BUILD_TAG = 'v84';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
