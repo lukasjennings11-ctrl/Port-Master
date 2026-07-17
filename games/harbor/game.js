@@ -2151,7 +2151,29 @@
   // Phase 15a: the trade map used to give zero feedback when there was nothing to connect yet
   // ("I can't set up a trade network, I can only click on one city" — first playtest). This card
   // makes the reason explicit and offers a one-tap way to go found a second harbour.
-  function updateTradeGuide() { if (tradeGuideEl) tradeGuideEl.classList.toggle('show', tradeFoundedCount() < 2); }
+  // v85: the first unlocked world you haven't founded yet (in ladder order) — the "you already have
+  // a harbour to found" case that the trade guidance must prefer over "go chart new waters".
+  function firstUnfoundedUnlocked() {
+    for (var i = 0; i < HARBOR_BIOME_ORDER.length; i++) { var id = HARBOR_BIOME_ORDER[i]; if (isUnlocked(id) && !portFounded(id)) return id; }
+    return null;
+  }
+  function updateTradeGuide() {
+    if (!tradeGuideEl) return;
+    var show = tradeFoundedCount() < 2;
+    tradeGuideEl.classList.toggle('show', show);
+    if (!show) return;
+    // v85: state-aware copy. If you've UNLOCKED a world but not FOUNDED it (the trap that reads as
+    // "I have 3 harbours but can't trade"), point at founding it — NOT at Uncharted Waters.
+    var t = tradeGuideEl.querySelector('.tmg-title'), b = tradeGuideEl.querySelector('.tmg-body'), uf = firstUnfoundedUnlocked();
+    if (uf) {
+      var fc = SIM && SIM.foundCost ? SIM.foundCost() : 0;
+      if (t) t.textContent = 'Found your next harbour';
+      if (b) b.innerHTML = 'A route links TWO <b>founded</b> harbours. You’ve unlocked <b>' + wname(uf) + '</b> but haven’t founded it yet — tap its dim node below to found it for <b>£' + fmt(fc) + '</b>, then link the two.';
+    } else {
+      if (t) t.textContent = 'You need a second harbour';
+      if (b) b.innerHTML = 'A route links TWO of your harbours, so you need at least two founded. To open the next one: send an <b>Uncharted Waters</b> expedition (Expeditions), then <b>Found</b> the coast it discovers. Come back here and tap one harbour, then the other.';
+    }
+  }
   function tradeShowMe() {
     closeTrade();
     var target = null;
@@ -2224,16 +2246,38 @@
     for (var id in NODES) { var c = nodeXY(id); if (Math.hypot(sx - c[0], sy - c[1]) < 30 * DPR) { hitN = id; break; } }
     if (hitN) {
       tradeSel.route = null;
-      if (!portFounded(hitN)) { showTradeMsg('Found this harbour first'); tradeSel.node = null; }
-      else if (!tradeSel.node) { tradeSel.node = hitN; sfx('tap'); }
-      else if (tradeSel.node === hitN) { tradeSel.node = null; }
-      else { tradeSel.dest = hitN; renderTradeAct(); sfx('tap'); return; }   // src+dest chosen -> builder
+      if (!portFounded(hitN)) {
+        // v85: an unlocked-but-unfounded world is the #1 trade-network snag ("3 harbours but can't
+        // link them" = 3 UNLOCKED, 1 FOUNDED). Instead of a dead "found it first" note, offer to
+        // found it right here (renderTradeAct → foundWorldFromTrade). Locked coasts must be charted first.
+        if (isUnlocked(hitN)) { tradeSel = { node: null, dest: null, route: null, found: hitN }; sfx('tap'); }
+        else { tradeSel = { node: null, dest: null, route: null, found: null }; renderTradeAct(); showHint('🔒 Chart this coast first — send an Uncharted Waters expedition'); return; }
+      }
+      else { tradeSel.found = null;
+        if (!tradeSel.node) { tradeSel.node = hitN; sfx('tap'); }
+        else if (tradeSel.node === hitN) { tradeSel.node = null; }
+        else { tradeSel.dest = hitN; renderTradeAct(); sfx('tap'); return; }   // src+dest chosen -> builder
+      }
     } else if (hitR) {
-      tradeSel.node = null; tradeSel.dest = null; tradeSel.route = hitR.id; sfx('tap');
-    } else { tradeSel.node = null; tradeSel.dest = null; tradeSel.route = null; }
+      tradeSel.node = null; tradeSel.dest = null; tradeSel.route = hitR.id; tradeSel.found = null; sfx('tap');
+    } else { tradeSel.node = null; tradeSel.dest = null; tradeSel.route = null; tradeSel.found = null; }
     renderTradeAct();
   }
   function showTradeMsg(m) { if (tradeAct) { tradeAct.innerHTML = '<div class="ta-msg">' + m + '</div>'; } }
+  // v85: found an unlocked world straight from the trade map — reuses the proven world-switch +
+  // auto-site found path (buildBiome computes that coast's candidate sites; autoFound places the
+  // port at the first one), so SIM.ports[id] and the local `founded` site map stay in lockstep. On
+  // success the fresh node is auto-selected so the very next tap links a route. Leaves the player
+  // viewing the new colony (same as founding it the normal way) — the trade overlay stays open on top.
+  function foundWorldFromTrade(id) {
+    if (!SIM || portFounded(id) || !isUnlocked(id)) return false;
+    if (SIM.canFoundPort && !SIM.canFoundPort()) { sfx('lose'); return false; }
+    buildBiome(id); autoFound();
+    if (!portFounded(id)) { sfx('lose'); return false; }   // founding refused (e.g. money changed) — bail cleanly
+    tradeSel = { node: id, dest: null, route: null, found: null };
+    sfx('merge'); haptic(18); renderTradeAct(); updateTradeGuide();
+    return true;
+  }
   function wname(id) { return (window.HARBOR_BIOMES[id] && HARBOR_BIOMES[id].name) || id; }
   function renderTradeAct() {
     if (!tradeAct) return;
@@ -2255,6 +2299,18 @@
       tradeAct.innerHTML = html;
       tradeAct.querySelectorAll('[data-res]').forEach(function (el) { el.addEventListener('click', function () { var res = el.getAttribute('data-res'); if (SIM.addRoute(a, b, res)) { tradeSel = { node: null, route: null }; sfx('merge'); haptic(18); renderTradeAct(); } else sfx('lose'); }); });
       tradeAct.querySelector('[data-cancel]').addEventListener('click', function () { tradeSel = { node: null, route: null }; renderTradeAct(); });
+      return;
+    }
+    // v85: founding an unlocked-but-unfounded world inline (tapped a dim node)
+    if (tradeSel.found) {
+      var fid = tradeSel.found, fc = SIM.foundCost ? SIM.foundCost() : 0, canF = SIM.canFoundPort ? SIM.canFoundPort() : true;
+      tradeAct.innerHTML = '<div class="ta-head">🏝️ Found <b>' + wname(fid) + '</b></div>' +
+        '<div class="ta-msg">Unlocked, but not a harbour yet — found a colony here to trade with it.</div>' +
+        '<div class="ta-res"><button class="ta-rbtn" data-found="1"' + (canF ? '' : ' disabled') + ' style="border-color:#ffd56a;grid-column:1/-1' + (canF ? '' : ';opacity:.5') + '"><span>' + (canF ? 'Found colony' : 'Need £' + fmt(fc)) + '</span>' + (canF ? '<span class="ta-cost">£' + fmt(fc) + '</span>' : '') + '</button></div>' +
+        '<button class="ta-cancel" data-cancel="1">Cancel</button>';
+      var fbtn = tradeAct.querySelector('[data-found]');
+      if (fbtn) fbtn.addEventListener('click', function () { if (!foundWorldFromTrade(fid)) sfx('lose'); });
+      tradeAct.querySelector('[data-cancel]').addEventListener('click', function () { tradeSel = { node: null, dest: null, route: null, found: null }; renderTradeAct(); });
       return;
     }
     // inspecting a route
@@ -2612,10 +2668,15 @@
     { id: 'tradeNeedsSecond', cooldown: 300,
       when: function (s) {
         if (!((s.ports || []).length === 1)) return false;
+        if (firstUnfoundedUnlocked()) return true;   // v85: you already have an unlocked world to found — that's the fix, not a new discovery
         var id = unchartedTarget(); if (!id) return false;
         return !!SIM.canStartUncharted(HARBOR_BIOMES[id].unlockEra);
       },
-      text: 'Trade routes need a second harbour — chart Uncharted Waters, found the new coast, then link them' },
+      text: function () {
+        var uf = firstUnfoundedUnlocked();
+        return uf ? 'Trade routes need a second harbour — you’ve already unlocked ' + wname(uf) + ', so found it (in the Trade Network, tap its dim node), then link them'
+                  : 'Trade routes need a second harbour — chart Uncharted Waters, found the new coast, then link them';
+      } },
     // 2+ harbours founded but never linked into a trade route
     { id: 'tradeNetwork', cooldown: 240,
       when: function (s) { return !!((s.ports || []).length >= 2 && s.network && s.network.routes.length === 0); },
@@ -4772,7 +4833,7 @@
         currentName: cur ? cur.querySelector('.tl-name').textContent : null
       };
     },
-    tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, msg: tradeAct ? tradeAct.textContent : '' }; },
+    tradeState: function () { var nv = SIM.network(); return { open: tradeOpen, shown: tradeMap ? tradeMap.classList.contains('show') : false, routes: nv.routes.length, level: nv.level, guide: !!(tradeGuideEl && tradeGuideEl.classList.contains('show')), founded: tradeFoundedCount(), sel: tradeSel.node, found: tradeSel.found || null, msg: tradeAct ? tradeAct.textContent : '' }; },
     tradeTapNode: function (id) { if (!tradeOpen) openTrade(); var c = nodeXY(id); tradeTap(c[0] / DPR, c[1] / DPR); return { sel: tradeSel.node, dest: tradeSel.dest }; },
     forceHUD: function () { updateHUD(); return Object.keys((SIM.raw() && SIM.raw()._ms) || {}); },
     openLegacy: function () { openLegacy(); }, prestige: function () { doPrestige(); },
