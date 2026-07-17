@@ -625,8 +625,13 @@ html, body {
   text-align: center; background: linear-gradient(180deg, rgba(22,54,70,.97), rgba(9,26,36,.97));
   border: 1px solid rgba(124,224,214,.45); border-radius: 16px; padding: 16px 18px;
   box-shadow: 0 14px 40px rgba(0,0,0,.55);
+  /* v85: the card floats over the top of the map and would otherwise SWALLOW taps meant for the
+     harbour nodes beneath it (the real "I can't tap the dim harbour it's telling me to found" wall).
+     Let taps pass through the card to the canvas; only the button stays interactive. */
+  pointer-events: none;
 }
 .tm-guide.show { display: flex; }
+.tm-guide .tmg-btn { pointer-events: auto; }
 .tm-guide .tmg-ic { font-size: 28px; line-height: 1; }
 .tm-guide .tmg-title { font-family: 'Lilita', cursive; font-weight: 400; font-size: 17px; color: var(--text); }
 .tm-guide .tmg-body { font-family: 'Fredoka', sans-serif; font-size: 11.5px; line-height: 1.42; color: var(--muted); }

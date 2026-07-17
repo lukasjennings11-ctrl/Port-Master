@@ -2223,9 +2223,16 @@
   }
   function sizeTrade() {
     if (!tradeCanvas) return;
-    var r = tradeMap.getBoundingClientRect();
-    tradeCanvas.width = Math.max(2, r.width * DPR); tradeCanvas.height = Math.max(2, (r.height - 0) * DPR);
-    tradeCanvas.style.width = r.width + 'px'; tradeCanvas.style.height = r.height + 'px';
+    // v85: size the backing store from the CANVAS's own box (CSS flex:1 controls its display size),
+    // NOT the whole #trademap container (top bar + xp + action panel included) — the old version did
+    // the latter and also hard-set style.width/height, so the backing store never matched the drawn
+    // canvas. That desync moved as the layout changed (e.g. founding a colony rebuilds the world),
+    // throwing off BOTH node drawing and tap hit-testing (taps landed on the wrong harbour). Only
+    // touch the backing store, and only when it actually changed, so per-frame calls don't clear it.
+    var r = tradeCanvas.getBoundingClientRect();
+    var w = Math.max(2, Math.round(r.width * DPR)), h = Math.max(2, Math.round(r.height * DPR));
+    if (tradeCanvas.width !== w) tradeCanvas.width = w;
+    if (tradeCanvas.height !== h) tradeCanvas.height = h;
   }
   function openTrade() {
     if (!SIM || !SIM.raw()) return;
@@ -2235,6 +2242,9 @@
   function closeTrade() { tradeOpen = false; if (tradeMap) tradeMap.classList.remove('show'); }
   function nodeXY(id) { var p = NODES[id] || [0.5, 0.5], w = tradeCanvas.width, h = tradeCanvas.height; return [p[0] * w, p[1] * h]; }
   function tradeTap(sx, sy) {
+    // NOTE: do NOT sizeTrade() here — drawTradeMap() re-syncs the backing store every frame, so by the
+    // time a real pointer tap arrives the canvas already matches its box. Resizing mid-tap would also
+    // desync callers that pre-compute node pixels from the current canvas size (the tradeTapNode hook).
     sx *= DPR; sy *= DPR;
     var net = SIM.network(), hitR = null;
     // routes first (thin targets) — midpoint hit
@@ -2341,6 +2351,9 @@
   }
   function drawTradeMap() {
     if (!tradeCtx) return;
+    sizeTrade();          // v85: keep the backing store matched to the (flex-sized) canvas every frame —
+                          // idempotent, so it only actually resizes when the layout changed. Guarantees
+                          // drawn node positions and tap hit-testing use identical dimensions.
     updateTradeGuide();   // cheap per-frame safety net (also updated on tap/open) — never goes stale
     var w = tradeCanvas.width, h = tradeCanvas.height, ctx = tradeCtx, t = clock, net = SIM.network();
     var grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#0a2230'); grd.addColorStop(1, '#06151f');
