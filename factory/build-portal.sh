@@ -163,9 +163,15 @@ PY
     return
   fi
 
-  echo "-- [6/7] zip"
+  echo "-- [6/7] zip (index.html at ROOT — CrazyGames rejects a wrapping folder)"
   mkdir -p "$REPO/dist"
-  ( cd "$REPO/dist" && zip -rq "$name.zip" "$name" )
+  # zip the CONTENTS of $OUT (cd inside first) so entries are index.html, game.js, shared/… at the
+  # archive root — NOT nested under a portboss-*/ folder. CrazyGames' uploader looks for index.html
+  # at the zip root; a wrapping folder is the classic "my game won't upload" cause.
+  ( cd "$OUT" && zip -rq "$ZIP" . )
+  if ! unzip -l "$ZIP" | awk '{print $4}' | grep -qx 'index.html'; then
+    fail "zip is missing a root-level index.html (wrapping folder?) — CrazyGames upload would fail"
+  fi
 
   echo "-- [7/7] verify (static + headless iframe boot)"
   local STATIC_OK=1

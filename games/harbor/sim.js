@@ -953,13 +953,13 @@
     else { S = fresh(); setActive('green'); }
     return S;
   }
-  function applyOffline(maxSec) {
+  // v86: offline/idle earnings REMOVED. This no longer ticks the economy forward for time-away — it
+  // only stamps lastSeen (still used by the once-per-day login-streak cadence). Kept as a no-op so any
+  // caller/save path stays safe; returns 0 elapsed-earning seconds.
+  function applyOffline() {
     if (!S) return 0;
-    var elapsed = (now() - (S.lastSeen || now())) / 1000;
-    elapsed = clamp(elapsed, 0, maxSec || Math.min(META.offlineHours || 8, DIFF.offlineHours) * 3600);   // difficulty caps offline earnings
-    if (elapsed > 1) tick(elapsed);
     S.lastSeen = now();
-    return elapsed;
+    return 0;
   }
 
   // ---- prestige (cash the run's lifetime earnings into permanent Legacy, then start anew) ----

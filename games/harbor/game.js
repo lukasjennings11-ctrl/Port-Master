@@ -4634,8 +4634,9 @@
     if (SIM && SIM.setDifficulty) SIM.setDifficulty(diffMode);        // apply saved difficulty BEFORE any tick (offline earnings honour the tier's cap)
     if (SIM) { computeMeta(); applyTide(); }                          // Legacy multipliers + today's market tide before offline accrual
     dailyList();                                                     // materialise today's missions so event hooks can bump them
-    var offGain = 0, offSec = 0;
-    if (SIM) { SIM.load(); if (SIM.raw().founded) { var m0 = SIM.raw().money; offSec = SIM.applyOffline(); offGain = SIM.raw().money - m0; era = SIM.raw().era; adsGameplayStart(); } }   // Phase 12b: resuming a save with a founded port is gameplay too
+    // v86: offline/idle earnings REMOVED — returning to the game no longer hands you passive cash
+    // (playtest: it made coming back "too easy"). We still resume a founded save as active gameplay.
+    if (SIM) { SIM.load(); if (SIM.raw().founded) { era = SIM.raw().era; adsGameplayStart(); } }
     if (SIM && SIM.raw()) { hudShownMoney = prevMoney = SIM.raw().money; }
     if (!(SIM && SIM.raw() && SIM.raw().founded)) era = (window.Retention && Retention.get(GAME, 'era', 0) | 0) || 0;
     var saved = window.Retention && Retention.get(GAME, 'biome', null);
@@ -4673,7 +4674,6 @@
     updateFoundUI();
     var welcomed = showWelcome();                                    // first-ever load: premise card
     if (!welcomed) setTimeout(showStreak, 1400);                     // else once-per-day login streak + today's tide
-    if (offGain > 0 && offSec > 60) setTimeout(function () { showOffline(offGain, offSec); }, 900);
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
