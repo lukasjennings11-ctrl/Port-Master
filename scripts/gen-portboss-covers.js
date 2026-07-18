@@ -17,9 +17,9 @@ const sleep = ms => new Promise(z => setTimeout(z, ms));
 
 // three CrazyGames cover slots — [w, h, wordmark-scale, bottom-inset%]
 const COVERS = [
-  { name: 'cover-landscape-1920x1080.png', w: 1920, h: 1080, scale: 1.0, pose: { el: 0.34, dist: 150, tod: 0.4 } },
-  { name: 'cover-portrait-800x1200.png', w: 800, h: 1200, scale: 0.62, pose: { el: 0.42, dist: 120, tod: 0.4 } },
-  { name: 'cover-square-800x800.png', w: 800, h: 800, scale: 0.66, pose: { el: 0.38, dist: 120, tod: 0.4 } }
+  { name: 'cover-landscape-1920x1080.png', w: 1920, h: 1080, scale: 1.0, pose: { el: 0.34, dist: 150, tod: 0.46 } },
+  { name: 'cover-portrait-800x1200.png', w: 800, h: 1200, scale: 0.62, pose: { el: 0.42, dist: 120, tod: 0.46 } }
+  // square uses the exact existing branded reference (thumbnail-square-800.png) — copied below
 ];
 
 // build a busy container-port scene (crane + stacked containers, like the reference thumbnail)
@@ -59,10 +59,14 @@ async function hero(page, pose) {
 function coverHTML(heroDataUri, w, h, scale) {
   // wordmark sizing keyed off the smaller dimension so it reads on any aspect
   const base = Math.min(w, h);
-  const fs1 = Math.round(base * 0.30 * scale);       // PORT/BOSS line size
-  const pill = Math.round(base * 0.052 * scale);
-  const stroke = Math.max(3, Math.round(fs1 * 0.03));   // thin outline so the gold fill dominates (matches the reference logo)
-  const bottom = Math.round(h * (h > w ? 0.07 : 0.06));
+  const fs1 = Math.round(base * 0.285 * scale);      // PORT/BOSS line size
+  const pill = Math.round(base * 0.05 * scale);
+  const edge = Math.max(2, Math.round(fs1 * 0.022)); // thin dark-amber letter edge
+  const drop = Math.max(2, Math.round(fs1 * 0.05));  // navy 3D drop under letters
+  const padX = Math.round(fs1 * 0.34), padY = Math.round(fs1 * 0.26);
+  const ring = Math.max(3, Math.round(fs1 * 0.028));
+  const rad = Math.round(fs1 * 0.26);
+  const bottom = Math.round(h * (h > w ? 0.055 : 0.05));
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @font-face{font-family:'Lilita';src:url('http://localhost:${PORT}/games/harbor/fonts/LilitaOne-400.woff2') format('woff2');}
     @font-face{font-family:'Fredoka';src:url('http://localhost:${PORT}/games/harbor/fonts/Fredoka-700.woff2') format('woff2');font-weight:700;}
@@ -70,20 +74,24 @@ function coverHTML(heroDataUri, w, h, scale) {
     html,body{width:${w}px;height:${h}px;overflow:hidden}
     .stage{position:relative;width:${w}px;height:${h}px;background:#0a2230}
     .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-    .vig{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 32%, rgba(0,0,0,0) 45%, rgba(4,16,24,.45) 100%);}
-    .grad{position:absolute;left:0;right:0;bottom:0;height:${Math.round(h*0.5)}px;background:linear-gradient(180deg, rgba(6,21,31,0) 0%, rgba(6,21,31,.35) 55%, rgba(6,21,31,.82) 100%);}
+    .vig{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 30%, rgba(0,0,0,0) 55%, rgba(4,16,24,.32) 100%);}
+    .grad{position:absolute;left:0;right:0;bottom:0;height:${Math.round(h*0.42)}px;background:linear-gradient(180deg, rgba(6,21,31,0) 0%, rgba(6,21,31,.18) 60%, rgba(6,21,31,.5) 100%);}
     .mark{position:absolute;left:0;right:0;bottom:${bottom}px;text-align:center;}
-    .wm{font-family:'Lilita',sans-serif;font-size:${fs1}px;line-height:.92;letter-spacing:${Math.round(fs1*0.01)}px;
-        -webkit-text-stroke:${stroke}px #12324a;paint-order:stroke fill;
-        background:linear-gradient(180deg,#ffe79a 0%,#ffd25a 52%,#f4a634 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
-    .wmWrap{filter:drop-shadow(0 ${Math.round(fs1*0.05)}px 0 #12324a) drop-shadow(0 ${Math.round(fs1*0.09)}px ${Math.round(fs1*0.03)}px rgba(0,0,0,.5));}
-    .tag{display:inline-block;margin-top:${Math.round(fs1*0.14)}px;padding:${Math.round(pill*0.42)}px ${Math.round(pill*1.2)}px;
+    /* dark navy plaque behind the wordmark (reference look) */
+    .plaque{display:inline-block;position:relative;padding:${padY}px ${padX}px ${Math.round(padY*1.15)}px;
+        background:linear-gradient(180deg,#14324c 0%,#0d2740 100%);
+        border-radius:${rad}px;box-shadow:inset 0 0 0 ${ring}px #24567a, 0 ${Math.round(fs1*0.09)}px ${Math.round(fs1*0.11)}px rgba(0,0,0,.5);}
+    .wm{font-family:'Lilita',sans-serif;font-size:${fs1}px;line-height:.9;letter-spacing:${Math.round(fs1*0.015)}px;
+        -webkit-text-stroke:${edge}px #7a4a12;paint-order:stroke fill;
+        background:linear-gradient(180deg,#fff2c8 0%,#ffd257 46%,#f0a636 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+        filter:drop-shadow(0 ${drop}px 0 #0c2740) drop-shadow(0 ${Math.round(drop*1.6)}px ${Math.round(drop*0.8)}px rgba(0,0,0,.4));}
+    .tag{display:inline-block;position:relative;margin-top:-${Math.round(pill*0.9)}px;padding:${Math.round(pill*0.44)}px ${Math.round(pill*1.25)}px;
         background:#37d6c0;color:#0a3b34;border-radius:999px;font-family:'Fredoka',sans-serif;font-weight:700;
-        font-size:${pill}px;letter-spacing:${Math.round(pill*0.18)}px;box-shadow:0 ${Math.round(pill*0.16)}px 0 rgba(9,60,52,.5);}
+        font-size:${pill}px;letter-spacing:${Math.round(pill*0.16)}px;box-shadow:inset 0 0 0 ${Math.max(2,Math.round(pill*0.06))}px #7ff0e0, 0 ${Math.round(pill*0.16)}px ${Math.round(pill*0.2)}px rgba(0,0,0,.35);}
   </style></head><body><div class="stage">
     <img class="bg" src="${heroDataUri}"/>
     <div class="vig"></div><div class="grad"></div>
-    <div class="mark"><div class="wmWrap"><div class="wm">PORT<br>BOSS</div></div>
+    <div class="mark"><div class="plaque"><div class="wm">PORT<br>BOSS</div></div><br>
       <div class="tag">IDLE&nbsp;&nbsp;PORT&nbsp;&nbsp;TYCOON</div></div>
   </div></body></html>`;
 }
@@ -114,6 +122,9 @@ function coverHTML(heroDataUri, w, h, scale) {
     console.log('wrote ' + c.name + '  (' + c.w + 'x' + c.h + ')');
   }
   await browser.close(); srv.close();
+  // square cover = the exact existing branded reference (already 800x800, matches the user's image)
+  fs.copyFileSync(path.join(OUT, 'thumbnail-square-800.png'), path.join(OUT, 'cover-square-800x800.png'));
+  console.log('wrote cover-square-800x800.png  (copied from thumbnail-square-800.png, exact reference)');
   console.log('DONE — 3 branded covers in submit/crazygames/');
   process.exit(0);
 })().catch(e => { console.error('COVER ERROR', e); process.exit(2); });
