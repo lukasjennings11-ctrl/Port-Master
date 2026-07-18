@@ -12,6 +12,11 @@ const PORT = 8251;
 function findChromium() { var base = '/opt/pw-browsers'; try { var d = fs.readdirSync(base).filter(n => /^chromium-/.test(n)).sort(); if (d.length) { var p = path.join(base, d[d.length - 1], 'chrome-linux', 'chrome'); if (fs.existsSync(p)) return p; } } catch (e) {} return undefined; }
 let chromium; try { chromium = require('/opt/node22/lib/node_modules/playwright').chromium; } catch (e) { try { chromium = require('playwright').chromium; } catch (e2) { console.log('SKIP — no playwright'); process.exit(0); } }
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml' };
+// inline the fonts as data URIs — a setContent page has a null origin, so a cross-origin font FETCH
+// is CORS-blocked and silently falls back to a thin sans-serif (the "wrong font" bug). Data URIs load
+// with no network, so PORT BOSS always renders in the real LilitaOne.
+const LILITA_B64 = fs.readFileSync(path.join(ROOT, 'games/harbor/fonts/LilitaOne-400.woff2')).toString('base64');
+const FREDOKA_B64 = fs.readFileSync(path.join(ROOT, 'games/harbor/fonts/Fredoka-700.woff2')).toString('base64');
 const srv = http.createServer((q, s) => { let p = decodeURIComponent(q.url.split('?')[0]); if (p.endsWith('/')) p += 'index.html'; let fp = path.join(ROOT, p); fs.readFile(fp, (e, b) => { if (e) { s.writeHead(404); s.end('nf'); } else { s.writeHead(200, { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream' }); s.end(b); } }); }).listen(PORT);
 const sleep = ms => new Promise(z => setTimeout(z, ms));
 
@@ -59,39 +64,34 @@ async function hero(page, pose) {
 function coverHTML(heroDataUri, w, h, scale) {
   // wordmark sizing keyed off the smaller dimension so it reads on any aspect
   const base = Math.min(w, h);
-  const fs1 = Math.round(base * 0.285 * scale);      // PORT/BOSS line size
+  const fs1 = Math.round(base * 0.30 * scale);       // PORT/BOSS line size
   const pill = Math.round(base * 0.05 * scale);
-  const edge = Math.max(2, Math.round(fs1 * 0.022)); // thin dark-amber letter edge
-  const drop = Math.max(2, Math.round(fs1 * 0.05));  // navy 3D drop under letters
-  const padX = Math.round(fs1 * 0.34), padY = Math.round(fs1 * 0.26);
-  const ring = Math.max(3, Math.round(fs1 * 0.028));
-  const rad = Math.round(fs1 * 0.26);
+  const stroke = Math.max(4, Math.round(fs1 * 0.07)); // THICK navy outline like the square logo (no plaque)
+  const drop = Math.max(3, Math.round(fs1 * 0.06));   // navy 3D extrude under the letters
   const bottom = Math.round(h * (h > w ? 0.055 : 0.05));
   return `<!doctype html><html><head><meta charset="utf-8"><style>
-    @font-face{font-family:'Lilita';src:url('http://localhost:${PORT}/games/harbor/fonts/LilitaOne-400.woff2') format('woff2');}
-    @font-face{font-family:'Fredoka';src:url('http://localhost:${PORT}/games/harbor/fonts/Fredoka-700.woff2') format('woff2');font-weight:700;}
+    @font-face{font-family:'Lilita';src:url('data:font/woff2;base64,${LILITA_B64}') format('woff2');font-display:block;}
+    @font-face{font-family:'Fredoka';src:url('data:font/woff2;base64,${FREDOKA_B64}') format('woff2');font-weight:700;font-display:block;}
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{width:${w}px;height:${h}px;overflow:hidden}
     .stage{position:relative;width:${w}px;height:${h}px;background:#0a2230}
     .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-    .vig{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 30%, rgba(0,0,0,0) 55%, rgba(4,16,24,.32) 100%);}
-    .grad{position:absolute;left:0;right:0;bottom:0;height:${Math.round(h*0.42)}px;background:linear-gradient(180deg, rgba(6,21,31,0) 0%, rgba(6,21,31,.18) 60%, rgba(6,21,31,.5) 100%);}
+    .grad{position:absolute;left:0;right:0;bottom:0;height:${Math.round(h*0.46)}px;background:linear-gradient(180deg, rgba(6,21,31,0) 0%, rgba(6,21,31,.12) 55%, rgba(6,21,31,.4) 100%);}
     .mark{position:absolute;left:0;right:0;bottom:${bottom}px;text-align:center;}
-    /* dark navy plaque behind the wordmark (reference look) */
-    .plaque{display:inline-block;position:relative;padding:${padY}px ${padX}px ${Math.round(padY*1.15)}px;
-        background:linear-gradient(180deg,#14324c 0%,#0d2740 100%);
-        border-radius:${rad}px;box-shadow:inset 0 0 0 ${ring}px #24567a, 0 ${Math.round(fs1*0.09)}px ${Math.round(fs1*0.11)}px rgba(0,0,0,.5);}
-    .wm{font-family:'Lilita',sans-serif;font-size:${fs1}px;line-height:.9;letter-spacing:${Math.round(fs1*0.015)}px;
-        -webkit-text-stroke:${edge}px #7a4a12;paint-order:stroke fill;
-        background:linear-gradient(180deg,#fff2c8 0%,#ffd257 46%,#f0a636 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
-        filter:drop-shadow(0 ${drop}px 0 #0c2740) drop-shadow(0 ${Math.round(drop*1.6)}px ${Math.round(drop*0.8)}px rgba(0,0,0,.4));}
-    .tag{display:inline-block;position:relative;margin-top:-${Math.round(pill*0.9)}px;padding:${Math.round(pill*0.44)}px ${Math.round(pill*1.25)}px;
+    /* NO plaque — chunky LilitaOne letters, gold gradient, thick navy outline + 3D drop, exactly like
+       the square logo, sitting directly on the gameplay so the port stays visible. */
+    .wm{font-family:'Lilita',sans-serif;font-size:${fs1}px;line-height:.86;letter-spacing:${Math.round(fs1*0.01)}px;
+        -webkit-text-stroke:${stroke}px #12354f;paint-order:stroke fill;
+        background:linear-gradient(180deg,#fff4cf 0%,#ffd257 48%,#f2a838 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+        filter:drop-shadow(0 ${drop}px 0 #0c2740) drop-shadow(0 ${Math.round(drop*1.7)}px ${Math.round(drop*1.1)}px rgba(0,0,0,.45));}
+    .tag{display:inline-block;margin-top:${Math.round(fs1*0.1)}px;padding:${Math.round(pill*0.46)}px ${Math.round(pill*1.3)}px;
         background:#37d6c0;color:#0a3b34;border-radius:999px;font-family:'Fredoka',sans-serif;font-weight:700;
-        font-size:${pill}px;letter-spacing:${Math.round(pill*0.16)}px;box-shadow:inset 0 0 0 ${Math.max(2,Math.round(pill*0.06))}px #7ff0e0, 0 ${Math.round(pill*0.16)}px ${Math.round(pill*0.2)}px rgba(0,0,0,.35);}
+        font-size:${pill}px;letter-spacing:${Math.round(pill*0.16)}px;
+        box-shadow:inset 0 0 0 ${Math.max(2,Math.round(pill*0.05))}px #7ff0e0, 0 ${Math.round(pill*0.16)}px ${Math.round(pill*0.2)}px rgba(0,0,0,.4);}
   </style></head><body><div class="stage">
     <img class="bg" src="${heroDataUri}"/>
-    <div class="vig"></div><div class="grad"></div>
-    <div class="mark"><div class="plaque"><div class="wm">PORT<br>BOSS</div></div><br>
+    <div class="grad"></div>
+    <div class="mark"><div class="wm">PORT<br>BOSS</div><br>
       <div class="tag">IDLE&nbsp;&nbsp;PORT&nbsp;&nbsp;TYCOON</div></div>
   </div></body></html>`;
 }
@@ -117,7 +117,13 @@ function coverHTML(heroDataUri, w, h, scale) {
     const heroUri = 'data:image/png;base64,' + heroBuf.toString('base64');
     await cover.setViewportSize({ width: c.w, height: c.h });
     await cover.setContent(coverHTML(heroUri, c.w, c.h, c.scale), { waitUntil: 'load' });
-    await sleep(400);   // let fonts + gradient clip settle
+    // CRITICAL: actually load the web fonts before screenshotting — otherwise the letters render in
+    // a fallback sans-serif (the "completely different font" bug). font-display:block + this wait
+    // guarantees LilitaOne is used for PORT BOSS.
+    await cover.evaluate(() => Promise.all([
+      document.fonts.load('400 200px Lilita'), document.fonts.load('700 60px Fredoka')
+    ]).then(() => document.fonts.ready));
+    await sleep(300);
     await cover.screenshot({ path: path.join(OUT, c.name) });
     console.log('wrote ' + c.name + '  (' + c.w + 'x' + c.h + ')');
   }
