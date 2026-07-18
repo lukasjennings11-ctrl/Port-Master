@@ -73,7 +73,12 @@
       Portal.available = !!(cg || poki);
       if (!Portal.available) { ready = true; return Promise.resolve(false); }
       return new Promise(function (resolve) {
-        var done = function () { ready = true; resolve(Portal.available); };
+        var settled = false;
+        var done = function () { if (settled) return; settled = true; ready = true; resolve(Portal.available); };
+        // v87: never let a hung SDK init() block the boot bracket. Off its own domain (e.g. the
+        // CrazyGames SDK loaded on Kongregate/itch) init() can wait forever for a parent handshake —
+        // resolve anyway after 3s so the game's loading bracket + any init()-gated code always run.
+        setTimeout(done, 3000);
         try {
           var p = vendor === 'crazygames' ? (cg.init && cg.init())
                                           : (poki.init && poki.init());

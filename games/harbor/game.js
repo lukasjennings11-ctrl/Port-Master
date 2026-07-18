@@ -4062,7 +4062,8 @@
          '🎟️ The <b>Harbour Pass</b> earns free season rewards from everything you do.<br>' +
          '✦ When growth slows, <b>Legacy</b> lets you prestige for permanent multipliers.<br>' +
          '🧭 At 3+ charters, pick a <b>Doctrine</b> in Legacy to specialise your run.<br>' +
-         '🖐️ Drag to pan · pinch to zoom · twist to rotate.</div>';
+         '🖐️ <b>PC:</b> drag to pan · scroll wheel to zoom · right-drag (or Shift+drag) to rotate.<br>' +
+         '📱 <b>Mobile:</b> drag to pan · pinch to zoom · two-finger twist to rotate.</div>';
     h += '<div class="mp-sec">About</div>';
     h += '<div class="set-about">Port Boss · build ' + BUILD_TAG +
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +
@@ -4677,6 +4678,12 @@
     if (window.ResizeObserver) new ResizeObserver(resize).observe(wrap);
     window.addEventListener('resize', resize);
     requestAnimationFrame(frame);
+    // v87: hide the boot loader as soon as the FIRST frame renders — NEVER gate the visible loader on
+    // the portal SDK. A portal SDK's init() can hang off its own domain (e.g. the CrazyGames SDK on
+    // Kongregate waits for a parent handshake that never comes), which previously left this full-screen
+    // loader covering a fully-rendered game forever — the "only text, no graphics, stuck loading"
+    // rejection. The portal loading BRACKET (loadingStart/Stop) still runs in portalReady.then below.
+    requestAnimationFrame(function () { if (loader) loader.classList.add('hidden'); });
     if (portalReady) portalReady.then(function () {
       // init() has resolved — NOW the CrazyGames SDK honors game.* calls. Open the loading bracket
       // here and pair it one frame later, so both sdkGameLoadingStart + sdkGameLoadingStop register
