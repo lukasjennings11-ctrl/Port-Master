@@ -21,6 +21,18 @@ html, body {
   color: var(--text); background: var(--sea);
   user-select: none; -webkit-user-select: none; touch-action: none;
 }
+/* v88: taps were "hard to hit" partly because `touch-action: none` above is inherited by every
+   button (it belongs only on the WebGL canvases for custom gestures). `manipulation` keeps taps
+   instant + reliable and drops the double-tap-zoom quirk. Apply to ALL interactive controls; the
+   #game / #tradecanvas canvases keep `touch-action: none` via their own rules below. */
+button, [role="button"], .mp-item, .chip, .rs-dot, .biomebar-btn, #biomebar > button,
+.ta-rbtn, .pass-tier, .tl-node, .sitechip, label, input, select {
+  touch-action: manipulation;
+}
+/* touch-action is NOT inherited, so the main WebGL canvas defaulted to `auto` — the browser could
+   treat a drag as a scroll/gesture and interfere. Pin it to `none` (as #tradecanvas already is) so
+   the game owns every touch on the board and taps on nearby controls stay crisp. */
+#game { touch-action: none; }
 
 #loader {
   position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
@@ -58,7 +70,7 @@ html, body {
   padding: 3px 10px; border-radius: 999px;
   pointer-events: auto; cursor: pointer;   /* Phase 17a: tap to open the Empire Timeline */
 }
-.hud .clock { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); }
+.hud .clock { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; }
 
 .board-wrap { position: relative; flex: 1 1 auto; overflow: hidden; }
 #game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -933,3 +945,16 @@ body.paperui .ta-cancel { background: var(--paper2); color: var(--ink); border: 
 body.paperui .tm-guide .tmg-btn { background: #cfe3da; color: #1f5548; border: 1.5px solid #fffdf6; box-shadow: 0 3px 0 rgba(96,72,44,.3); }
 /* combo counter / fever readable over the canvas — keep gold but ink-shadowed */
 body.paperui #combo .cb-x { color: #ffd24a; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   v88: comfortable tap targets. Playtest feedback was "hard to tap some buttons" —
+   several controls were 22–30px, well under the ~44px touch minimum. Kept as a
+   final block so it wins the cascade over the per-panel rules above; visual size
+   grows a little, the clickable box grows more. Applies to both themes. */
+#trademap .tm-close, #legacypanel .lg-close, #timelinepanel .tl-close,
+#mutebtn, #setbtn { width: 40px; height: 40px; }
+.mp-head #mp-close { width: 36px; height: 36px; font-size: 15px; }
+.ta-rbtn { min-height: 54px; }             /* trade "ship this resource" buttons */
+.mp-item { min-height: 44px; }             /* Manage / Registry / Expedition list rows */
+#actionbar > button { min-height: 44px; }  /* bottom action-bar pills */
+#legacypanel .rs-dot.chip { min-height: 34px; padding: 6px 12px; }   /* relic loadout chips */

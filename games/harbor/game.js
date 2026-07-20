@@ -2074,7 +2074,7 @@
     }
     var k = Math.min(1, dt * 11); C.az += (C.azT - C.az) * k; C.el += (C.elT - C.el) * k; C.dist += (C.distT - C.dist) * Math.min(1, dt * 9);
     C.tx += (C.txT - C.tx) * k; C.tz += (C.tzT - C.tz) * k;
-    if (clockEl) { var hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 % 1) * 60); clockEl.textContent = ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2); }
+    if (clockEl) { var hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 % 1) * 60); var ap = hh < 12 ? 'AM' : 'PM', h12 = hh % 12 || 12; clockEl.textContent = '🕐 ' + h12 + ':' + ('0' + mm).slice(-2) + ' ' + ap; }   // v88: 12-hour + AM/PM so it clearly reads as a clock
     // economy tick (founded ports earn over time)
     if (!paused && simReady()) {
       SIM.tick(dt); tickAutomation(dt);
