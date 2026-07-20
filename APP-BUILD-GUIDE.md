@@ -27,8 +27,11 @@ npx cap sync                       # copies the web build + plugins into both na
 
 # app icon + splash (I already made the source art in assets/):
 npm i -D @capacitor/assets
-npx @capacitor/assets generate     # reads assets/icon.png + assets/splash.png and writes every
-                                   # iOS + Android icon/splash size into the native projects
+npx @capacitor/assets generate --ios --android --assetPath assets   # reads assets/icon.png +
+                                   # assets/splash.png and writes every iOS + Android icon/splash size
+                                   # into the native projects. The --ios --android limits it to those
+                                   # two — omit them and it also tries a PWA target and errors on a
+                                   # missing www/manifest.json (we have no PWA target here).
 ```
 
 The `assets/` folder already contains the branded **`icon.png`** (1024²) and **`splash.png`** /
