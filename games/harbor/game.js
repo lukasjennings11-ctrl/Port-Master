@@ -2442,6 +2442,13 @@
   // only once the empire era has actually reached that world's unlockEra (so it still reads as
   // "you've grown enough to reach this coast", just gated behind a deliberate expedition now
   // instead of firing automatically the moment doAdvance() lands on that era).
+  // v91: is an Uncharted Waters (discovery) expedition already sailing? voyageState() flags each
+  // active voyage with uncharted:true — used to silence tips that nag you to chart the very world a
+  // voyage is already discovering (canStartUncharted only checks a free slot + cash, not this).
+  function unchartedInFlight(s) {
+    s = s || (SIM && SIM.state && SIM.state());
+    return !!(s && s.voyages && s.voyages.active && s.voyages.active.some(function (a) { return a.uncharted; }));
+  }
   function unchartedTarget() {
     for (var i = 0; i < HARBOR_BIOME_ORDER.length; i++) {
       var id = HARBOR_BIOME_ORDER[i];
@@ -2662,7 +2669,8 @@
       text: 'You can fulfil a harbour Order right now — check Orders in Manage' },
     // Uncharted Waters is discovered AND affordable, not just theoretically unlockable at this era
     { id: 'unchartedReady', cooldown: 240,
-      when: function () {
+      when: function (s) {
+        if (unchartedInFlight(s)) return false;   // v91: already discovering — don't nag to chart it
         var id = unchartedTarget(); if (!id) return false;
         return !!SIM.canStartUncharted(HARBOR_BIOMES[id].unlockEra);
       },
@@ -2678,7 +2686,7 @@
     // a voyage slot sits empty and at least one destination is affordable right now
     { id: 'voyageIdle', cooldown: 240,
       when: function (s) { return !!(s.voyages && s.voyages.used < s.voyages.slots && s.voyages.dests.some(function (d) { return d.can; })); },
-      text: 'A ship sits idle — send an expedition, they pay out even offline' },
+      text: 'A ship sits idle — send an expedition for extra cash & relics' },
     // cash has piled up well past what the cheapest upgrade costs, and stayed that way for a
     // stretch — not just a momentary blip right after a big sale (see idleGoldSince above)
     { id: 'idleGold', cooldown: 240,
@@ -2699,6 +2707,7 @@
       when: function (s) {
         if (!((s.ports || []).length === 1)) return false;
         if (firstUnfoundedUnlocked()) return true;   // v85: you already have an unlocked world to found — that's the fix, not a new discovery
+        if (unchartedInFlight(s)) return false;      // v91: a discovery voyage is already sailing — don't nag to chart another
         var id = unchartedTarget(); if (!id) return false;
         return !!SIM.canStartUncharted(HARBOR_BIOMES[id].unlockEra);
       },
@@ -3976,7 +3985,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v90';
+  var BUILD_TAG = 'v91';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report

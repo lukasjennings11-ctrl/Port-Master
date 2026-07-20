@@ -1408,6 +1408,66 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('17b tips: fleetBehind flows produced zero new console/GL errors', errs.length === errsBeforeFleetTip);
   await page.evaluate(() => window.__harbor.pause(false));
 
+  // v91: tip RELEVANCE — the "chart Uncharted Waters" nudge must go SILENT while an Uncharted
+  // expedition is already sailing to discover that very world (canStartUncharted only checks a free
+  // slot + cash, so with 2+ slots it stayed true and the tip nagged). Fresh save, isolate so
+  // unchartedReady is the top matching rule: era high (locked next world reachable, 3 voyage slots),
+  // money high, res 0 (storageFull/orderReady false), no hazard.
+  const errsBeforeUnchartedTip = errs.length;
+  await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 });
+  await sleep(400);
+  const unchartedSetup = await page.evaluate(() => {
+    var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click();
+    var wm = document.getElementById('welcomemodal'); if (wm) wm.remove();
+    window.__harbor.autoFound();
+    window.__harbor.pause(true);
+    window.Retention.set('harbor', 'legacyBal', 0); window.Retention.set('harbor', 'crates', 0);
+    window.HARBOR_SIM.setEra(5);          // locked next world reachable + 3 voyage slots (1 + min(2, floor(5/2)))
+    window.HARBOR_SIM.raw().money = 1e8;   // afford the discovery voyage; also keeps voyageIdle affordable as the fall-through
+    var p = window.HARBOR_SIM.port(); if (p) { p.res.fish = 0; p.res.timber = 0; p.res.goods = 0; }   // storageFull/orderReady stay false
+    return { target: window.__harbor.unchartedTarget(), slots: window.HARBOR_SIM.state().voyages.slots };
+  });
+  ok('v91 tips precondition: a locked next world is reachable (unchartedTarget set) with 2+ voyage slots',
+    !!unchartedSetup.target && unchartedSetup.slots >= 2);
+  // A blocker (feature-announce card / stale toast / cooldown) can otherwise interleave between
+  // page.evaluate() calls on a setTimeout; clear all three SYNCHRONOUSLY in the same evaluate as each
+  // forceTipCheck so the measured pass can't be silently short-circuited. lastId also STICKS at the
+  // last rule that fired when nothing new matches — hence the synchronous clears + fall-through check.
+  const tipUncharted = await page.evaluate(() => {
+    var rv = document.querySelector('#rivalmodal.show .ev-btn'); if (rv) rv.click();   // decline any Baron Krall challenge (a blocker tips correctly defer to)
+    window.__harbor.resetAnnounce(); window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit();
+    window.__harbor.forceTipCheck();   // clears the once-only "intro" first (fires ahead of everything)
+    window.__harbor.resetAnnounce(); window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit();
+    return window.__harbor.forceTipCheck();
+  });
+  ok('v91 tips: with NO Uncharted expedition sailing, the "chart Uncharted Waters" tip fires (guard is not a blanket disable)',
+    tipUncharted.lastId === 'unchartedReady');
+  // now send a real Uncharted expedition — one slot used, two still free (canStartUncharted stays true)
+  const started = await page.evaluate(() => {
+    window.__harbor.dismissTip();
+    var ok = window.__harbor.startUncharted();
+    var s = window.HARBOR_SIM.state();
+    return { ok: ok, inFlight: s.voyages.active.some(a => a.uncharted), used: s.voyages.used, slots: s.voyages.slots };
+  });
+  ok('v91 tips precondition: Uncharted expedition now in flight with a free slot still open',
+    started.ok && started.inFlight && started.used >= 1 && started.slots > started.used);
+  const tipInFlight = await page.evaluate(() => {
+    var rv = document.querySelector('#rivalmodal.show .ev-btn'); if (rv) rv.click();   // decline any Baron Krall challenge that popped between checks
+    window.__harbor.resetAnnounce(); window.__harbor.dismissTip(); window.__harbor.resetTipRateLimit();
+    return window.__harbor.forceTipCheck();
+  });
+  ok('v91 tips: while an Uncharted expedition is already sailing, the "chart Uncharted Waters" tip is SILENCED',
+    tipInFlight.lastId !== 'unchartedReady');
+  // it falls through to the (accurate) idle-ship tip whose text no longer promises offline payouts
+  ok('v91 tips: voyageIdle is the correct fall-through and its text no longer claims "offline" payouts',
+    tipInFlight.lastId === 'voyageIdle' && !/offline/i.test(tipInFlight.text || ''));
+  ok('v91 tips: Uncharted relevance flow produced zero new console/GL errors', errs.length === errsBeforeUnchartedTip);
+  // leave a clean slate for the blocks below (14b/14c reuse this run's state): drop the active voyage
+  // so era-1's single expedition slot is free for the 14c cast-off test.
+  await page.evaluate(() => { window.HARBOR_SIM.raw().voyages.length = 0; window.__harbor.dismissTip(); window.__harbor.pause(false); });
+
   // Phase 14b: atmosphere — drifting clouds, quay dock workers, night light pools. Reuses this
   // run's post-reload state (a fresh save with only 'green' founded via the real foundHere() path;
   // 'tropical' is never founded here) so the "founded vs. wild" gating checks below have a clean,
