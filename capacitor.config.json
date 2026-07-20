@@ -2,7 +2,9 @@
   "appId": "com.lukasjennings.portboss",
   "appName": "Port Boss",
   "webDir": "dist/portboss-portal",
-  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 1500,

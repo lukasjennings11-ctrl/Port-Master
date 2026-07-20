@@ -36,6 +36,15 @@ The `assets/` folder already contains the branded **`icon.png`** (1024²) and **
 both platforms automatically. (Optional polish for Android's adaptive icon: add
 `assets/icon-foreground.png` + `assets/icon-background.png` and re-run — not required to ship.)
 
+**Native niceties are already built in** (they activate only inside the app, never on the web build):
+- **Android hardware Back button** closes whatever panel is open (Manage, Expeditions, Registry,
+  Settings, Trade, Legacy, Timeline) or an event card; when nothing's open it **minimises** the app
+  rather than hard-quitting mid-game — the behaviour Google reviewers expect.
+- The **splash screen** hides as soon as the game's first frame renders, and the **status bar** is
+  styled to the brand navy.
+- These use the `@capacitor/app` + `@capacitor/status-bar` + `@capacitor/splash-screen` plugins, which
+  `npm install` (step above) pulls in automatically from `package.json` — no extra step.
+
 - **`appId`** is set to `com.lukasjennings.portboss` in `capacitor.config.json`. This is your app's
   permanent identity on both stores — **if you want a different one, change it now, before your first
   submission** (it can't change afterwards). It must match the App ID / bundle ID you register in
@@ -79,9 +88,14 @@ I can generate all of these from the game — just ask:
   6.5" size — the same 1290×2796 images are accepted; ask me if you want exact 6.5" crops.)
 - **Short + full description** — reuse `submit/SUBMIT-DETAILS.md` copy (Title, tagline, long description).
 - **Category:** Games → Simulation (or Strategy). **Content rating:** Everyone / 4+.
-- **Privacy policy URL** — ⚠️ **both stores require one.** Port Boss stores progress only on-device and
-  has no accounts/tracking, so it's a short policy. I can draft it and you host it (a page on your itch
-  or a free GitHub Pages URL works). Tell me and I'll write it.
+- **Privacy policy URL** — ⚠️ **both stores require one.** It's already written: **`PRIVACY.md`** in the
+  repo root (Port Boss stores progress only on-device, no accounts/tracking/ads — a short, honest
+  policy). You just need it at a public **URL**. Easiest free options:
+  - **GitHub Pages:** repo **Settings → Pages → Deploy from branch** → pick `main` / `/root` (or
+    `docs/`). Your policy is then at `https://<you>.github.io/<repo>/PRIVACY` (rename to `PRIVACY.md`
+    or drop a copy in `/docs`). Paste that URL into both store forms.
+  - **Or a GitHub Gist** (paste the `PRIVACY.md` text, "Create public gist", use its URL), **or** a
+    page on your itch.io project. Any always-on public URL is accepted.
 
 ---
 

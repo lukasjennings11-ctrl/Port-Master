@@ -3826,6 +3826,37 @@
     catch (e) { adsReady = false; }
   }
 
+  // ---- Native app (Capacitor) niceties. This is a strict NO-OP on the web/portal builds: everything
+  // below is gated on Capacitor.isNativePlatform(), which is only ever true inside the iOS/Android
+  // shell. Plugins are read off the runtime-injected window.Capacitor.Plugins (no ES imports needed in
+  // this plain <script> game). See APP-BUILD-GUIDE.md for the store build. ----
+  // Android hardware BACK: close the top-most open surface if there is one; otherwise minimise the app
+  // (never a jarring hard-exit mid-idle). Panels close via their existing toggles/close fns.
+  function nativeBack() {
+    if (settingsOpen) { toggleSettings(); return true; }
+    if (manageOpen) { toggleManage(); return true; }
+    if (expOpen) { toggleExp(); return true; }
+    if (registryOpen) { toggleRegistry(); return true; }
+    if (tradeOpen) { closeTrade(); return true; }
+    if (legacyOpen) { closeLegacy(); return true; }
+    if (timelineOpen) { closeTimeline(); return true; }
+    var modal = document.querySelector('.evm.show');   // event/rival choice card — dismiss rather than exit
+    if (modal) { modal.classList.remove('show'); return true; }
+    return false;   // nothing open → let the caller minimise
+  }
+  function initNative() {
+    var CAP = window.Capacitor;
+    if (!(CAP && CAP.isNativePlatform && CAP.isNativePlatform())) return;   // web/portal → inert
+    var P = CAP.Plugins || {};
+    try { if (P.SplashScreen && P.SplashScreen.hide) P.SplashScreen.hide(); } catch (e) {}
+    try { if (P.StatusBar) { if (P.StatusBar.setStyle) P.StatusBar.setStyle({ style: 'DARK' }); if (P.StatusBar.setBackgroundColor) P.StatusBar.setBackgroundColor({ color: '#080d1e' }); } } catch (e) {}
+    try {
+      if (P.App && P.App.addListener) P.App.addListener('backButton', function () {
+        if (!nativeBack()) { try { if (P.App.minimizeApp) P.App.minimizeApp(); } catch (e) {} }
+      });
+    } catch (e) {}
+  }
+
   // ---- Phase 17a: Empire Timeline — tapping the era pill opens a compact horizontal age ribbon:
   // one node per curated age (icon + name), filled once reached, the current age pulsing, future
   // ages ghosted with a one-line teaser, and a trailing "∞" node for the endless roman-numeral tail
@@ -4667,6 +4698,7 @@
     // loader covering a fully-rendered game forever — the "only text, no graphics, stuck loading"
     // rejection. The portal loading BRACKET (loadingStart/Stop) still runs in portalReady.then below.
     requestAnimationFrame(function () { if (loader) loader.classList.add('hidden'); });
+    initNative();   // Capacitor native shell only (no-op on web/portal): back button, splash hide, status bar
     if (portalReady) portalReady.then(function () {
       // init() has resolved — NOW the CrazyGames SDK honors game.* calls. Open the loading bracket
       // here and pair it one frame later, so both sdkGameLoadingStart + sdkGameLoadingStop register
