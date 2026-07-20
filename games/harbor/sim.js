@@ -202,22 +202,27 @@
   // being a wall. Table: [0, 120, 450, 2000, 10000, 50000, 75000, 500000].
   var FLEET_ROLES = ['fishing', 'trade', 'expedition'];
   var FLEET_COST = [0, 120, 450, 2000, 10000, 50000, 75000, 500000];
-  var FLEET_MAX_TIER = FLEET_COST.length - 1;   // 7 — matches ERAS.length-1 (Neon Horizon)
-  function fleetTier(role) { return (S && S.fleetTech && S.fleetTech[role]) || 0; }
-  function fleetShipCost(role) {
-    var t = fleetTier(role);
-    return t >= FLEET_MAX_TIER ? null : FLEET_COST[t + 1];
+  // v92: the registry is now ENDLESS — the curated table covers the 8 named ages, then every tier
+  // beyond keeps costing 3× the last (matching the era-to-era money curve) so you can always commission
+  // a newer, dearer fleet as you level indefinitely. (Was hard-capped at tier 7 / Neon Horizon.)
+  var FLEET_TABLE_MAX = FLEET_COST.length - 1;   // 7 — last curated tier
+  function fleetCostAt(tier) {                    // £ to commission INTO `tier` (tier >= 1)
+    if (tier <= 0) return 0;
+    if (tier < FLEET_COST.length) return FLEET_COST[tier];
+    return Math.round(FLEET_COST[FLEET_TABLE_MAX] * Math.pow(3, tier - FLEET_TABLE_MAX));
   }
-  function fleetEraGated(role) { var t = fleetTier(role); return t < FLEET_MAX_TIER && empireEra() < t + 1; }
+  function fleetTier(role) { return (S && S.fleetTech && S.fleetTech[role]) || 0; }
+  function fleetShipCost(role) { return fleetCostAt(fleetTier(role) + 1); }   // endless: always a next tier
+  function fleetEraGated(role) { return empireEra() < fleetTier(role) + 1; }
   function canBuyShip(role) {
     if (!S || FLEET_ROLES.indexOf(role) < 0) return false;
     var t = fleetTier(role);
-    return t < FLEET_MAX_TIER && empireEra() >= t + 1 && S.money >= FLEET_COST[t + 1];   // fleet is empire-wide → gate on your most advanced harbour
+    return empireEra() >= t + 1 && S.money >= fleetCostAt(t + 1);   // fleet is empire-wide → gate on your most advanced harbour (eras are endless, so the ladder never dead-ends)
   }
   function buyShip(role) {
     if (!canBuyShip(role)) return false;
     var t = fleetTier(role);
-    S.money -= FLEET_COST[t + 1];
+    S.money -= fleetCostAt(t + 1);
     S.fleetTech[role] = t + 1;
     S.stats.shipsBought = (S.stats.shipsBought || 0) + 1;
     save(); return true;
@@ -232,7 +237,10 @@
   // e.g. era2/tier2 (current) = 1.20; era2/tier0 (2 ages behind) = 0.90 → owning the current age's
   // fleet is +33% relative to being 2 ages behind, matching the "+25-35%" target across the ladder;
   // era0/tier0 (a fresh or freshly-migrated save) = 1.00 exactly — no regression vs pre-17b income.
-  var FLEET_MUL_MIN = 0.85, FLEET_MUL_MAX = 1.8;
+  // v92: the +10%/age owned-fleet bonus keeps climbing with the endless ladder (the upper clamp is a
+  // huge safety rail, not a gameplay ceiling) so a modern fleet stays a growing lever as you level;
+  // the 0.85 floor (falling-behind) is unchanged. Every curated-age value (≤1.70) is unaffected.
+  var FLEET_MUL_MIN = 0.85, FLEET_MUL_MAX = 100;
   function fleetYieldMul(role) {
     if (!S) return 1;
     var tier = fleetTier(role), erax = S.era || 0;
@@ -325,7 +333,8 @@
   function freshPort(id) {
     return {
       id: id, era: 0, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, focus: 'none',
-      demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0
+      demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0,
+      shippedBy: { fish: 0, timber: 0, goods: 0 }   // v92: this port's own cumulative cargo moved — Orders measure delivery against THIS, so they progress from the flow you actually sell (never stuck waiting on a stockpile the sellers keep draining)
     };
   }
   function fresh() {
@@ -339,7 +348,7 @@
       voyages: [], voyageSeq: 0,
       fleetTech: { fishing: 0, trade: 0, expedition: 0 },     // Phase 17b: fleet registry tiers
       navy: 0, lastNavyRepel: null,                           // Phase 17c: navy tier + last auto-defense (for the game.js banner)
-      stats: { storms: 0, shipped: 0, averted: 0, shipsBought: 0, navyBought: 0, raidsRepelled: 0 }
+      stats: { storms: 0, shipped: 0, shippedBy: { fish: 0, timber: 0, goods: 0 }, averted: 0, shipsBought: 0, navyBought: 0, raidsRepelled: 0 }
     };
   }
   // Per-port era: each harbour advances on its own; S.era mirrors the ACTIVE port's era so every
@@ -390,6 +399,11 @@
       if (FOCUS_IDS.indexOf(pt.focus) < 0) pt.focus = 'none';   // backfill port specialisation on old saves
       if (!pt.contracts) pt.contracts = [];
       if (typeof pt.contractSeq !== 'number') pt.contractSeq = 0;
+      if (!pt.shippedBy || typeof pt.shippedBy !== 'object') pt.shippedBy = { fish: 0, timber: 0, goods: 0 };   // v92: per-port cargo-moved counter (Orders progress off this)
+      ['fish', 'timber', 'goods'].forEach(function (r) { if (typeof pt.shippedBy[r] !== 'number') pt.shippedBy[r] = 0; });
+      // v92: existing contracts predate flow-based delivery — stamp them "start now" so they measure
+      // only NEW cargo from here (an old stockpile-order becomes a normal flow order, never stuck).
+      for (var ci = 0; ci < pt.contracts.length; ci++) if (typeof pt.contracts[ci].start !== 'number') pt.contracts[ci].start = pt.shippedBy[pt.contracts[ci].res] || 0;
       for (var bi = 0; bi < pt.buildings.length; bi++) if (pt.buildings[bi].hp == null) pt.buildings[bi].hp = 100;
       CUR = pt; ensureContracts();
     }
@@ -399,6 +413,10 @@
     if (typeof S.crash === 'undefined') S.crash = null;
     if (!S.stats) S.stats = { storms: 0 };
     if (typeof S.stats.shipped !== 'number') S.stats.shipped = 0;
+    // v92: per-resource cumulative cargo actually MOVED (sold at markets/docks + routed). Old saves
+    // that only tracked route volume backfill from the existing total onto goods so nothing is lost.
+    if (!S.stats.shippedBy || typeof S.stats.shippedBy !== 'object') S.stats.shippedBy = { fish: 0, timber: 0, goods: 0 };
+    ['fish', 'timber', 'goods'].forEach(function (r) { if (typeof S.stats.shippedBy[r] !== 'number') S.stats.shippedBy[r] = 0; });
     if (typeof S.stats.averted !== 'number') S.stats.averted = 0;   // Phase 15b: additive backfill — old saves load fine
     if (typeof S.stats.shipsBought !== 'number') S.stats.shipsBought = 0;   // Phase 17b: additive backfill
     if (!S.fleetTech) S.fleetTech = { fishing: 0, trade: 0, expedition: 0 };   // Phase 17b: old saves start every ladder at tier 0
@@ -483,15 +501,22 @@
     var premium = 1.7 + ((seq * 3) % 4) * 0.15;                      // 1.7x .. 2.15x passive price
     var reward = Math.round(amt * basePrice(res) * premium);
     var who = ORDER_LABELS[(seq * 5) % ORDER_LABELS.length];
-    return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward };
+    // v92: flow-based delivery — stamp the port's cargo-moved counter at genesis; the order fills as
+    // you ship that resource (start .. start+amt), so it always progresses and never waits on a
+    // stockpile the sellers keep draining to 0. `start` is the snapshot; progress = shippedBy - start.
+    var start = (CUR.shippedBy && CUR.shippedBy[res]) || 0;
+    return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward, start: start };
   }
+  // v92: how much of an order has been delivered so far, from the port's cargo flow since it appeared
+  function contractProgress(c) { var moved = ((CUR.shippedBy && CUR.shippedBy[c.res]) || 0) - (c.start || 0); return clamp(moved, 0, c.amt); }
   function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var want = 3 + (META.contractSlots || 0), guard = 0; while (CUR.contracts.length < want && guard++ < 20) CUR.contracts.push(genContract()); }
   function findContract(id) { for (var i = 0; i < (CUR.contracts || []).length; i++) if (CUR.contracts[i].id === id) return i; return -1; }
-  function canFulfill(id) { var i = findContract(id); return i >= 0 && CUR.res[CUR.contracts[i].res] >= CUR.contracts[i].amt; }
+  function canFulfill(id) { var i = findContract(id); return i >= 0 && contractProgress(CUR.contracts[i]) >= CUR.contracts[i].amt; }
   function fulfillContract(id) {
     if (!CUR || !canFulfill(id)) return 0;
     var i = findContract(id), c = CUR.contracts[i];
-    CUR.res[c.res] = Math.max(0, CUR.res[c.res] - c.amt);
+    // v92: the cargo was already shipped through your markets (counted by shippedBy) — claiming the
+    // order pays its premium lump sum on top, then a fresh order takes its place.
     S.money += c.reward; S.lifetimeMoney = (S.lifetimeMoney || 0) + c.reward;
     CUR.contracts.splice(i, 1); ensureContracts(); save();
     return c.reward;
@@ -536,6 +561,7 @@
       if (amt <= 0) continue;
       pa.res[r.res] -= amt; pb.res[r.res] += amt;
       shipped += amt; income += amt * routeTariff(r.res);
+      if (S.stats) { var sb = S.stats.shippedBy || (S.stats.shippedBy = { fish: 0, timber: 0, goods: 0 }); sb[r.res] = (sb[r.res] || 0) + amt; }   // v92: per-resource cargo moved by routes too
     }
     if (shipped > 0) { addNetXP(shipped * NET_XP_PER_UNIT); if (S.stats) S.stats.shipped = (S.stats.shipped || 0) + shipped; }
     return income * fleetYieldMul('trade');   // Phase 17b: trade fleet tier rubber-bands route income
@@ -759,14 +785,33 @@
 
   // ---- expeditions: timed voyages that resolve on wall-clock time, so they finish while you're
   // away (no tick needed — ready when now() >= endsAt). Send a ship, wait, collect a reward roll. ----
-  var DESTINATIONS = [
-    { id: 'cove', name: 'Smuggler’s Cove', tier: 1, secs: 120 },
-    { id: 'reef', name: 'Coral Reef', tier: 2, secs: 360 },
-    { id: 'isle', name: 'Lost Isle', tier: 3, secs: 900 },
-    { id: 'trench', name: 'The Deep Trench', tier: 4, secs: 2400 }
+  // v92: more expedition options, and the list keeps GROWING with the ages. The first eight are
+  // curated (each unlocks at its `minEra`); past that, higher-tier destinations are generated
+  // ("Deep Expanse IX…") so there's always a richer, longer, dearer run to unlock as you level.
+  var DESTINATIONS_BASE = [
+    { id: 'cove', name: 'Smuggler’s Cove', tier: 1, secs: 120, minEra: 0 },       // the original four stay available from the start
+    { id: 'reef', name: 'Coral Reef', tier: 2, secs: 360, minEra: 0 },
+    { id: 'isle', name: 'Lost Isle', tier: 3, secs: 900, minEra: 0 },
+    { id: 'trench', name: 'The Deep Trench', tier: 4, secs: 2400, minEra: 0 },
+    { id: 'atoll', name: 'Mirage Atoll', tier: 5, secs: 3600, minEra: 4 },        // + four richer runs that unlock as you level
+    { id: 'maelstrom', name: 'The Maelstrom', tier: 6, secs: 5400, minEra: 5 },
+    { id: 'abyss', name: 'Starlit Abyss', tier: 7, secs: 8100, minEra: 6 },
+    { id: 'rift', name: 'The Void Rift', tier: 8, secs: 12000, minEra: 7 }
   ];
-  function destDef(id) { for (var i = 0; i < DESTINATIONS.length; i++) if (DESTINATIONS[i].id === id) return DESTINATIONS[i]; return null; }
-  function voyageSlots() { return 1 + Math.min(2, Math.floor(empireEra() / 2)) + (META.voyageSlots || 0); }   // expeditions are empire-wide → scale on empire era
+  function genDest(tier) { return { id: 'deep' + tier, name: 'Deep Expanse ' + roman(tier - 7), tier: tier, secs: Math.round(12000 * Math.pow(1.4, tier - 8)), minEra: tier - 1 }; }
+  // the live list = every curated destination unlocked at the empire's era, plus (once you're past the
+  // curated tail) the next TWO generated frontier runs, so there's always a fresh option to aim at.
+  function DESTINATIONS_all() {
+    var e = empireEra(), list = DESTINATIONS_BASE.filter(function (d) { return e >= d.minEra; });
+    if (e >= DESTINATIONS_BASE.length - 1) { var top = DESTINATIONS_BASE.length; for (var k = 0; k < 2; k++) { var tier = top + k; if (e >= tier - 1) list.push(genDest(tier)); } }
+    return list;
+  }
+  function destDef(id) {
+    for (var i = 0; i < DESTINATIONS_BASE.length; i++) if (DESTINATIONS_BASE[i].id === id) return DESTINATIONS_BASE[i];
+    var m = /^deep(\d+)$/.exec(id); if (m) return genDest(+m[1]);   // regenerate a frontier dest deterministically from its id
+    return null;
+  }
+  function voyageSlots() { return 1 + Math.floor(empireEra() / 2) + (META.voyageSlots || 0); }   // v92: more berths keep unlocking with the ages (was capped at +2 / 3 total)
   function voyageCost(d) { return Math.round(120 * d.tier * (1 + (S.era || 0) * 0.5)); }
   function canStartVoyage(id) { var d = destDef(id); return !!(d && S && S.money >= voyageCost(d) && (S.voyages || []).length < voyageSlots()); }
   function startVoyage(id) {
@@ -780,7 +825,11 @@
     var era = S.era || 0, cost = voyageCost(d), out = { cash: 0, res: null, crate: 0, relic: 0 };
     // Flagship capstone (META.voyageYield) and the Phase 17b expedition fleet tier COMPOSE
     // multiplicatively (both are "richer hauls" levers, from different systems — prestige vs. spend).
-    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)) * fleetYieldMul('expedition'));
+    // v92: expeditions get MORE lucrative as the game progresses — a late-game bounty multiplier that
+    // is exactly 1× through era 3 (so early balance + the ≤60%-of-lifetime autoplay bound are
+    // untouched) then grows +40%/age without bound, matching the endless higher-tier destinations.
+    var lateMul = 1 + Math.max(0, era - 3) * 0.4;
+    out.cash = Math.round(cost * (2.2 + d.tier * 0.4) * (0.85 + _rng() * 0.5) * (1 + (META.voyageYield || 0)) * fleetYieldMul('expedition') * lateMul);
     if (_rng() < 0.5) { var r = ['fish', 'timber', 'goods'][Math.floor(_rng() * 3)]; out.res = {}; out.res[r] = Math.round(20 * d.tier * (1 + era * 0.4)); }
     if (_rng() < 0.12 * d.tier) out.crate = 1;
     if (_rng() < 0.05 * d.tier) out.relic = 1;                  // relics wired up in Phase 7c
@@ -809,7 +858,7 @@
     return {
       slots: voyageSlots(), used: active.length, ready: active.filter(function (a) { return a.ready; }).length,
       active: active,
-      dests: DESTINATIONS.map(function (d) { return { id: d.id, name: d.name, tier: d.tier, secs: d.secs, cost: voyageCost(d), can: canStartVoyage(d.id) }; })
+      dests: DESTINATIONS_all().map(function (d) { return { id: d.id, name: d.name, tier: d.tier, secs: d.secs, cost: voyageCost(d), can: canStartVoyage(d.id) }; })
     };
   }
 
@@ -825,8 +874,8 @@
   // genuine expedition into the unknown rather than a quick errand. See the Phase 15c commit body.
   var UNCHARTED_ID = 'uncharted', UNCHARTED_DUR_MUL = 1.75;
   function unchartedSecs() {
-    var maxSecs = 0; for (var i = 0; i < DESTINATIONS.length; i++) if (DESTINATIONS[i].secs > maxSecs) maxSecs = DESTINATIONS[i].secs;
-    return Math.round(maxSecs * UNCHARTED_DUR_MUL);
+    var d = DESTINATIONS_all(), maxSecs = 0; for (var i = 0; i < d.length; i++) if (d[i].secs > maxSecs) maxSecs = d[i].secs;
+    return Math.round((maxSecs || 2400) * UNCHARTED_DUR_MUL);
   }
   function unchartedCost(unlockEra) { return Math.round(400 * Math.pow(3, Math.max(0, (unlockEra || 1) - 1))); }
   function canStartUncharted(unlockEra) { return !!S && S.money >= unchartedCost(unlockEra) && (S.voyages || []).length < voyageSlots(); }
@@ -881,6 +930,12 @@
     // wages: every working crew costs money/s; Foreman trims the bill
     money -= WAGE * Math.min(p, j) * dt * Math.max(0.2, 1 - 0.10 * (S.managers.labour || 0));
     for (var k in add) { port.res[k] = clamp((port.res[k] + add[k]) || 0, 0, cap[k]); }
+    // v92: cargo actually MOVED = units sold through markets/docks this tick. This is what "Cargo
+    // shipped" (stats), the daily "Ship N cargo" mission, the rival ship-race, and Orders all read —
+    // previously only trade-route volume counted, so a routeless empire always showed "shipped 0".
+    var psb = port.shippedBy || (port.shippedBy = { fish: 0, timber: 0, goods: 0 });   // v92: per-port cargo moved — Orders read this
+    if (S.stats) { var sb = S.stats.shippedBy || (S.stats.shippedBy = { fish: 0, timber: 0, goods: 0 }), moved = 0; for (var sr in soldR) { if (soldR[sr] > 0) { sb[sr] = (sb[sr] || 0) + soldR[sr]; psb[sr] = (psb[sr] || 0) + soldR[sr]; moved += soldR[sr]; } } if (moved > 0) S.stats.shipped = (S.stats.shipped || 0) + moved; }
+    else { for (var sr2 in soldR) if (soldR[sr2] > 0) psb[sr2] = (psb[sr2] || 0) + soldR[sr2]; }
     port.pop = p;
     return money;
   }
@@ -1036,7 +1091,7 @@
       event: (S.evt && S.evt.active) ? { id: S.evt.active.id, name: S.evt.active.name, kind: S.evt.active.kind, seq: S.evt.active.seq, ttl: Math.max(0, Math.ceil(S.evt.active.ttl)), data: S.evt.active.data } : null,
       navyRepel: S.lastNavyRepel || null,   // Phase 17c: last auto-defended raid {seq,loot} — game.js banner watches this by seq
       voyages: voyageState(),
-      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), averted: (S.stats && S.stats.averted) || 0, shipsBought: (S.stats && S.stats.shipsBought) || 0, navyBought: (S.stats && S.stats.navyBought) || 0, raidsRepelled: (S.stats && S.stats.raidsRepelled) || 0, ports: Object.keys(S.ports).length },
+      stats: { storms: (S.stats && S.stats.storms) || 0, shipped: Math.floor((S.stats && S.stats.shipped) || 0), shippedBy: { fish: Math.floor((S.stats && S.stats.shippedBy && S.stats.shippedBy.fish) || 0), timber: Math.floor((S.stats && S.stats.shippedBy && S.stats.shippedBy.timber) || 0), goods: Math.floor((S.stats && S.stats.shippedBy && S.stats.shippedBy.goods) || 0) }, averted: (S.stats && S.stats.averted) || 0, shipsBought: (S.stats && S.stats.shipsBought) || 0, navyBought: (S.stats && S.stats.navyBought) || 0, raidsRepelled: (S.stats && S.stats.raidsRepelled) || 0, ports: Object.keys(S.ports).length },
       ports: portList()
     };
     if (port) {
@@ -1045,7 +1100,7 @@
       v.buildings = port.buildings.map(function (b, i) { var cp = lvlCapFor(b.type); return { i: i, type: b.type, name: BT[b.type].name, level: b.level, cap: cp, maxed: (b.level || 1) >= cp, up: upCost(b), hp: Math.round(bhp(b)), rep: bhp(b) < 100 ? repairCost(b) : 0, def: BT[b.type].cat === 'defense' }; });
       v.damaged = port.buildings.filter(function (b) { return bhp(b) < 100; }).length;
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
-      v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
+      v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(contractProgress(c)), can: canFulfill(c.id) }; });   // v92: have = cargo delivered from the flow (not current stock)
       v.synergies = synergyList(port); v.focus = port.focus || 'none';   // Phase 9a: composition bonuses + specialisation
       v.slotCap = slotCap(); v.slotsUsed = slotsUsed(port);          // Phase 15c: per-port building-slot ceiling (defenses exempt)
     } else {

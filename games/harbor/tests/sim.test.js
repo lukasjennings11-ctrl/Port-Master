@@ -837,8 +837,16 @@ function autoplay(cfg) {
     S17.era = 7;                                         // flush past every era gate so only the "in order" rule can block us
     if (SIM.buyShip('fishing')) { boughtCount++; ok('17b order: tier only ever advances by exactly 1 (' + before + '→' + SIM.fleetTier('fishing') + ')', SIM.fleetTier('fishing') === before + 1); }
   }
-  ok('17b order: bought every tier up to the max (7) one step at a time', SIM.fleetTier('fishing') === 7 && boughtCount === 7);
-  ok('17b order: maxed tier has no further cost/purchase', SIM.fleetShipCost('fishing') === null && SIM.canBuyShip('fishing') === false);
+  ok('17b order: bought every curated tier up to 7 one step at a time', SIM.fleetTier('fishing') === 7 && boughtCount === 7);
+  // v92: the registry is ENDLESS — tier 7 is no longer the ceiling. A next tier is always priced, and
+  // buyable once the empire's era catches up (eras are endless too).
+  ok('v92 endless: tier 7 still has a priced next tier (registry never dead-ends)', typeof SIM.fleetShipCost('fishing') === 'number' && SIM.fleetShipCost('fishing') > 0);
+  ok('v92 endless: tier 8 costs 3× the curated tier-7 price (£500k → £1.5M)', SIM.fleetShipCost('fishing') === 1500000);
+  ok('v92 endless: tier 7 is era-gated at era 7 (needs era 8 to commission tier 8)', SIM.canBuyShip('fishing') === false);
+  S17.era = 8;
+  ok('v92 endless: at era 8 the next tier is buyable', SIM.canBuyShip('fishing') === true);
+  SIM.buyShip('fishing');
+  ok('v92 endless: commissioning past 7 advances the tier (8) and keeps a further tier priced', SIM.fleetTier('fishing') === 8 && SIM.fleetShipCost('fishing') === 4500000);
 })();
 
 (function fleetRegistryCharging() {
@@ -878,6 +886,52 @@ function autoplay(cfg) {
       ok('17b yield: tier' + p.tier + '/era' + p.era + ' (' + role + ') = ' + p.want, near(SIM.fleetYieldMul(role), p.want, 1e-9));
     });
   });
+})();
+
+// ---------------------------------------------------------------- v92: cargo truth, flow orders,
+// endless voyage berths + destinations.
+(function v92CargoTruth() {
+  SIM.__setRng(mulberry32(920)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  g.money = 1e6; SIM.setEra(0);
+  SIM.build('fishing_hut'); SIM.build('fishing_hut'); SIM.build('jetty');   // produce fish + SELL it (no routes at all)
+  var before = SIM.state().stats;
+  ok('v92 cargo: shipped counters start at 0', before.shipped === 0 && before.shippedBy.fish === 0);
+  for (var i = 0; i < 60; i++) SIM.tick(1);                                  // let the jetty sell the fish the huts land
+  var after = SIM.state().stats;
+  ok('v92 cargo: SELLING fish (no trade routes) now raises stats.shipped — fixes the "shipped 0" lie', after.shipped > 0 && after.shippedBy.fish > 0);
+  ok('v92 cargo: breakdown is per-resource — only fish moved (no timber/goods producers yet)', after.shippedBy.timber === 0 && after.shippedBy.goods === 0);
+})();
+
+(function v92FlowOrders() {
+  SIM.__setRng(mulberry32(921)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  var p = SIM.port('green');
+  p.shippedBy = { fish: 0, timber: 0, goods: 0 };
+  p.contracts = [{ id: 'greencX', who: 'Test Co.', res: 'fish', amt: 30, reward: 5000, start: 0 }];
+  ok('v92 orders: not fulfillable before any fish has been shipped', SIM.canFulfill('greencX') === false && SIM.state().contracts[0].have === 0);
+  p.res.fish = 0; p.shippedBy.fish = 30;                                     // 30 fish MOVED through the flow — stock stays 0
+  ok('v92 orders: fills from cargo FLOW even with 0 stock on hand (never waits on a stockpile)', SIM.canFulfill('greencX') === true && SIM.state().res.fish === 0 && SIM.state().contracts[0].have === 30);
+  var m0 = g.money, paid = SIM.fulfillContract('greencX');
+  ok('v92 orders: fulfilling pays the premium + auto-issues a replacement (board keeps flowing)', paid === 5000 && g.money === m0 + 5000 && p.contracts.length >= 1 && !p.contracts.some(function (c) { return c.id === 'greencX'; }));
+})();
+
+(function v92EndlessExpeditions() {
+  SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  SIM.setEra(4); ok('v92 berths: era4 → 3 (unchanged)', SIM.voyages().slots === 3);
+  SIM.setEra(6); ok('v92 berths: era6 → 4 (was capped at 3 — more berths per age now)', SIM.voyages().slots === 4);
+  SIM.setEra(10); ok('v92 berths: era10 → 6 (keeps scaling)', SIM.voyages().slots === 6);
+  SIM.setEra(0); ok('v92 dests: era0 keeps the original 4 destinations', SIM.voyages().dests.length === 4);
+  SIM.setEra(4); ok('v92 dests: era4 unlocks a 5th', SIM.voyages().dests.length === 5);
+  SIM.setEra(7); var d7 = SIM.voyages().dests.map(function (d) { return d.id; });
+  ok('v92 dests: era7 lists 8 curated + a generated frontier run (endless, keeps growing)', d7.length > 8 && d7.indexOf('rift') >= 0 && d7.some(function (id) { return /^deep\d+$/.test(id); }));
+  // v92: the SAME expedition pays much more as the game progresses (era3 vs era8, identical RNG)
+  function coveCash(era) {
+    SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw(); g.money = 1e9; SIM.setEra(era);
+    SIM.__setRng(mulberry32(4242));   // seed the rollVoyage draw identically for both eras
+    SIM.startVoyage('cove'); g.voyages[0].endsAt = Date.now() - 1;
+    return SIM.collectVoyage(g.voyages[0].seq).cash;
+  }
+  var c3 = coveCash(3), c8 = coveCash(8);
+  ok('v92 expeditions: the same run pays far more late-game (era8 cash ≥ 2× era3 cash)', c8 >= c3 * 2 && c3 > 0);
 })();
 
 (function fleetRegistryProductionWiring() {

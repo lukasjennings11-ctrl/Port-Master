@@ -259,11 +259,12 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     postBuy.tier === preBuy.tier + 1 && Math.abs(postBuy.money - (preBuy.money - 120)) < 50);   // tolerance: the live economy still ticks a few £ during the 150ms settle window
   ok('17b registry: first-ever commission latches the "First Commission" achievement', postBuy.ach === true);
   ok('17b registry: the fishing card repaints to the newly-commissioned class name (Coracle)', postBuy.cardName === 'Coracle');
-  // max out a ladder → "Fleet complete ✓" replaces the Commission button
-  await page.evaluate(() => { for (var i = 0; i < 10; i++) { window.HARBOR_SIM.setEra(7); window.HARBOR_SIM.raw().money = 1e7; window.__harbor.buyShip('expedition'); } window.__harbor.openRegistry(); });
+  // v92: the fleet registry is ENDLESS now — buy up through the curated tier 7, and the card STILL
+  // shows a Commission button (for tier 8+) rather than a "Fleet complete ✓" dead end.
+  await page.evaluate(() => { for (var i = 0; i < 10; i++) { window.HARBOR_SIM.setEra(7); window.HARBOR_SIM.raw().money = 1e9; window.__harbor.buyShip('expedition'); } window.__harbor.openRegistry(); });
   await sleep(120);
-  const reg4 = await page.evaluate(() => ({ tier: window.__harbor.fleetTier('expedition'), hasMax: !!document.querySelector('#registrypanel .reg-max') }));
-  ok('17b registry: maxing a ladder (tier7) shows "Fleet complete ✓" instead of a Commission button', reg4.tier === 7 && reg4.hasMax);
+  const reg4 = await page.evaluate(() => { var cards = document.querySelectorAll('#registrypanel .reg-card'); var expCard = cards[2]; return { tier: window.__harbor.fleetTier('expedition'), noMax: !document.querySelector('#registrypanel .reg-max'), hasBuy: !!(expCard && expCard.querySelector('[data-buy="expedition"]')) }; });
+  ok('17b/v92 registry: an endless ladder at tier7 still offers a Commission button (no "Fleet complete" dead end)', reg4.tier === 7 && reg4.noMax && reg4.hasBuy);
   await page.evaluate(() => window.__harbor.closeRegistry());
   ok('17b registry: panel flows produced zero new console/GL errors', errs.length === errsBeforeReg);
 
@@ -858,47 +859,32 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await provPage.close();
 
   const errsBefore12a = errs.length;
-  await page.evaluate(() => {
-    window.__ADS_TEST_FAST__ = true;             // skip the stub's charm delay — deterministic + fast
-    window.Retention.set('harbor', 'bonusDay', null);
-    window.HARBOR_SIM.setBoost(1, 0);             // clear any leftover ambient/crate surge from earlier
-    window.__harbor.forceHUD();
-  });
-  await sleep(60);
-  const b0 = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
-  ok('bonus: ⚓ button appears when eligible (provider ready, no boost active, port founded)',
-    b0.shown === true && b0.hook.available === true && b0.hook.active === false);
+  // v92: the Captain's Bonus was REMOVED entirely (off a real ad SDK it just handed a free 2× — a
+  // misleading/broken button). Nothing bonus-related should remain in the DOM or the test surface.
+  const noBonus = await page.evaluate(() => ({ btn: !!document.getElementById('bonusbtn'), modal: !!document.getElementById('bonusmodal'), chip: !!document.getElementById('bonuschip'), hook: typeof window.__harbor.bonus === 'function' }));
+  ok('v92: Captain’s Bonus fully removed — no ⚓ button, modal, chip, or bonus() hook remain',
+    !noBonus.btn && !noBonus.modal && !noBonus.chip && !noBonus.hook);
 
-  await page.evaluate(() => window.__harbor.claimBonus());
-  await sleep(150);   // fast-mode stub resolves on the next tick
-  const b1 = await page.evaluate(() => ({ hook: window.__harbor.bonus(), chipVisible: document.getElementById('bonuschip').style.display !== 'none', chipText: document.getElementById('bonuschip').textContent, modalShown: !!document.querySelector('#bonusmodal.show') }));
-  ok('bonus: claim → SIM boost active at 2× with a prominent "⚡ 2× BONUS · m:ss" buff pill in the HUD, daily count advances',
-    b1.hook.active === true && b1.hook.mult === 2 && b1.hook.remaining > 590 && b1.hook.remaining <= 600 &&
-    b1.chipVisible === true && /⚡\s*2×\s*BONUS\s*·\s*\d+:\d{2}/.test(b1.chipText) && b1.modalShown === false && b1.hook.usedToday === 1);
-
-  // decline: the card never auto-opens (only a real tap reaches it), and "No thanks" leaves everything
-  // exactly as it was — no charge, no boost, no daily-count bump, just a closed card.
-  await page.evaluate(() => { window.HARBOR_SIM.setBoost(1, 0); window.__harbor.forceHUD(); });
+  // v92: PC-click reliability — a canvas drag must not leave a lingering pointer-capture that swallows
+  // the NEXT button click (the "clicking feels unreliable on PC" bug). Drag on the canvas with the
+  // mouse, then click an action-bar button + an in-panel button; both handlers must still fire.
+  const errsBeforeClick = errs.length;
+  await page.evaluate(() => { if (document.getElementById('managepanel') && document.getElementById('managepanel').classList.contains('show')) document.getElementById('managebtn').click(); });
+  const gbox = await (await page.$('#game')).boundingBox();
+  await page.mouse.move(gbox.x + gbox.width / 2, gbox.y + gbox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(gbox.x + gbox.width / 2 + 70, gbox.y + gbox.height / 2 + 24, { steps: 5 });
+  await page.mouse.up();
+  await sleep(40);
+  await page.click('#managebtn');   // action-bar pill immediately after the drag
+  await sleep(90);
+  const openedAfterDrag = await page.evaluate(() => document.getElementById('managepanel').classList.contains('show'));
+  ok('v92 clicks: an action-bar button responds right after a canvas drag (no lingering capture swallow)', openedAfterDrag === true);
+  await page.click('#mp-close');    // in-panel button
   await sleep(60);
-  const preDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, autoOpen: !!document.querySelector('#bonusmodal.show') }));
-  await page.evaluate(() => { document.getElementById('bonusbtn').click(); });
-  await sleep(60);
-  const cardOpen = await page.evaluate(() => { var m = document.querySelector('#bonusmodal.show'); return !!(m && m.querySelector('[data-bonus="decline"]') && m.querySelector('[data-bonus="claim"]')); });
-  ok('bonus: card never auto-opens, and shows both "No thanks" and "Claim ⚓" only after a real tap',
-    preDecline.autoOpen === false && cardOpen === true);
-  await page.evaluate(() => { var b = document.querySelector('#bonusmodal [data-bonus="decline"]'); if (b) b.click(); });
-  await sleep(60);
-  const postDecline = await page.evaluate(() => ({ used: window.__harbor.bonus().usedToday, legacy: window.__harbor.legacy().bal, active: window.__harbor.bonus().active, modalShown: !!document.querySelector('#bonusmodal.show') }));
-  ok('bonus: decline changes nothing — no charge, no boost, no daily-count bump, card just closes',
-    postDecline.used === preDecline.used && postDecline.legacy === preDecline.legacy && postDecline.active === false && postDecline.modalShown === false);
-
-  // daily cap: drive the Retention counter directly (rather than 6 real claims) — button hides quietly,
-  // with no dead click and no nag state left behind
-  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', { date: window.Retention.todayStr(), count: 6 }); window.__harbor.forceHUD(); });
-  await sleep(60);
-  const capped = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', hook: window.__harbor.bonus() }));
-  ok('bonus: daily cap (6/day) hides the button quietly once reached — no nagging', capped.shown === false && capped.hook.available === false);
-  await page.evaluate(() => { window.Retention.set('harbor', 'bonusDay', null); window.__harbor.forceHUD(); });
+  const closedAfter = await page.evaluate(() => !document.getElementById('managepanel').classList.contains('show'));
+  ok('v92 clicks: an in-panel button (Manage ✕) responds after the drag too', closedAfter === true);
+  ok('v92 clicks: drag-then-click probe produced zero new console/GL errors', errs.length === errsBeforeClick);
 
   // Phase 12b: production hardening — error capture, portal lifecycle events, and portal mode.
   // Run before the AdProvider-resilience block below, which deliberately replaces window.ADS with
@@ -1033,7 +1019,8 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     nonPortalState.swRegs >= 1 && nonPortalState.installRow === true && nonPortalState.privacyLink === true);
 
   // AdProvider resilience: a provider whose init() throws must never break the game — boot/HUD keep
-  // running fine, the bonus button just stays hidden rather than the game crashing or console erroring.
+  // running fine (v92: the Captain's Bonus that used to gate on this is gone; the ADS layer still
+  // exists for the era commercial break + portal gameplay bracket, so a throwing init must stay safe).
   await page.evaluate(() => {
     window.HARBOR_SIM.setBoost(1, 0);
     window.ADS = { provider: 'broken', init: function () { throw new Error('simulated init failure'); }, rewardedAvailable: function () { throw new Error('simulated failure'); }, showRewarded: function () { throw new Error('simulated failure'); } };
@@ -1041,9 +1028,9 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     window.__harbor.forceHUD();
   });
   await sleep(150);
-  const resilient = await page.evaluate(() => ({ shown: document.getElementById('bonusbtn').style.display !== 'none', avail: window.__harbor.bonus().available }));
-  ok('ads: a provider whose init() throws → game keeps running fine, bonus button stays hidden (not shown, not broken)',
-    resilient.shown === false && resilient.avail === false);
+  const resilient = await page.evaluate(() => ({ hud: !!document.getElementById('managebtn'), founded: window.HARBOR_SIM.raw().founded }));
+  ok('ads: a provider whose init() throws → game keeps running fine (HUD intact), never a crash',
+    resilient.hud === true && resilient.founded === true);
   ok('ads: resilience probe produced zero new console/page errors', errs.length === errsBefore12a);
 
   // Phase 13d: local fun-funnel metrics — zero-network, no-PII instrument backed by Retention.
@@ -1054,7 +1041,7 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('metrics: object populated — sessions/playtime present, funnel milestones already latched by the flows above',
     m0 && typeof m0.sessions === 'number' && m0.sessions >= 1 && typeof m0.totalPlayMs === 'number' &&
     typeof m0.firstCrate === 'number' && typeof m0.firstVoyage === 'number' &&
-    typeof m0.firstPrestige === 'number' && typeof m0.firstEra === 'number' && typeof m0.firstBonus === 'number');
+    typeof m0.firstPrestige === 'number' && typeof m0.firstEra === 'number');   // v92: firstBonus retired with the Captain's Bonus
 
   // firstBuild is only latched by the real Manage-panel click path (the earlier SIM.build() calls
   // in this file bypass the UI handler entirely) — drive an actual click to prove the hook fires.

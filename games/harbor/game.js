@@ -1612,12 +1612,15 @@
     canvas.addEventListener('pointerdown', function (e) {
       if (window.Juice && !muted) Juice.Audio.unlock();           // unlock WebAudio on first gesture
       if (!muted) startAmbient();                                 // start the harbour soundscape
-      if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
+      // v92: NO setPointerCapture. On desktop a lingering capture (pointerup missed off-window) could
+      // swallow the NEXT button click — the "PC clicks feel unreliable" bug. We track pointers in the
+      // `ptrs` map instead and listen for move/up on WINDOW (below), so drags still work off-canvas and
+      // capture can never eat a click meant for a HUD button.
       ptrs.set(e.pointerId, pxy(e)); C.vAz = C.vEl = C.vTx = C.vTz = 0;
       if (ptrs.size === 1) { downPt = pxy(e); moved = false; multi = false; orbitMode = (e.button === 2 || e.shiftKey); var now = Date.now(); if (now - lastTap < 300) defaultView(); lastTap = now; }
       else { multi = true; pinchPrev = 0; panPrev = null; twistPrev = null; twistAcc = 0; }
     });
-    canvas.addEventListener('pointermove', function (e) {
+    window.addEventListener('pointermove', function (e) {   // v92: on window (not canvas) so an off-canvas drag keeps tracking without pointer capture; ignores any pointer that didn't start on the canvas
       if (!ptrs.has(e.pointerId)) return;
       var p = pxy(e), prev = ptrs.get(e.pointerId); ptrs.set(e.pointerId, p);
       if (ptrs.size === 1) {
@@ -1645,7 +1648,7 @@
     });
     function up(e) {
       var was = ptrs.has(e.pointerId);
-      if (ptrs.delete(e.pointerId) && canvas.releasePointerCapture) try { canvas.releasePointerCapture(e.pointerId); } catch (x) {}
+      ptrs.delete(e.pointerId);   // v92: no pointer capture to release — just drop it from the tracking map
       if (was && !moved && !multi && ptrs.size === 0 && downPt) { if (foundMode()) scoutAt(downPt.x, downPt.y); }   // clean tap = scout
       if (ptrs.size < 2) { pinchPrev = 0; panPrev = null; twistPrev = null; multi = false; }
     }
@@ -2772,7 +2775,6 @@
       (rivalModal && rivalModal.classList.contains('show')) ||
       !!document.getElementById('welcomemodal') ||
       (crateModal && crateModal.classList.contains('show')) ||
-      (bonusModal && bonusModal.classList.contains('show')) ||
       (fortuneModal && fortuneModal.classList.contains('show')) ||
       (announceCard && announceCard.classList.contains('show'));
   }
@@ -3594,6 +3596,10 @@
       sCell('Best empire', best > 0 ? '£' + fmt(best) : '—') + sCell('Ports founded', '' + stat.ports) +
       sCell('Storms survived', '' + (stat.storms || 0)) + sCell('Cargo shipped', fmt(stat.shipped || 0)) +
       sCell('Hazards averted', '' + (stat.averted || 0)) +
+      // v92: per-resource cargo breakdown — "shipped 0" is gone, and you can see WHAT you've moved
+      sCell('🐟 Fish shipped', fmt((stat.shippedBy && stat.shippedBy.fish) || 0)) +
+      sCell('🪵 Timber shipped', fmt((stat.shippedBy && stat.shippedBy.timber) || 0)) +
+      sCell('📦 Goods shipped', fmt((stat.shippedBy && stat.shippedBy.goods) || 0)) +
       '</div>';
     var owned = ownedBlueprints().length;
     html += '<div class="lg-sec">Blueprints (' + owned + '/' + BLUEPRINTS.length + ')</div>';
@@ -3809,75 +3815,16 @@
   }
   function closeCrate() { if (crateModal) crateModal.classList.remove('show'); }
 
-  // ---- Captain's Bonus (Phase 12a): opt-in rewarded boost via the pluggable window.ADS provider.
-  // Ethics are hard requirements — opt-in only (never auto-opens), never gates progress, declining
-  // changes nothing, no nagging (button just quietly hides once the daily cap is hit). The stub
-  // provider (ads.js) grants it free with a short charm delay; a future portal adapter swaps in a
-  // real rewarded ad behind the exact same showRewarded() call — zero changes here. ----
-  var BONUS_MULT = 2, BONUS_SECS = 600, BONUS_MAX_SECS = 900;   // 2× for 10 min; stacked durations cap at 15 min
-  var bonusModal = null, bonusBusy = false, bonusChipActive = false, adsReady = false, bonusBtn = null, bonusChip = null, bonusWasActive = false;
+  // ---- Ad-provider init (Phase 12a plumbing). The opt-in "Captain's Bonus" rewarded boost that sat
+  // on top of this was REMOVED in v92 — off a real ad SDK it just handed a free 2×, which read as a
+  // misleading/broken button. window.ADS stays as the pluggable portal-SDK adapter for the era
+  // commercial break + the gameplay bracket (adsGameplayStart/Stop), so we still init it at boot.
+  // The sim's BOOST is untouched — crates still grant their production surge. ----
+  var adsReady = false;
   function initAds() {
-    try {
-      if (window.ADS && typeof window.ADS.init === 'function') window.ADS.init(function () { adsReady = true; updateHUD(); });
-    } catch (e) { adsReady = false; }
+    try { if (window.ADS && typeof window.ADS.init === 'function') window.ADS.init(function () { adsReady = true; }); }
+    catch (e) { adsReady = false; }
   }
-  function adsAvailable() {
-    try { return !!(adsReady && window.ADS && typeof window.ADS.rewardedAvailable === 'function' && window.ADS.rewardedAvailable()); }
-    catch (e) { return false; }
-  }
-  function bonusEligible() { return simReady() && adsAvailable() && SIM.boostT() <= 0; }
-  function bonusUsedToday() { var d = window.Retention && Retention.get(GAME, 'bonusDay', null), t = window.Retention && Retention.todayStr(); return (d && d.date === t) ? (d.count | 0) : 0; }
-  function clockFmt(s) { s = Math.max(0, Math.ceil(s)); var m = Math.floor(s / 60), ss = s % 60; return m + ':' + (ss < 10 ? '0' : '') + ss; }
-  function ensureBonusModal() {
-    if (bonusModal) return;
-    bonusModal = document.createElement('div'); bonusModal.id = 'bonusmodal'; bonusModal.className = 'evm';
-    bonusModal.innerHTML = '<div class="ev-card"><div class="ev-ic">⚓</div><div class="ev-name">Captain’s Bonus</div><div class="ev-desc" id="bn-desc"></div><div class="ev-btns" id="bn-btns"></div></div>';
-    wrap.appendChild(bonusModal);
-  }
-  function resetBonusCard() {
-    bonusBusy = false;
-    bonusModal.querySelector('#bn-desc').textContent = 'Captain’s Bonus — 2× production for 10 minutes.';
-    var bw = bonusModal.querySelector('#bn-btns'); bw.innerHTML = '';
-    var no = document.createElement('button'); no.className = 'ev-btn'; no.textContent = 'No thanks'; no.setAttribute('data-bonus', 'decline');
-    no.addEventListener('click', declineBonus);
-    var yes = document.createElement('button'); yes.className = 'ev-btn primary'; yes.textContent = 'Claim ⚓'; yes.setAttribute('data-bonus', 'claim');
-    yes.addEventListener('click', claimBonusFlow);
-    bw.appendChild(no); bw.appendChild(yes);
-  }
-  function openBonusCard() {
-    if (!bonusEligible()) return;   // never auto-opens; only reachable via the button, only when eligible
-    ensureBonusModal(); resetBonusCard();
-    bonusModal.classList.add('show'); sfx('tap'); haptic(8);
-  }
-  function closeBonusCard() { if (bonusModal) bonusModal.classList.remove('show'); }
-  function declineBonus() { closeBonusCard(); }   // opt-out: no penalty, nothing changes, nothing persisted
-  function claimBonusFlow() {
-    if (bonusBusy || !bonusModal) return;
-    bonusBusy = true;
-    var bw = bonusModal.querySelector('#bn-btns'), yes = bw.querySelector('[data-bonus="claim"]'), no = bw.querySelector('[data-bonus="decline"]');
-    if (yes) { yes.disabled = true; yes.textContent = 'Loading…'; }
-    if (no) no.disabled = true;
-    try { window.ADS.showRewarded(onBonusReward, onBonusFail); }
-    catch (e) { onBonusFail(); }
-  }
-  function onBonusReward() {
-    bonusBusy = false;
-    metricsMilestone('firstBonus');
-    // stacking policy: if a boost is already running (e.g. a crate-surge ambient event fired while
-    // the reward was in flight), take the higher multiplier and extend the duration, capped at 15 min,
-    // rather than clobbering whichever one happened to land first.
-    var mult = Math.max(SIM.boostMul(), BONUS_MULT), secs = Math.min(BONUS_MAX_SECS, SIM.boostT() + BONUS_SECS);
-    SIM.setBoost(mult, secs);
-    bonusChipActive = true;
-    bonusWasActive = true;   // v89: mark so updateHUD can announce "ready again" when the boost later expires
-    if (bonusBtn) bonusBtn.style.display = 'none';   // v89: hide the ⚓ Bonus button THE INSTANT it's claimed (don't wait for the next updateHUD)
-    closeBonusCard();
-    var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '⚓ 2× production!', { color: '#7fe0d6', size: 18, life: 1.6, vy: -50 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#7fe0d6', '#ffe08a', '#ffffff'], speed: 210, life: 1.1, size: 5 }); }
-    sfx('win'); haptic(24); confettiBurst();
-    showHint('⚓ Captain’s Bonus CLAIMED — ' + Math.round(mult) + '× production for ' + clockFmt(secs) + '!');   // v89: unambiguous "claimed" wording + live duration
-    updateHUD();
-  }
-  function onBonusFail() { bonusBusy = false; closeBonusCard(); }   // decline / no-fill / cap race — state left exactly as before
 
   // ---- Phase 17a: Empire Timeline — tapping the era pill opens a compact horizontal age ribbon:
   // one node per curated age (icon + name), filled once reached, the current age pulsing, future
@@ -3946,15 +3893,12 @@
     expBtn = document.createElement('button'); expBtn.id = 'expbtn'; expBtn.textContent = '⛵ Expeditions'; expBtn.addEventListener('click', toggleExp);
     registryBtn = document.createElement('button'); registryBtn.id = 'registrybtn'; registryBtn.textContent = '🚢 Registry'; registryBtn.style.display = 'none'; registryBtn.addEventListener('click', toggleRegistry);
     advBtn = document.createElement('button'); advBtn.id = 'advbtn'; advBtn.textContent = 'Advance era'; advBtn.style.display = 'none'; advBtn.addEventListener('click', doAdvance);
-    bonusBtn = document.createElement('button'); bonusBtn.id = 'bonusbtn'; bonusBtn.textContent = '⚓ Bonus'; bonusBtn.style.display = 'none'; bonusBtn.addEventListener('click', openBonusCard);
-    // top row: resource chips + a live countdown chip (while active) + mute + settings, keeps it short
-    bonusChip = document.createElement('span'); bonusChip.className = 'estat bonuschip'; bonusChip.id = 'bonuschip'; bonusChip.style.display = 'none';
-    econHud.appendChild(bonusChip);
+    // top row: resource chips + mute + settings, keeps it short (the Captain's Bonus chip was removed in v92)
     econHud.appendChild(muteBtn); econHud.appendChild(setBtn);
     wrap.appendChild(econHud);
     // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
     actionBar = document.createElement('div'); actionBar.id = 'actionbar';
-    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(registryBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(bonusBtn); actionBar.appendChild(mBtn);
+    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(registryBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
     wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -3985,7 +3929,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v91';
+  var BUILD_TAG = 'v92';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4298,24 +4242,6 @@
       // (tier1 needs era>=1, same gate) — announced separately since it's a distinct system (defense, not production).
       if (regShow) announceFeature('navy', '⚓', 'The Navy', 'Commission a navy in the Registry — they defend your harbour and fight off raiders.');
       if (registryOpen) renderRegistry();
-    }
-    // Captain's Bonus (Phase 12a): opt-in rewarded boost — button only when eligible (available,
-    // no boost already running, port founded), never nags once the daily cap hides it.
-    if (bonusBtn) {
-      var bElig = bonusEligible();
-      bonusBtn.style.display = bElig ? '' : 'none';
-      if (bElig) {
-        announceFeature('bonus', '⚓', 'Captain’s Bonus', 'Double production, on the house.');
-        // v89: the button has RETURNED after a claimed boost expired — tell the player it's back.
-        if (bonusWasActive) { bonusWasActive = false; showHint('⚓ Captain’s Bonus is ready again!'); }
-      }
-    }
-    if (bonusChip) {
-      var bt = SIM.boostT();
-      // v89: prominent, clearly-labelled ACTIVE-BUFF pill (was a tiny "⚓2× 9:59" stat) so it's obvious
-      // the bonus is running and for how long — which is also why the ⚓ Bonus button is gone.
-      if (bonusChipActive && bt > 0) { bonusChip.classList.add('active'); bonusChip.textContent = '⚡ ' + Math.round(SIM.boostMul()) + '× BONUS · ' + clockFmt(bt); bonusChip.style.display = ''; }
-      else { bonusChip.style.display = 'none'; bonusChip.classList.remove('active'); bonusChipActive = false; }
     }
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
@@ -4998,9 +4924,7 @@
     dismissAnnounce: function () { dismissAnnounce(); },
     resetAnnounce: function () { announceQueue.length = 0; clearTimeout(announceT); announceBusy = false; if (announceCard) announceCard.classList.remove('show'); },   // test-only: hard-clear any real (already-seen) announce still in flight, for a clean test slate
     crateOpened: function () { return crateOpenedFlag(); },
-    // Phase 12a: Captain's Bonus + pluggable AdProvider (test/debug hooks)
-    bonus: function () { return { available: bonusEligible(), active: bonusChipActive && SIM.boostT() > 0, mult: SIM.boostMul(), remaining: SIM.boostT(), usedToday: bonusUsedToday() }; },
-    claimBonus: function () { openBonusCard(); var b = bonusModal && bonusModal.querySelector('[data-bonus="claim"]'); if (b) { b.click(); return true; } return false; },
+    // Phase 12a: pluggable AdProvider (test/debug hook). The Captain's Bonus that used to sit here was removed in v92.
     reinitAds: function () { adsReady = false; initAds(); },  // test-only: re-run provider init after swapping window.ADS in-page, to exercise the resilience path
     // Phase 12b: production hardening (test/debug hooks)
     errors: function () { return errLog.slice(); },           // ring buffer copy — last 20 {t,msg,src,line}

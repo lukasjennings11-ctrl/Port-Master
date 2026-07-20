@@ -3,7 +3,7 @@
    Port Boss installs as a standalone app and runs entirely offline.
    Network-first: always try the live file (so new builds show up immediately),
    fall back to cache when offline. Bump CACHE on every asset/version change. */
-const CACHE = 'portboss-v57';
+const CACHE = 'portboss-v58';
 const PRECACHE = [
   './',
   'index.html',
@@ -16,14 +16,14 @@ const PRECACHE = [
   '../../shared/portal.js?v=5',
   '../../shared/progression.js?v=1',
   '../../shared/stage.js?v=1',
-  'gl.js?v=91',
-  'gltf.js?v=91',
-  'biomes.js?v=91',
-  'assets.js?v=91',
-  'models.js?v=91',
-  'sim.js?v=91',
-  'ads.js?v=91',
-  'game.js?v=91',
+  'gl.js?v=92',
+  'gltf.js?v=92',
+  'biomes.js?v=92',
+  'assets.js?v=92',
+  'models.js?v=92',
+  'sim.js?v=92',
+  'ads.js?v=92',
+  'game.js?v=92',
   'fonts/Fredoka-400.woff2',
   'fonts/Fredoka-600.woff2',
   'fonts/Fredoka-700.woff2',
