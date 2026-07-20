@@ -3976,7 +3976,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v84';
+  var BUILD_TAG = 'v90';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4076,6 +4076,7 @@
          '⛵ <b>Expeditions</b> send ships on timed voyages — they pay out even while you’re away.<br>' +
          '🧭 <b>Uncharted Waters</b> (in Expeditions) discovers new coasts to found — founding a colony after your first costs a fee.<br>' +
          '🏺 <b>Relics</b> drop from crates &amp; voyages — equip a <b>Loadout</b> in Legacy for permanent perks.<br>' +
+         '📈 <b>Advance eras</b> by banking the cash AND upgrading your key buildings to this age\'s <b>level cap</b> — see 🎯 <b>Next age</b> in Manage. Each era raises the cap.<br>' +
          '🌊 Storms damage buildings — repair them in Manage.<br>' +
          '🏴‍☠️ <b>Baron Krall</b> challenges you to races — beat him for prizes &amp; bragging rights.<br>' +
          '🎟️ The <b>Harbour Pass</b> earns free season rewards from everything you do.<br>' +
@@ -4253,7 +4254,10 @@
         var mr = clamp(s.money / req.money, 0, 1);
         eraBar.querySelector('.eb-fill').style.width = (mr * 100).toFixed(0) + '%';
         eraBar.querySelector('.eb-label').textContent = '→ ' + (s.nextEra || '') + '  £' + fmt(s.money) + ' / £' + fmt(req.money);
-        var need = '', c = s.counts || {}; if (req.need) for (var nk in req.need) { var have = c[nk] || 0; if (have < req.need[nk]) need += (need ? ' · ' : '') + (SIM.BT[nk] ? SIM.BT[nk].name : nk) + ' ' + have + '/' + req.need[nk]; }
+        // v90: requirements now include reaching each key building's LEVEL cap for this age — show the
+        // still-unmet ones with their target level so the bar reads "Warehouse→L5 0/1", not just a count.
+        var need = '', adv = s.advance;
+        if (adv && adv.builds) adv.builds.forEach(function (b) { if (!b.ok) need += (need ? ' · ' : '') + b.name + '→L' + b.cap + ' ' + b.have + '/' + b.need; });
         eraBar.querySelector('.eb-need').textContent = need;
         eraBar.classList.toggle('ready', s.canAdvance);
       }
@@ -4487,6 +4491,19 @@
       });
       html += '</div>';
     }
+    // v90: a plain-language "what do I need for the next age" checklist — treasury + each key building
+    // upgraded to this era's level cap — so advancing is never a mystery. Green ticks when a line is met.
+    var adv = s.advance;
+    if (adv && !adv.max && adv.nextEra) {
+      html += '<div class="mp-sec">Next age</div>';
+      html += '<div class="mp-req' + (adv.ok ? ' ready' : '') + '"><div class="mpr-title">🎯 To reach <b>' + adv.nextEra + '</b>' + (adv.ok ? ' — ready! Tap <b>Advance</b>' : '') + '</div>';
+      var mo = adv.money;
+      html += '<div class="mpr-row ' + (mo.ok ? 'ok' : 'no') + '"><span>' + (mo.ok ? '✓' : '○') + ' Treasury</span><span>£' + fmt(mo.have) + ' / £' + fmt(mo.need) + '</span></div>';
+      adv.builds.forEach(function (b) {
+        html += '<div class="mpr-row ' + (b.ok ? 'ok' : 'no') + '"><span>' + (b.ok ? '✓' : '○') + ' ' + b.name + (b.need > 1 ? ' ×' + b.need : '') + ' at Lv ' + b.cap + '</span><span>' + b.have + '/' + b.need + '</span></div>';
+      });
+      html += '</div>';
+    }
     html += '<div class="mp-sec">New buildings</div>';
     // Phase 15c: once the port's non-defense slots are full, explain why rather than just greying
     // every row out — defenses (Sea Wall/Lighthouse) keep their own separate caps, so this only
@@ -4509,12 +4526,18 @@
     if (s.buildings.length) {
       html += '<div class="mp-sec">Your port (' + s.buildings.length + ')</div><div class="mp-grid">';
       s.buildings.forEach(function (b) {
-        var t = SIM.BT[b.type], maxed = t.cat === 'defense' && b.level >= t.max, can = SIM.canUpgrade(b.i);
+        // v90: b.maxed = at this era's level cap (defenses use their own tight max). Show L{lvl}/{cap}
+        // so the ceiling is visible, and a gold MAX pill (⭐) once a building is maxed for the age.
+        var maxed = b.maxed, can = SIM.canUpgrade(b.i);
+        var lvTxt = ' L' + b.level + (b.cap && b.cap < 999 ? '/' + b.cap : '');
         var hp = (b.hp != null && b.hp < 100) ? ' <i class="mi-hp">' + b.hp + '%</i>' : '';
-        html += '<button class="mp-item up' + (b.hp != null && b.hp < 100 ? ' hurt' : '') + ((can && !maxed) ? '' : ' ghosted') + '" data-up="' + b.i + '"' + (can ? '' : ' disabled') + '>' +
-          '<span class="mi-n">' + b.name + ' L' + b.level + hp + '</span><span class="mi-c">' + (maxed ? 'MAX' : (can ? '↑£' + fmt(b.up) : 'Need £' + fmt(b.up))) + '</span></button>';
+        html += '<button class="mp-item up' + (b.hp != null && b.hp < 100 ? ' hurt' : '') + (maxed ? ' maxed' : (can ? '' : ' ghosted')) + '" data-up="' + b.i + '"' + ((can && !maxed) ? '' : ' disabled') + '>' +
+          '<span class="mi-n">' + b.name + lvTxt + hp + '</span><span class="mi-c">' + (maxed ? 'MAX ⭐' : (can ? '↑£' + fmt(b.up) : 'Need £' + fmt(b.up))) + '</span></button>';
       });
       html += '</div>';
+      // v90: when a building sits at the age cap, spell out that advancing is what raises the ceiling.
+      if (!(adv && adv.max) && s.buildings.some(function (b) { return b.maxed && !b.def; }))
+        html += '<div class="mp-teaser">⭐ Maxed for this age — <b>Advance the era</b> to raise the upgrade cap</div>';
     }
     // Phase 9a: composition synergies readout — shows which building combos are firing right now
     if (s.portFounded && s.synergies && s.synergies.length) {

@@ -427,6 +427,17 @@
   // economic buildings are effectively uncapped PER TYPE (geometric cost self-limits, and upgrade
   // levels reuse this same ceiling so it must stay permissive); defenses keep tight per-type caps.
   function bmax(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : Math.max(t.max, 999); }
+  // v90: per-era UPGRADE-LEVEL ceiling for economic buildings. Each age lets you push a building two
+  // levels past L1 plus one per era reached: era0 Fishing Village -> L2, era3 Metropolis -> L5,
+  // era7 Neon Horizon -> L9, endless tail keeps climbing. Defenses keep their own tight per-type max
+  // (bmax). This is what turns "advance = pile up money" into "advance = MASTER this age's buildings
+  // (upgrade them to the cap), THEN move up to unlock higher levels" — see canAdvance's countAtCap gate.
+  var LVL_CAP_BASE = 2;
+  function lvlCap() { return LVL_CAP_BASE + (S.era || 0); }
+  function lvlCapFor(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : lvlCap(); }
+  // copies of `type` this port has upgraded all the way to the current era's cap — the advancement
+  // gate counts these, so a required building only "counts" toward the next age once it's maxed.
+  function countAtCap(port, type) { var B = port.buildings, cap = lvlCapFor(type), n = 0; for (var i = 0; i < B.length; i++) if (B[i].type === type && (B[i].level || 1) >= cap) n++; return n; }
   // Phase 15c: total non-defense building SLOTS per port — replaces "ports grow forever" with a
   // real, era-scaled ceiling. Deliberately independent of bmax(): bmax also gates upgrade LEVELS
   // (canUpgrade below), and per-type build counts still self-limit on cost, so touching it would
@@ -894,7 +905,7 @@
       (t.cat === 'defense' || slotsUsed(CUR) < slotCap()) && S.money >= buildCost(type);
   }
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
-  function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < bmax(b.type) && S.money >= upCost(b); }
+  function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < lvlCapFor(b.type) && S.money >= upCost(b); }
   function upgrade(i) { if (!canUpgrade(i)) return false; var b = CUR.buildings[i]; S.money -= upCost(b); b.level++; save(); return true; }
   // pick a port's specialisation focus (none|fishing|industry|trade); default port is the active one
   function setFocus(portId, focus) {
@@ -910,10 +921,23 @@
     if (S.money < req.money) return false;                           // money is the shared empire treasury
     // Per-port era: advancing THIS harbour needs THIS harbour's own buildings — a fresh colony can't
     // ride your other ports' buildings to skip ahead. (Single-port play is identical to before.)
-    if (req.need) { var c = portCounts(CUR); for (var k in req.need) if ((c[k] || 0) < req.need[k]) return false; }
+    // v90: the required buildings must be MAXED for this age (built AND upgraded to the era level cap),
+    // not merely present — reaching the caps is the gate to the next era.
+    if (req.need) { for (var k in req.need) if (countAtCap(CUR, k) < req.need[k]) return false; }
     return true;
   }
   function advanceEra() { if (!canAdvance()) return false; CUR.era = (CUR.era || 0) + 1; S.era = CUR.era; save(); return true; }
+  // v90: structured "what do I need to reach the next age" — money + each required building MAXED to
+  // the era cap — so game.js can render an unambiguous ✓/✗ checklist rather than a bare money bar.
+  function advanceInfo() {
+    if (!S || !CUR) return null;
+    var req = eraReq(S.era), cap = lvlCap();
+    if (!req) return { max: true, nextEra: null, cap: cap, money: null, builds: [], ok: false };
+    var money = { have: Math.floor(S.money), need: req.money, ok: S.money >= req.money }, builds = [];
+    if (req.need) for (var k in req.need) { var have = countAtCap(CUR, k); builds.push({ type: k, name: (BT[k] ? BT[k].name : k), need: req.need[k], have: have, cap: lvlCapFor(k), ok: have >= req.need[k] }); }
+    var ok = money.ok && builds.every(function (b) { return b.ok; });
+    return { max: false, nextEra: eraName(S.era + 1), cap: cap, money: money, builds: builds, ok: ok };
+  }
 
   // ---- found a world's port ----
   // Phase 15c: the FIRST port an empire ever founds is free (the starting village); every colony
@@ -1002,6 +1026,8 @@
       founded: S.founded, portFounded: !!port,
       foundCost: foundCost(), canFoundPort: canFoundPort(),           // Phase 15c: colony founding fee (0 for the empire's first port)
       canAdvance: canAdvance(), nextEra: eraName(S.era + 1), eraReq: eraReq(S.era),
+      lvlCap: lvlCap(), advance: advanceInfo(),                        // v90: per-era upgrade ceiling + next-age requirement checklist
+
       managers: managerView(), lifetimeMoney: Math.floor(S.lifetimeMoney || 0),
       prestige: { gain: prestigeGain(), can: canPrestige(), threshold: PRESTIGE_THRESHOLD },
       network: networkView(), fleet: fleetView(), navy: navyView(),   // Phase 17c: navy defense-ladder view
@@ -1016,7 +1042,7 @@
     if (port) {
       v.res = { fish: Math.floor(port.res.fish), timber: Math.floor(port.res.timber), goods: Math.floor(port.res.goods) };
       v.caps = caps(); v.pop = Math.floor(pop()); v.jobs = jobs();
-      v.buildings = port.buildings.map(function (b, i) { return { i: i, type: b.type, name: BT[b.type].name, level: b.level, up: upCost(b), hp: Math.round(bhp(b)), rep: bhp(b) < 100 ? repairCost(b) : 0, def: BT[b.type].cat === 'defense' }; });
+      v.buildings = port.buildings.map(function (b, i) { var cp = lvlCapFor(b.type); return { i: i, type: b.type, name: BT[b.type].name, level: b.level, cap: cp, maxed: (b.level || 1) >= cp, up: upCost(b), hp: Math.round(bhp(b)), rep: bhp(b) < 100 ? repairCost(b) : 0, def: BT[b.type].cat === 'defense' }; });
       v.damaged = port.buildings.filter(function (b) { return bhp(b) < 100; }).length;
       v.counts = counts(); v.demand = { fish: port.demand.fish, timber: port.demand.timber, goods: port.demand.goods };
       v.contracts = port.contracts.map(function (c) { return { id: c.id, who: c.who, res: c.res, amt: c.amt, reward: c.reward, have: Math.floor(port.res[c.res] || 0), can: canFulfill(c.id) }; });
@@ -1079,6 +1105,8 @@
     slotsUsed: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return p ? slotsUsed(p) : 0; },
     upgrade: upgrade, canUpgrade: canUpgrade, upCost: function (i) { return CUR && CUR.buildings[i] ? upCost(CUR.buildings[i]) : 0; },
     canAdvance: canAdvance, advanceEra: advanceEra,
+    advanceInfo: function () { return S ? advanceInfo() : null; },     // v90: next-age requirement checklist (money + maxed buildings)
+    lvlCap: function () { return S ? lvlCap() : LVL_CAP_BASE; },        // v90: current per-era upgrade level ceiling
     setFounded: function (v) { if (S) { S.founded = !!v; save(); } },
     setEra: function (n) { if (S) { S.era = Math.max(0, n | 0); if (CUR) CUR.era = S.era; save(); } },   // per-port era: debug/test hook advances the ACTIVE harbour
     save: save, applyOffline: applyOffline, mark: function () { if (S) { S.lastSeen = now(); save(); } }

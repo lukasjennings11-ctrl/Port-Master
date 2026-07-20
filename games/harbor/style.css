@@ -632,6 +632,20 @@ button, [role="button"], .mp-item, .chip, .rs-dot, .biomebar-btn, #biomebar > bu
 .mp-teaser { font-family: 'Fredoka',system-ui,sans-serif; font-size: 10px; font-weight: 600; color: var(--teal); opacity: .85; text-align: center; padding: 3px 4px 1px; }
 .mp-teaser.mp-full { color: #ffb37a; opacity: 1; }   /* Phase 15c: port-at-capacity explainer — warmer than the neutral era teaser */
 
+/* v90: "Next age" requirement checklist — treasury + each key building maxed to the era level cap.
+   A clear ✓/○ list so advancing is never a mystery; the whole card glows green when it's ready. */
+.mp-req { background: rgba(255,255,255,.04); border: 1.5px solid rgba(255,255,255,.14); border-radius: 12px; padding: 8px 10px; margin: 1px 0 3px; }
+.mp-req.ready { background: rgba(111,208,138,.14); border-color: rgba(111,208,138,.55); box-shadow: 0 0 0 1px rgba(111,208,138,.25) inset; }
+.mpr-title { font-family: 'Fredoka',system-ui,sans-serif; font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 5px; }
+.mpr-row { display: flex; justify-content: space-between; gap: 8px; font-family: 'Fredoka',system-ui,sans-serif; font-size: 11px; font-weight: 600; padding: 2px 0; }
+.mpr-row.no > span:first-child { color: #ffcf9a; }
+.mpr-row.no > span:last-child { color: #ffb37a; font-weight: 700; }
+.mpr-row.ok > span:first-child { color: #8ef0a8; }
+.mpr-row.ok > span:last-child { color: #8ef0a8; font-weight: 700; }
+/* a building upgraded to this age's cap — gold "MAX ⭐" pill, reads as an achievement not a dead end */
+.mp-item.maxed { background: rgba(244,177,60,.14) !important; border-color: rgba(244,177,60,.5) !important; opacity: 1; }
+.mp-item.maxed .mi-c { color: #ffd257 !important; font-weight: 800; }
+
 /* Phase 15a: trade-map guide card — the map used to give zero feedback when there was nothing to
    connect yet ("I can't set up a trade network, I can only click on one city"). Shown while fewer
    than 2 harbours are founded; auto-hides once a 2nd port exists. */
@@ -765,6 +779,15 @@ body.paperui .ex-note, body.paperui .set-about { color: var(--ink2); }
 body.paperui .set-help { color: var(--ink); background: var(--paper2); opacity: 1; }
 body.paperui .set-help b { color: #8a4d12; }
 body.paperui .mp-teaser { color: #1f6e5f; } body.paperui .mp-teaser.mp-full { color: var(--crayon); }
+/* v90 paper theme: next-age checklist + maxed pill */
+body.paperui .mp-req { background: var(--paper2); border-color: #e6d9b8; }
+body.paperui .mp-req.ready { background: #d7e8c8; border-color: #2d6a33; }
+body.paperui .mpr-title { color: var(--ink); }
+body.paperui .mpr-row.no > span:first-child { color: #8a4d12; }
+body.paperui .mpr-row.no > span:last-child { color: var(--crayon); }
+body.paperui .mpr-row.ok > span { color: #2d6a33 !important; }
+body.paperui .mp-item.maxed { background: #f3e2b0 !important; border-color: #d8a24a !important; }
+body.paperui .mp-item.maxed .mi-c { color: #8a5a12 !important; }
 body.paperui .mp-dem .dem-n { color: var(--ink); }
 body.paperui .dem-bar { background: rgba(70,53,31,.15); }
 body.paperui .dem-v { color: var(--ink2); }

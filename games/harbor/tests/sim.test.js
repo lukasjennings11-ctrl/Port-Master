@@ -305,6 +305,18 @@ function autoplay(cfg) {
     for (var oj = 0; oj < order.length; oj++) { var u = order[oj]; if (SIM.canBuild(u) && SIM.buildCost(u) <= budget) { SIM.build(u); return true; } }
     return false;
   }
+  // v90: once the cash gate for the next age is met, a player pushing to advance upgrades (or builds
+  // more copies of) the GATING buildings to this era's level cap — advancing now requires the
+  // required buildings MAXED, not merely present. Spends from the full purse (a focused advance push).
+  function pushAdvance() {
+    var info = SIM.advanceInfo();
+    if (!info || info.max || !info.money.ok || info.ok) return false;
+    var unmet = {}; info.builds.forEach(function (b) { if (!b.ok) unmet[b.type] = true; });
+    var B = SIM.port('green').buildings;
+    for (var i = 0; i < B.length; i++) if (unmet[B[i].type] && SIM.canUpgrade(i)) { SIM.upgrade(i); return true; }
+    for (var t in unmet) if (SIM.canBuild(t)) { SIM.build(t); return true; }   // need MORE copies of a required type
+    return false;
+  }
   var evIds = ['goldrush', 'festival', 'castaway', 'raid', 'gamble', 'commission', 'smuggler'];
   var EV_MIN = { goldrush: 1, festival: 1, castaway: 0, raid: 2, gamble: 1, commission: 1, smuggler: 1 };   // mirrors EV_DEFS minEra — fireEvent itself doesn't gate, but the live scheduler (evPick) does
   var evI = 0, by = { passive: 0, events: 0, voyages: 0 };
@@ -329,6 +341,7 @@ function autoplay(cfg) {
     // tier every step (a real spend, but never gated behind the building budget above — a separate
     // money sink, same as the policy already treats era-advance as independent of it).
     SIM.FLEET_ROLES.forEach(function (role) { if (SIM.canBuyShip(role)) SIM.buyShip(role); });
+    for (var pa = 0; pa < 8 && pushAdvance(); pa++) {}              // v90: max the gating buildings once cash is banked
     if (SIM.canAdvance()) SIM.advanceEra();
     if (step % 5 === 4) {                                           // every 5th step: exercise the income systems
       // per-round reseed (derived from seed+step): rollVoyage/evData consume a VARIABLE number of
@@ -635,17 +648,59 @@ function autoplay(cfg) {
 
 (function ages17aGates() {
   SIM.__setRng(mulberry32(17170)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
-  SIM.setEra(5); g.money = 1e7;
+  // v90: upgrade every building on the active port to the current era's level cap (plenty of cash)
+  function maxAll() { var done = false; while (!done) { done = true; var B = SIM.state().buildings; for (var i = 0; i < B.length; i++) if (SIM.canUpgrade(i)) { SIM.upgrade(i); done = false; } } }
+  SIM.setEra(5); g.money = 1e12;
   ['dock', 'dock', 'dock', 'factory', 'factory'].forEach(function (t) { if (SIM.canBuild(t)) SIM.build(t); });
-  ok('17a gate: era5->6 (dock:3,factory:2 + £300k) satisfied by proven era2 industry', SIM.canAdvance());
+  // v90: required buildings must be present AND at this age's level cap (era5 -> Lv7) to advance
+  ok('17a gate: era5->6 blocked while dock:3/factory:2 are built but NOT yet maxed to Lv7', !SIM.canAdvance());
+  maxAll(); g.money = 1e7;
+  ok('17a gate: era5->6 (dock:3,factory:2 @Lv7 + £300k) satisfied once maxed', SIM.canAdvance());
   SIM.advanceEra();
   ok('17a gate: advancing lands on era6 Automated Harbour', SIM.raw().era === 6 && SIM.eraName(6) === 'Automated Harbour');
   g.money = 1e7;
   ok('17a gate: era6->7 stays blocked on money alone (Neon Horizon needs the NEW age6 buildings)', !SIM.canAdvance());
-  SIM.build('container_terminal'); SIM.build('drone_bay');
-  ok('17a gate: era6->7 (£2M + container_terminal+drone_bay) satisfied once built', SIM.canAdvance());
+  g.money = 1e12; SIM.build('container_terminal'); SIM.build('drone_bay'); maxAll(); g.money = 1e7;
+  ok('17a gate: era6->7 (£2M + container_terminal+drone_bay @Lv8) satisfied once built & maxed', SIM.canAdvance());
   SIM.advanceEra();
   ok('17a gate: advancing lands on era7 Neon Horizon', SIM.raw().era === 7 && SIM.eraName(7) === 'Neon Horizon');
+})();
+
+// ---------------------------------------------------------------- v90: per-era building LEVEL CAP +
+// advancement now requires the required buildings MAXED to that cap (the "reach the caps to level up"
+// strategy layer), plus the structured advanceInfo() checklist game.js renders.
+(function v90LevelCap() {
+  SIM.__setRng(mulberry32(9001)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  SIM.setEra(0);
+  ok('v90: lvlCap = era+2 (Fishing Village -> L2)', SIM.lvlCap() === 2);
+  SIM.setEra(3); ok('v90: lvlCap scales with era (Metropolis era3 -> L5)', SIM.lvlCap() === 5);
+  SIM.setEra(7); ok('v90: lvlCap keeps scaling (Neon Horizon era7 -> L9)', SIM.lvlCap() === 9);
+  // build a fishing_hut and prove the upgrade ceiling clamps at the era cap
+  SIM.setEra(0); g.money = 1e12; SIM.build('fishing_hut');
+  var idx = SIM.state().buildings.findIndex(function (b) { return b.type === 'fishing_hut'; });
+  var guard = 0; while (SIM.canUpgrade(idx) && guard++ < 50) SIM.upgrade(idx);
+  ok('v90: economic building cannot be upgraded past the era-0 cap (stops at L2)', SIM.state().buildings[idx].level === 2 && !SIM.canUpgrade(idx));
+  ok('v90: snapshot marks the building maxed for the age with its cap', SIM.state().buildings[idx].maxed === true && SIM.state().buildings[idx].cap === 2);
+  // advancing the era raises the cap, re-opening the upgrade
+  SIM.setEra(1);
+  ok('v90: reaching the next age raises the cap (L2 -> L3 re-opens the upgrade)', SIM.canUpgrade(idx) && SIM.state().buildings[idx].maxed === false && SIM.state().buildings[idx].cap === 3);
+})();
+
+(function v90AdvanceInfoAndGate() {
+  SIM.__setRng(mulberry32(9002)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
+  SIM.setEra(0); g.money = 1e12;
+  // era0 -> era1 needs fishing_hut:2 + cottage:1, ALL at the era-0 cap (L2)
+  SIM.build('fishing_hut'); SIM.build('fishing_hut'); SIM.build('cottage');
+  var info0 = SIM.advanceInfo();
+  ok('v90: advanceInfo lists money + each required building with its target cap level', !info0.max && info0.cap === 2 && info0.money.need === 250 && info0.builds.length === 2 && info0.builds.every(function (b) { return b.cap === 2; }));
+  ok('v90: advanceInfo not ok while required buildings sit below the cap (built @L1)', info0.builds.every(function (b) { return b.have === 0 && !b.ok; }) && !info0.ok);
+  ok('v90: canAdvance false — buildings present but not maxed', !SIM.canAdvance());
+  // max them
+  function maxAll() { var done = false; while (!done) { done = true; var B = SIM.state().buildings; for (var i = 0; i < B.length; i++) if (SIM.canUpgrade(i)) { SIM.upgrade(i); done = false; } } }
+  maxAll();
+  var info1 = SIM.advanceInfo();
+  ok('v90: advanceInfo builds all ok once every required building is maxed to the cap', info1.builds.every(function (b) { return b.ok; }) && info1.money.ok && info1.ok);
+  ok('v90: canAdvance true once cash + maxed buildings are both satisfied', SIM.canAdvance());
 })();
 
 (function ages17aBuildGating() {
@@ -714,6 +769,16 @@ function autoplay(cfg) {
     }
     return false;
   }
+  // v90: max the gating buildings to the era cap once the cash gate is met (advance now requires it)
+  function pushAdvance() {
+    var info = SIM.advanceInfo();
+    if (!info || info.max || !info.money.ok || info.ok) return false;
+    var unmet = {}; info.builds.forEach(function (b) { if (!b.ok) unmet[b.type] = true; });
+    var B = SIM.port('green').buildings;
+    for (var i = 0; i < B.length; i++) if (unmet[B[i].type] && SIM.canUpgrade(i)) { SIM.upgrade(i); return true; }
+    for (var t in unmet) if (SIM.canBuild(t)) { SIM.build(t); return true; }
+    return false;
+  }
   var era6Step = null, era7Step = null;
   for (var step = 0; step < 1000; step++) {
     SIM.tick(30);
@@ -726,6 +791,7 @@ function autoplay(cfg) {
       }
       if (!did) break;
     }
+    for (var pa = 0; pa < 10 && pushAdvance(); pa++) {}
     if (SIM.canAdvance()) SIM.advanceEra();
     if (st.era >= 6 && era6Step === null) era6Step = step;
     if (st.era >= 7 && era7Step === null) { era7Step = step; break; }
@@ -1122,7 +1188,8 @@ function autoplay(cfg) {
 
   // advancing one harbour never touches another
   SIM.setActive('tropical'); var t = SIM.port('tropical');
-  t.buildings.push({ type: 'fishing_hut', level: 1, hp: 100 }, { type: 'fishing_hut', level: 1, hp: 100 }, { type: 'cottage', level: 1, hp: 100 });
+  // v90: era0->1 needs fishing_hut:2 + cottage:1 MAXED to the era-0 cap (L2), not merely present
+  t.buildings.push({ type: 'fishing_hut', level: 2, hp: 100 }, { type: 'fishing_hut', level: 2, hp: 100 }, { type: 'cottage', level: 2, hp: 100 });
   SIM.raw().money = 1e9;
   ok('per-port: fresh colony can advance once its OWN buildings meet the era gate', SIM.canAdvance() === true);
   SIM.advanceEra();

@@ -444,6 +444,17 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     slotsUI.headText === ('Buildings ' + slotsUI.used + '/' + slotsUI.cap));
   ok('15c slots: port-at-capacity explainer shown + a ghosted row reads "Full" once slot-capped',
     slotsUI.used >= slotsUI.cap && slotsUI.fullShown && slotsUI.hasFullRow);
+  // v90: the "Next age" requirement checklist + per-era level cap shown in the still-open panel
+  const v90ui = await page.evaluate(() => {
+    var req = document.querySelector('#managepanel .mp-req');
+    var rows = req ? Array.from(req.querySelectorAll('.mpr-row')).map(r => r.textContent) : [];
+    var title = req ? (req.querySelector('.mpr-title') || {}).textContent || '' : '';
+    var upNames = Array.from(document.querySelectorAll('#managepanel .mp-item.up .mi-n')).map(e => e.textContent);
+    return { hasReq: !!req, title: title, rows: rows, showsCapLevel: upNames.some(t => /L1\/2\b/.test(t)) };
+  });
+  ok('v90: Manage shows a "🎯 To reach …" next-age checklist (treasury row + a building@Lv2 row)',
+    v90ui.hasReq && /To reach/.test(v90ui.title) && v90ui.rows.some(t => /Treasury/.test(t)) && v90ui.rows.some(t => /at Lv 2/.test(t)));
+  ok('v90: building rows expose the per-era upgrade cap (e.g. "L1/2" at Fishing Village)', v90ui.showsCapLevel);
   await page.evaluate(() => document.getElementById('managebtn').click());   // close it back up
 
   // Phase 15c migration: a world already unlocked on this device (e.g. from a pre-15c save, or an
@@ -917,8 +928,11 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   const cbBefore = await page.evaluate(() => window.ADS._counts.commercialBreak);
   await page.evaluate(() => {
     var S = window.HARBOR_SIM;
-    window.__harbor.setEra(4); S.raw().money = 5e6;
+    window.__harbor.setEra(4); S.raw().money = 5e9;
     if (S.canBuild('dock')) S.build('dock'); if (S.canBuild('dock')) S.build('dock');
+    // v90: advancing now needs the required buildings MAXED to the era cap — upgrade every building
+    var done = false; while (!done) { done = true; var B = S.state().buildings; for (var i = 0; i < B.length; i++) if (S.canUpgrade(i)) { S.upgrade(i); done = false; } }
+    S.raw().money = 5e6;
   });
   await page.evaluate(() => window.__harbor.advance());
   await sleep(150);
@@ -1304,9 +1318,12 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     // patterns sim.test.js's grandfathering test uses.
     var S = window.HARBOR_SIM;
     window.__harbor.setEra(5); S.raw().money = 1e7;
+    // v90: advancing needs dock:3 + factory:2 MAXED to the era-5 cap (L7). Add copies then force EVERY
+    // dock/factory (incl. any left over from earlier in this run) to the cap so countAtCap is satisfied.
     var B = S.port('green').buildings, have = t => B.filter(b => b.type === t).length;
-    while (have('dock') < 3) B.push({ type: 'dock', level: 1, hp: 100 });
-    while (have('factory') < 2) B.push({ type: 'factory', level: 1, hp: 100 });
+    while (have('dock') < 3) B.push({ type: 'dock', level: 7, hp: 100 });
+    while (have('factory') < 2) B.push({ type: 'factory', level: 7, hp: 100 });
+    B.forEach(b => { if (b.type === 'dock' || b.type === 'factory') b.level = 7; });
   });
   await page.evaluate(() => window.__harbor.advance());
   // the ascension cinematic runs on the RENDER LOOP's own dt (capped at 50ms/frame — see frame() in
