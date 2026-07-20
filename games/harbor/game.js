@@ -18,6 +18,29 @@
   // external privacy-policy link. Everything else about the game is byte-for-byte identical.
   var PORTAL_MODE = false;
   try { PORTAL_MODE = /[?&]portal=/.test(window.location.search) || !!(window.ADS && window.ADS.provider && window.ADS.provider !== 'stub'); } catch (e) {}
+  // Debug: ?nowebgl forces the no-WebGL2 path so the graphics-fallback screen is testable headlessly.
+  // Gated OFF in portal builds (a testing artifact a portal QA could flag) — same policy as ?era/?found.
+  try { if (!PORTAL_MODE && /[?&]nowebgl\b/.test(window.location.search)) gl = null; } catch (e) {}
+
+  // Graphics safety net: if a WebGL2 context can't be created (or boot() throws — a lost context /
+  // shader-compile failure), NEVER leave the static #loader spinning forever. That infinite loader is
+  // an App Store / Play review-rejection risk (and is exactly what the iOS Simulator, which is flaky
+  // with WebGL, does). Instead hide the loader and show a friendly card with a Reload button. Built at
+  // most once. Safe to call before boot has created anything.
+  var gfxFailShown = false;
+  function failGraphics(msg) {
+    if (loader) loader.classList.add('hidden');
+    if (gfxFailShown) return; gfxFailShown = true;
+    var d = document.createElement('div'); d.className = 'gfx-fail';
+    d.innerHTML = '<div class="gfx-card">' +
+      '<div class="gfx-emoji">⚓</div>' +
+      '<div class="gfx-title">Graphics unavailable</div>' +
+      '<div class="gfx-msg">' + (msg || 'Port Boss needs WebGL2 graphics, which this browser or device doesn’t support. Try updating your browser or OS, or open it on another device.') + '</div>' +
+      '<button class="gfx-btn" type="button">Reload</button></div>';
+    (document.body || document.documentElement).appendChild(d);
+    var b = d.querySelector('.gfx-btn');
+    if (b) b.addEventListener('click', function () { try { location.reload(); } catch (e) {} });
+  }
 
   var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false, awayPaused = false;
   // camera: current + targets + fling velocity
@@ -3960,7 +3983,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v92';
+  var BUILD_TAG = 'v93';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4631,7 +4654,7 @@
     // with no vendor, so the bracket calls are harmless no-ops.
     var portalReady = window.Portal ? Portal.init() : null;
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
-    if (!gl) { if (loader) loader.innerHTML = '<div style="color:#fff;font-family:sans-serif;padding:20px;text-align:center">WebGL2 is required to play Port Boss.</div>'; return; }
+    if (!gl) { failGraphics(); return; }   // no WebGL2 context → friendly card + Reload, never an infinite loader
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
@@ -4979,5 +5002,7 @@
     dismissTip: function () { hideTip(); }
   };
 
-  if (canvas && canvas.getContext) boot();
+  // A shader-compile failure / lost context anywhere in boot() must also land on the friendly
+  // graphics-fallback screen — never an infinite loader (heavy GL setup runs synchronously in boot).
+  if (canvas && canvas.getContext) { try { boot(); } catch (e) { failGraphics(); try { console.error(e); } catch (e2) {} } }
 })();

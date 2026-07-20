@@ -2044,6 +2044,29 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.pause(false));
   ok('14c: the whole drama pass ran with zero new console/page errors', errs.length === errsBefore14c);
 
+  // ---- v93: WebGL2 GRAPHICS SAFETY NET — a device/browser that can't create a WebGL2 context (or a
+  // boot that throws) must NEVER hang on an infinite loader (App Store / Play rejection risk, and the
+  // exact iOS-Simulator failure). ?nowebgl forces gl=null so the fallback is testable headlessly. Runs
+  // in its own context so its (intentionally different) state never pollutes the shared page's errs.
+  const gfxCtx = await browser.newContext({ viewport: { width: 414, height: 820 } });
+  const gfxPage = await gfxCtx.newPage();
+  await gfxPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&nowebgl`, { waitUntil: 'load' });
+  await gfxPage.waitForSelector('.gfx-fail', { timeout: 6000 }).catch(() => {});
+  const gfx = await gfxPage.evaluate(() => ({
+    loaderHidden: (function () { var l = document.getElementById('loader'); return !l || l.classList.contains('hidden'); })(),
+    card: !!document.querySelector('.gfx-fail .gfx-card'),
+    msg: (document.querySelector('.gfx-fail .gfx-msg') || {}).textContent || '',
+    btn: (document.querySelector('.gfx-fail .gfx-btn') || {}).textContent || '',
+    webgl: window.__harbor && window.__harbor.state ? window.__harbor.state().webgl : true
+  }));
+  ok('v93 gfx-fail: ?nowebgl forces the no-context path (state.webgl false)', gfx.webgl === false);
+  ok('v93 gfx-fail: the boot loader is hidden — never an infinite spinner', gfx.loaderHidden === true);
+  ok('v93 gfx-fail: a fallback card with a message is shown', gfx.card === true && gfx.msg.length > 10);
+  ok('v93 gfx-fail: the card offers a Reload button', /reload/i.test(gfx.btn));
+  await gfxCtx.close();
+  // sanity: a NORMAL load (the shared page) still has a live WebGL2 context — the net only catches failure
+  ok('v93 gfx-fail: a normal load still boots WebGL2 fine (fallback is failure-only)', (await page.evaluate(() => window.__harbor.state().webgl)) === true);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);
