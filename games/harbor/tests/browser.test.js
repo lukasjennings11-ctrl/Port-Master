@@ -861,9 +861,9 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => window.__harbor.claimBonus());
   await sleep(150);   // fast-mode stub resolves on the next tick
   const b1 = await page.evaluate(() => ({ hook: window.__harbor.bonus(), chipVisible: document.getElementById('bonuschip').style.display !== 'none', chipText: document.getElementById('bonuschip').textContent, modalShown: !!document.querySelector('#bonusmodal.show') }));
-  ok('bonus: claim → SIM boost active at 2× with a live "⚓2× m:ss" countdown chip in the HUD, daily count advances',
+  ok('bonus: claim → SIM boost active at 2× with a prominent "⚡ 2× BONUS · m:ss" buff pill in the HUD, daily count advances',
     b1.hook.active === true && b1.hook.mult === 2 && b1.hook.remaining > 590 && b1.hook.remaining <= 600 &&
-    b1.chipVisible === true && /⚓\s*2×\s*\d+:\d{2}/.test(b1.chipText) && b1.modalShown === false && b1.hook.usedToday === 1);
+    b1.chipVisible === true && /⚡\s*2×\s*BONUS\s*·\s*\d+:\d{2}/.test(b1.chipText) && b1.modalShown === false && b1.hook.usedToday === 1);
 
   // decline: the card never auto-opens (only a real tap reaches it), and "No thanks" leaves everything
   // exactly as it was — no charge, no boost, no daily-count bump, just a closed card.

@@ -19,7 +19,7 @@
   var PORTAL_MODE = false;
   try { PORTAL_MODE = /[?&]portal=/.test(window.location.search) || !!(window.ADS && window.ADS.provider && window.ADS.provider !== 'stub'); } catch (e) {}
 
-  var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false;
+  var CW = 0, CH = 0, DPR = 1, clock = 0, tod = 0.42, todSpeed = 1 / 160, paused = false, awayPaused = false;
   // camera: current + targets + fling velocity
   var C = { az: 2.42, el: 0.5, dist: 120, azT: 2.42, elT: 0.5, distT: 120, vAz: 0, vEl: 0, tx: 0, ty: 6, tz: 4, txT: 0, tzT: 4, vTx: 0, vTz: 0 };
   // Phase 20a: pan clamp now follows the SLAB footprint (with a small margin) instead of the old
@@ -1916,14 +1916,31 @@
     ambWasNight = null; ambTodT = 0.5; updateAmbientToD(0);
     applyWeatherGain(stormActive); applyMusicGain(); updateWashGain();
   }
+  // v89: PROPER PAUSE-ON-LEAVE. The economy/world tick + clock are gated on !awayPaused (see frame()),
+  // so setAway(true) truly freezes progress — no idle income while the tab/window is left; setAway(false)
+  // resumes exactly where it stopped (frame._l reset so the first frame's dt is ~0, no catch-up). We
+  // pause on BOTH tab-hidden (visibilitychange) AND window blur, because rAF only pauses on tab-hidden
+  // (and even then throttles rather than stops), and never on an app/window switch. Short player-started
+  // timers (expeditions/races/fever) run on wall-clock and are intentionally left counting.
+  function setAway(away) {
+    away = !!away;
+    if (awayPaused === away) return;
+    awayPaused = away;
+    if (away) {
+      adsGameplayStop();                                   // portal gameplay bracket closes while away
+      if (amb) stopAmbient();
+    } else {
+      frame._l = (window.performance && performance.now) ? performance.now() : 0;   // clean ~0 dt on resume
+      if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
+      if (amb && !muted) { startAmbient(); refreshAmbientNow(); }
+    }
+  }
   document.addEventListener('visibilitychange', function () {
     metricsVisibility(document.hidden);   // Phase 13d: flush/persist accumulated playtime on hide, resume on foreground
-    // Phase 12b: portal gameplay-lifecycle bracket — stop on backgrounded, resume on foreground
-    // (only if a port is actually founded; nothing to report on the pre-founding wild-island view).
-    if (document.hidden) adsGameplayStop();
-    else if (SIM && SIM.raw() && SIM.raw().founded) adsGameplayStart();
-    if (amb) { if (document.hidden) stopAmbient(); else if (!muted) { startAmbient(); refreshAmbientNow(); } }
+    setAway(document.hidden);
   });
+  window.addEventListener('blur', function () { setAway(true); });     // switching apps/windows (tab may stay "visible")
+  window.addEventListener('focus', function () { if (!document.hidden) setAway(false); });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
   function shakeFX(m, d) { if (FX) FX.shake.add(m, d); }
@@ -2046,7 +2063,7 @@
 
   function frame(now) {
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
-    clock += dt; if (!paused) tod = (tod + dt * todSpeed) % 1;
+    clock += dt; if (!paused && !awayPaused) tod = (tod + dt * todSpeed) % 1;   // v89: freeze the clock while away
     if (amb) updateAmbientToD(dt);                              // Phase 11c: day/night audio cross-fade
     if (amb) { ambWashT += dt; if (ambWashT > 0.4) { ambWashT = 0; updateWashGain(); } }   // Phase 20b: throttled edge-proximity wash recompute
     // Phase 10c frame-time probe: over the first ~5s with the post pass on, if the average
@@ -2076,7 +2093,7 @@
     C.tx += (C.txT - C.tx) * k; C.tz += (C.tzT - C.tz) * k;
     if (clockEl) { var hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 % 1) * 60); var ap = hh < 12 ? 'AM' : 'PM', h12 = hh % 12 || 12; clockEl.textContent = '🕐 ' + h12 + ':' + ('0' + mm).slice(-2) + ' ' + ap; }   // v88: 12-hour + AM/PM so it clearly reads as a clock
     // economy tick (founded ports earn over time)
-    if (!paused && simReady()) {
+    if (!paused && !awayPaused && simReady()) {   // v89: awayPaused freezes the whole economy/world while the tab or window is left
       SIM.tick(dt); tickAutomation(dt);
       frame._hud = (frame._hud || 0) + dt; if (frame._hud > 0.2) { updateHUD(); frame._hud = 0; }
       frame._sv = (frame._sv || 0) + dt; if (frame._sv > 5) { SIM.mark(); frame._sv = 0; }
@@ -3789,7 +3806,7 @@
   // provider (ads.js) grants it free with a short charm delay; a future portal adapter swaps in a
   // real rewarded ad behind the exact same showRewarded() call — zero changes here. ----
   var BONUS_MULT = 2, BONUS_SECS = 600, BONUS_MAX_SECS = 900;   // 2× for 10 min; stacked durations cap at 15 min
-  var bonusModal = null, bonusBusy = false, bonusChipActive = false, adsReady = false, bonusBtn = null, bonusChip = null;
+  var bonusModal = null, bonusBusy = false, bonusChipActive = false, adsReady = false, bonusBtn = null, bonusChip = null, bonusWasActive = false;
   function initAds() {
     try {
       if (window.ADS && typeof window.ADS.init === 'function') window.ADS.init(function () { adsReady = true; updateHUD(); });
@@ -3843,10 +3860,12 @@
     var mult = Math.max(SIM.boostMul(), BONUS_MULT), secs = Math.min(BONUS_MAX_SECS, SIM.boostT() + BONUS_SECS);
     SIM.setBoost(mult, secs);
     bonusChipActive = true;
+    bonusWasActive = true;   // v89: mark so updateHUD can announce "ready again" when the boost later expires
+    if (bonusBtn) bonusBtn.style.display = 'none';   // v89: hide the ⚓ Bonus button THE INSTANT it's claimed (don't wait for the next updateHUD)
     closeBonusCard();
     var pw = portWorld(); if (pw) { popWorld(pw.x, pw.y + 7, pw.z, '⚓ 2× production!', { color: '#7fe0d6', size: 18, life: 1.6, vy: -50 }); burstWorld(pw.x, pw.y, pw.z, { count: 30, colors: ['#7fe0d6', '#ffe08a', '#ffffff'], speed: 210, life: 1.1, size: 5 }); }
     sfx('win'); haptic(24); confettiBurst();
-    showHint('⚓ Captain’s Bonus — 2× production for 10 minutes!');
+    showHint('⚓ Captain’s Bonus CLAIMED — ' + Math.round(mult) + '× production for ' + clockFmt(secs) + '!');   // v89: unambiguous "claimed" wording + live duration
     updateHUD();
   }
   function onBonusFail() { bonusBusy = false; closeBonusCard(); }   // decline / no-fill / cap race — state left exactly as before
@@ -4272,12 +4291,18 @@
     if (bonusBtn) {
       var bElig = bonusEligible();
       bonusBtn.style.display = bElig ? '' : 'none';
-      if (bElig) announceFeature('bonus', '⚓', 'Captain’s Bonus', 'Double production, on the house.');
+      if (bElig) {
+        announceFeature('bonus', '⚓', 'Captain’s Bonus', 'Double production, on the house.');
+        // v89: the button has RETURNED after a claimed boost expired — tell the player it's back.
+        if (bonusWasActive) { bonusWasActive = false; showHint('⚓ Captain’s Bonus is ready again!'); }
+      }
     }
     if (bonusChip) {
       var bt = SIM.boostT();
-      if (bonusChipActive && bt > 0) { bonusChip.textContent = '⚓' + Math.round(SIM.boostMul()) + '× ' + clockFmt(bt); bonusChip.style.display = ''; }
-      else { bonusChip.style.display = 'none'; bonusChipActive = false; }
+      // v89: prominent, clearly-labelled ACTIVE-BUFF pill (was a tiny "⚓2× 9:59" stat) so it's obvious
+      // the bonus is running and for how long — which is also why the ⚓ Bonus button is gone.
+      if (bonusChipActive && bt > 0) { bonusChip.classList.add('active'); bonusChip.textContent = '⚡ ' + Math.round(SIM.boostMul()) + '× BONUS · ' + clockFmt(bt); bonusChip.style.display = ''; }
+      else { bonusChip.style.display = 'none'; bonusChip.classList.remove('active'); bonusChipActive = false; }
     }
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
