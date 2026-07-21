@@ -3994,12 +3994,12 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v98';
+  var BUILD_TAG = 'v99';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
   // ↓↓↓ CHANGE THIS to your real Ko-fi (or Buy Me a Coffee) URL once your account exists ↓↓↓
-  var SUPPORT_URL = 'https://ko-fi.com/portboss';
+  var SUPPORT_URL = 'https://ko-fi.com/lukasjennings';
   function supportAllowed() {
     try { if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) return false; } catch (e) {}
     try { var v = window.Portal && Portal.vendor && Portal.vendor(); if (v === 'crazygames' || v === 'poki') return false; } catch (e) {}
