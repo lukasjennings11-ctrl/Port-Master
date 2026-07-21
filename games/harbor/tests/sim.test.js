@@ -896,22 +896,32 @@ function autoplay(cfg) {
   SIM.build('fishing_hut'); SIM.build('fishing_hut'); SIM.build('jetty');   // produce fish + SELL it (no routes at all)
   var before = SIM.state().stats;
   ok('v92 cargo: shipped counters start at 0', before.shipped === 0 && before.shippedBy.fish === 0);
-  for (var i = 0; i < 60; i++) SIM.tick(1);                                  // let the jetty sell the fish the huts land
+  SIM.port('green').res.fish = 70;                                           // v96: above the order reserve so the jetty auto-sells the surplus immediately
+  for (var i = 0; i < 60; i++) SIM.tick(1);                                  // let the jetty sell the fish above the reserve
   var after = SIM.state().stats;
   ok('v92 cargo: SELLING fish (no trade routes) now raises stats.shipped — fixes the "shipped 0" lie', after.shipped > 0 && after.shippedBy.fish > 0);
   ok('v92 cargo: breakdown is per-resource — only fish moved (no timber/goods producers yet)', after.shippedBy.timber === 0 && after.shippedBy.goods === 0);
 })();
 
-(function v92FlowOrders() {
+(function v96StockOrders() {
   SIM.__setRng(mulberry32(921)); SIM.newGame(); SIM.foundPort('green'); var g = SIM.raw();
   var p = SIM.port('green');
-  p.shippedBy = { fish: 0, timber: 0, goods: 0 };
-  p.contracts = [{ id: 'greencX', who: 'Test Co.', res: 'fish', amt: 30, reward: 5000, start: 0 }];
-  ok('v92 orders: not fulfillable before any fish has been shipped', SIM.canFulfill('greencX') === false && SIM.state().contracts[0].have === 0);
-  p.res.fish = 0; p.shippedBy.fish = 30;                                     // 30 fish MOVED through the flow — stock stays 0
-  ok('v92 orders: fills from cargo FLOW even with 0 stock on hand (never waits on a stockpile)', SIM.canFulfill('greencX') === true && SIM.state().res.fish === 0 && SIM.state().contracts[0].have === 30);
-  var m0 = g.money, paid = SIM.fulfillContract('greencX');
-  ok('v92 orders: fulfilling pays the premium + auto-issues a replacement (board keeps flowing)', paid === 5000 && g.money === m0 + 5000 && p.contracts.length >= 1 && !p.contracts.some(function (c) { return c.id === 'greencX'; }));
+  p.res.fish = 0;
+  p.contracts = [{ id: 'greencX', who: 'Test Co.', res: 'fish', amt: 30, reward: 5000 }];
+  ok('v96 orders: NOT fulfillable while stock on hand is below the order (0 < 30)', SIM.canFulfill('greencX') === false && SIM.state().contracts[0].have === 0);
+  p.res.fish = 20;                                                          // partial stock shows partial progress
+  ok('v96 orders: progress reflects cargo actually on hand (20/30), still not fulfillable', SIM.canFulfill('greencX') === false && SIM.state().contracts[0].have === 20);
+  p.res.fish = 42;                                                          // enough stock to deliver
+  ok('v96 orders: fulfillable once stock >= order, progress caps at the amount', SIM.canFulfill('greencX') === true && SIM.state().contracts[0].have === 30);
+  var m0 = g.money, sh0 = (g.stats && g.stats.shipped) || 0, paid = SIM.fulfillContract('greencX');
+  ok('v96 orders: delivering WITHDRAWS the cargo from storage (42 - 30 = 12 left)', p.res.fish === 12);
+  ok('v96 orders: delivering pays the premium + auto-issues a replacement (board keeps flowing)', paid === 5000 && g.money === m0 + 5000 && p.contracts.length >= 1 && !p.contracts.some(function (c) { return c.id === 'greencX'; }));
+  ok('v96 orders: the delivered cargo still counts as shipped (daily mission / rival race credit)', ((g.stats && g.stats.shipped) || 0) === sh0 + 30);
+  // generated orders are sized to storage so they are always holdable (never the old era-scaled amount)
+  SIM.newGame(); SIM.foundPort('green'); SIM.setEra(2); var p2 = SIM.port('green'); SIM.state();
+  var caps2 = SIM.state().caps;
+  ok('v96 orders: every generated order is sized within the port storage cap (always holdable)',
+    p2.contracts.length >= 3 && p2.contracts.every(function (c) { return c.amt <= caps2[c.res] && c.amt >= 8; }));
 })();
 
 (function v92EndlessExpeditions() {

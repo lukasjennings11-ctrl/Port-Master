@@ -401,9 +401,11 @@
       if (typeof pt.contractSeq !== 'number') pt.contractSeq = 0;
       if (!pt.shippedBy || typeof pt.shippedBy !== 'object') pt.shippedBy = { fish: 0, timber: 0, goods: 0 };   // v92: per-port cargo-moved counter (Orders progress off this)
       ['fish', 'timber', 'goods'].forEach(function (r) { if (typeof pt.shippedBy[r] !== 'number') pt.shippedBy[r] = 0; });
-      // v92: existing contracts predate flow-based delivery — stamp them "start now" so they measure
-      // only NEW cargo from here (an old stockpile-order becomes a normal flow order, never stuck).
-      for (var ci = 0; ci < pt.contracts.length; ci++) if (typeof pt.contracts[ci].start !== 'number') pt.contracts[ci].start = pt.shippedBy[pt.contracts[ci].res] || 0;
+      // v96: orders are stock-withdrawal again (sized to storage). Drop any pre-v96 flow order (it
+      // carries a `start` field) or any order too big for this port to ever hold, so the ensureContracts()
+      // below re-issues correctly-sized stock orders — old saves transition cleanly, no stuck board.
+      var _pcap = capsOf(pt);
+      pt.contracts = pt.contracts.filter(function (c) { return c.start === undefined && c.amt <= (_pcap[c.res] || 80); });
       for (var bi = 0; bi < pt.buildings.length; bi++) if (pt.buildings[bi].hp == null) pt.buildings[bi].hp = 100;
       CUR = pt; ensureContracts();
     }
@@ -499,27 +501,31 @@
     var pool = ['fish']; if (S.era >= 2) { pool.push('timber', 'goods'); } if (S.era >= 1) pool.push('fish');
     var seq = (CUR.contractSeq = (CUR.contractSeq || 0) + 1);
     var res = pool[(seq * 1) % pool.length];
-    var base = res === 'goods' ? 24 : 70;
-    var amt = Math.round(base * (1 + S.era * 0.55) * (0.8 + ((seq * 7) % 5) * 0.12));
+    // v96: stock-withdrawal orders — size to a fraction of THIS port's storage for `res`, so the order
+    // is always physically holdable AND reachable from the standing inventory the port keeps (the old
+    // era-scaled amount outgrew storage and could only be met by cargo flow). Bigger storage → bigger
+    // orders → bigger rewards, so building warehouses pays off.
+    var cp = caps(), maxHold = cp[res] || 80;
+    var frac = 0.22 + ((seq * 7) % 5) * 0.03;                       // 0.22 .. 0.34 of storage cap (below the 0.4 order reserve)
+    var amt = Math.max(8, Math.round(maxHold * frac));
     var premium = 1.7 + ((seq * 3) % 4) * 0.15;                      // 1.7x .. 2.15x passive price
     var reward = Math.round(amt * basePrice(res) * premium);
     var who = ORDER_LABELS[(seq * 5) % ORDER_LABELS.length];
-    // v92: flow-based delivery — stamp the port's cargo-moved counter at genesis; the order fills as
-    // you ship that resource (start .. start+amt), so it always progresses and never waits on a
-    // stockpile the sellers keep draining to 0. `start` is the snapshot; progress = shippedBy - start.
-    var start = (CUR.shippedBy && CUR.shippedBy[res]) || 0;
-    return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward, start: start };
+    return { id: CUR.id + 'c' + seq, who: who, res: res, amt: amt, reward: reward };
   }
-  // v92: how much of an order has been delivered so far, from the port's cargo flow since it appeared
-  function contractProgress(c) { var moved = ((CUR.shippedBy && CUR.shippedBy[c.res]) || 0) - (c.start || 0); return clamp(moved, 0, c.amt); }
+  // v96: progress = the cargo you actually have on hand toward the order (stock-withdrawal)
+  function contractProgress(c) { return clamp((CUR.res[c.res] || 0), 0, c.amt); }
   function ensureContracts() { if (!CUR.contracts) CUR.contracts = []; var want = 3 + (META.contractSlots || 0), guard = 0; while (CUR.contracts.length < want && guard++ < 20) CUR.contracts.push(genContract()); }
   function findContract(id) { for (var i = 0; i < (CUR.contracts || []).length; i++) if (CUR.contracts[i].id === id) return i; return -1; }
   function canFulfill(id) { var i = findContract(id); return i >= 0 && contractProgress(CUR.contracts[i]) >= CUR.contracts[i].amt; }
   function fulfillContract(id) {
     if (!CUR || !canFulfill(id)) return 0;
     var i = findContract(id), c = CUR.contracts[i];
-    // v92: the cargo was already shipped through your markets (counted by shippedBy) — claiming the
-    // order pays its premium lump sum on top, then a fresh order takes its place.
+    // v96: stock-withdrawal — the ordered cargo LEAVES your storage; you're paid the premium lump sum.
+    CUR.res[c.res] = Math.max(0, (CUR.res[c.res] || 0) - c.amt);
+    // the delivered cargo still counts as shipped (feeds the daily "ship N cargo" mission, rival race, stats)
+    var psb = CUR.shippedBy || (CUR.shippedBy = { fish: 0, timber: 0, goods: 0 }); psb[c.res] = (psb[c.res] || 0) + c.amt;
+    if (S.stats) { var sb = S.stats.shippedBy || (S.stats.shippedBy = { fish: 0, timber: 0, goods: 0 }); sb[c.res] = (sb[c.res] || 0) + c.amt; S.stats.shipped = (S.stats.shipped || 0) + c.amt; }
     S.money += c.reward; S.lifetimeMoney = (S.lifetimeMoney || 0) + c.reward;
     CUR.contracts.splice(i, 1); ensureContracts(); save();
     return c.reward;
@@ -909,9 +915,14 @@
     var syn = synergyMul(port), focus = port.focus || 'none';
     var prodMul = mgrMul('fishing') * (META.prodMul || 1) * (TIDE.prod || 1) * boostMul() * syn.prod;   // managers × Legacy × tide × crate surge × synergy
     var salesMul = mgrMul('sales') * (META.sellMul || 1) * syn.sales * focusSalesMul(focus) * DIFF.income;   // difficulty scales money income (wages unchanged → tighter margins)
-    // soft-cap taper: production slows as a store fills (1.0 empty -> 0.35 full) so caps bite gently
+    // v96: ORDER RESERVE — the market keeps a standing stockpile (half the storage cap) that it will
+    // NOT auto-sell, so stock-withdrawal Orders are always fulfillable from cargo on hand. Production
+    // runs at full below the reserve (stock refills freely after a delivery), and the soft-cap taper
+    // only bites as storage fills ABOVE the reserve toward the cap — so parking a reserve costs no
+    // steady-state income (the market still sells everything produced above the reserve line).
+    var RES_FRAC = 0.4;
     var taper = {};
-    for (var r0 in cap) taper[r0] = 1 - 0.65 * clamp((port.res[r0] || 0) / cap[r0], 0, 1);
+    for (var r0 in cap) { var fillR = (port.res[r0] || 0) / cap[r0]; taper[r0] = 1 - 0.65 * clamp((fillR - RES_FRAC) / (1 - RES_FRAC), 0, 1); }
     var add = { fish: 0, timber: 0, goods: 0 }, money = 0;
     var soldR = { fish: 0, timber: 0, goods: 0 }, revR = { fish: 0, timber: 0, goods: 0 };
     for (var i = 0; i < port.buildings.length; i++) {
@@ -919,7 +930,7 @@
       var m = lvlMul(t, b.level) * (bhp(b) / 100);                   // storm-damaged buildings produce less (wrecked = 0)
       if (t.prod) for (var r in t.prod) add[r] += t.prod[r] * m * labor * prodMul * focusProdMul(focus, r) * fleetProdMul(r) * sp[r] * taper[r] * dt;
       if (t.convert) { var avail = port.res[t.convert.from] + add[t.convert.from]; var amt = Math.min(avail, t.convert.rate * m * labor * prodMul * focusProdMul(focus, t.convert.to) * (sp[t.convert.to] || 1) * taper[t.convert.to] * dt); add[t.convert.from] -= amt; add[t.convert.to] += amt; }
-      if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sold = Math.min(have, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
+      if (t.sells) { var f = t.sells.from, have = port.res[f] + add[f]; var sellable = Math.max(0, have - cap[f] * RES_FRAC); var sold = Math.min(sellable, t.sells.rate * m * labor * dt); add[f] -= sold; soldR[f] += sold; revR[f] += sold * t.sells.price; }
       if (t.money) money += t.money * m * labor * salesMul * dt;
     }
     // dynamic demand (per port): dumping one resource softens its local price; recovers over time.

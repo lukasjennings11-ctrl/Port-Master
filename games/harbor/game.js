@@ -3994,7 +3994,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v95';
+  var BUILD_TAG = 'v96';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4476,7 +4476,7 @@
       s.contracts.forEach(function (c) {
         html += '<button class="mp-item order' + (c.can ? ' ready' : ' ghosted') + '" data-order="' + c.id + '"' + (c.can ? '' : ' disabled') + '>' +
           '<span class="mi-n">' + c.who + '</span>' +
-          '<span class="mi-d">Ship ' + c.amt + ' ' + c.res + ' &middot; ' + c.have + '/' + c.amt + ' shipped</span>' +
+          '<span class="mi-d">Deliver ' + c.amt + ' ' + c.res + ' &middot; ' + c.have + '/' + c.amt + ' in stock</span>' +
           '<span class="mi-c">' + (c.can ? 'Deliver £' + fmt(c.reward) : '£' + fmt(c.reward)) + '</span></button>';
       });
       html += '</div>';
