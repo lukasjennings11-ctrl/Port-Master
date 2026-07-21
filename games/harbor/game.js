@@ -3995,7 +3995,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v101';
+  var BUILD_TAG = 'v102';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
@@ -4013,6 +4013,10 @@
   // it is a hard no-op on web/portal AND can never break the app if the plugin or products are absent.
   // The product IDs here MUST match the consumable products you create in App Store Connect / Play
   // Console (see APP-BUILD-GUIDE.md "Part E").
+  // ↓↓↓ TIP-JAR SWITCH: false for the FIRST App Store release (v1.0 — no tip jar, fastest approval),
+  // true for the follow-up release (v1.1) AFTER you've set up the consumable products + Paid Apps
+  // Agreement (APP-BUILD-GUIDE Part E). One line is the only difference between the two versions.
+  var TIP_JAR_ENABLED = false;
   var TIP_TIERS = [
     { id: 'tip_small', label: '☕ Deckhand’s Coffee', fallback: '£1.99' },
     { id: 'tip_medium', label: '🍺 Harbourmaster’s Round', fallback: '£4.99' },
@@ -4021,6 +4025,7 @@
   var iapReady = false, iapPrices = {};   // id -> localized price string once the store loads
   function iapNative() { try { return !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()); } catch (e) { return false; } }
   function initIAP() {
+    if (!TIP_JAR_ENABLED) return;                              // v1.0 ships with the tip jar OFF
     if (!iapNative()) return;                                   // web/portal → no IAP
     var CDV = window.CdvPurchase; if (!CDV || !CDV.store) return;   // plugin not installed → graceful
     try {
