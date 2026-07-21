@@ -3879,6 +3879,7 @@
         if (!nativeBack()) { try { if (P.App.minimizeApp) P.App.minimizeApp(); } catch (e) {} }
       });
     } catch (e) {}
+    try { initIAP(); } catch (e) {}   // v101: in-app tip jar (no-op if the IAP plugin isn't installed)
   }
 
   // ---- Phase 17a: Empire Timeline — tapping the era pill opens a compact horizontal age ribbon:
@@ -3994,7 +3995,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v100';
+  var BUILD_TAG = 'v101';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
@@ -4004,6 +4005,60 @@
     try { if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) return false; } catch (e) {}
     try { var v = window.Portal && Portal.vendor && Portal.vendor(); if (v === 'crazygames' || v === 'poki') return false; } catch (e) {}
     return true;
+  }
+
+  // v101: IN-APP TIP JAR (native only) — consumable IAP "tips" via cordova-plugin-purchase (window.
+  // CdvPurchase). No backend and no third party: StoreKit / Google Play Billing handle the whole
+  // transaction; we just say thank-you. Everything below is feature-detected + wrapped in try/catch so
+  // it is a hard no-op on web/portal AND can never break the app if the plugin or products are absent.
+  // The product IDs here MUST match the consumable products you create in App Store Connect / Play
+  // Console (see APP-BUILD-GUIDE.md "Part E").
+  var TIP_TIERS = [
+    { id: 'tip_small', label: '☕ Deckhand’s Coffee', fallback: '£1.99' },
+    { id: 'tip_medium', label: '🍺 Harbourmaster’s Round', fallback: '£4.99' },
+    { id: 'tip_large', label: '🥂 Admiral’s Toast', fallback: '£9.99' }
+  ];
+  var iapReady = false, iapPrices = {};   // id -> localized price string once the store loads
+  function iapNative() { try { return !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()); } catch (e) { return false; } }
+  function initIAP() {
+    if (!iapNative()) return;                                   // web/portal → no IAP
+    var CDV = window.CdvPurchase; if (!CDV || !CDV.store) return;   // plugin not installed → graceful
+    try {
+      var store = CDV.store, PT = CDV.ProductType, PL = CDV.Platform;
+      var plat = (window.Capacitor.getPlatform && Capacitor.getPlatform() === 'android') ? PL.GOOGLE_PLAY : PL.APPLE_APPSTORE;
+      store.register(TIP_TIERS.map(function (t) { return { id: t.id, type: PT.CONSUMABLE, platform: plat }; }));
+      store.when()
+        .productUpdated(function () { iapSyncPrices(); if (settingsOpen) renderSettings(); })
+        .approved(function (tx) { try { tx.verify(); } catch (e) {} })
+        .verified(function (r) { try { r.finish(); } catch (e) {} onTipPurchased(); })
+        .unverified(function () {});
+      if (store.error) store.error(function () {});             // swallow store errors — a tip must never break the game
+      store.initialize([plat]);
+      iapReady = true;
+      setTimeout(function () { iapSyncPrices(); if (settingsOpen) renderSettings(); }, 1500);
+    } catch (e) { iapReady = false; }
+  }
+  function iapSyncPrices() {
+    try {
+      var store = window.CdvPurchase && window.CdvPurchase.store; if (!store) return;
+      TIP_TIERS.forEach(function (t) {
+        var p = store.get(t.id), offer = p && p.getOffer && p.getOffer();
+        var ph = offer && offer.pricingPhases && offer.pricingPhases[0];
+        if (ph && ph.price) iapPrices[t.id] = ph.price;
+      });
+    } catch (e) {}
+  }
+  function buyTip(id) {
+    try {
+      var store = window.CdvPurchase && window.CdvPurchase.store; if (!store) return;
+      var p = store.get(id), offer = p && p.getOffer && p.getOffer();
+      if (offer && offer.order) offer.order();
+    } catch (e) {}
+  }
+  function onTipPurchased() {
+    try { if (window.Retention) Retention.set(GAME, 'supporter', true); } catch (e) {}   // a quiet "supporter" flag (no pay-to-win perk)
+    try { showHint('☕ Thank you so much — fair winds! Your support keeps Port Boss sailing. 💛'); } catch (e) {}
+    try { sfx('win'); haptic([10, 30, 20]); confettiBurst(); } catch (e) {}
   }
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
@@ -4156,7 +4211,15 @@
          '📱 <b>Mobile:</b> drag to pan · pinch to zoom · two-finger twist to rotate.</div>';
     // v97: Support the dev — a tip-jar link, only where external links are allowed (own site / itch /
     // PWA); hidden on CrazyGames/Poki and in the native app (see supportAllowed()).
-    if (supportAllowed()) {
+    if (iapNative() && iapReady) {
+      // native app → in-app tip jar (consumable IAP). External links are banned here, so this is the tip path.
+      h += '<div class="mp-sec">Support the dev</div><div class="mp-grid">';
+      TIP_TIERS.forEach(function (t) {
+        var price = iapPrices[t.id] || t.fallback;
+        h += '<button class="mp-item" data-tip="' + t.id + '" style="grid-column:1/-1"><span class="mi-n">' + t.label + '</span><span class="mi-c">' + price + '</span></button>';
+      });
+      h += '</div><div class="set-help">A one-off tip — nothing is locked behind it, just huge thanks. Port Boss is free and made by one person. 💛</div>';
+    } else if (supportAllowed()) {
       h += '<div class="mp-sec">Support</div>';
       h += '<div class="mp-grid"><a class="mp-item set-link" href="' + SUPPORT_URL + '" target="_blank" rel="noopener"><span class="mi-n">☕ Buy me a coffee</span><span class="mi-c">↗</span></a></div>';
       h += '<div class="set-help">Port Boss is free and made by one person — a tip keeps the harbour lights on. Thank you! 💛</div>';
@@ -4188,6 +4251,9 @@
          (resetArm ? 'Tap again to wipe everything' : 'Reset all progress') + '</span><span class="mi-c">' + (resetArm ? '⚠' : '↺') + '</span></button>';
     settingsPanel.innerHTML = h;
     settingsPanel.querySelector('#set-close').addEventListener('click', toggleSettings);
+    settingsPanel.querySelectorAll('[data-tip]').forEach(function (el) {   // v101: in-app tip buttons
+      el.addEventListener('click', function () { buyTip(el.getAttribute('data-tip')); sfx('tap'); haptic(10); });
+    });
     settingsPanel.querySelectorAll('[data-set]').forEach(function (el) {
       el.addEventListener('click', function () {
         var a = el.getAttribute('data-set');
@@ -5086,7 +5152,8 @@
     dismissTip: function () { hideTip(); },
     records: function () { return recordsView(); },                  // v97: local personal records (peak empire / age / charters / board)
     shareText: function () { return shareText(); },                  // v97: the one-line brag the Share button sends
-    shareScore: function () { return shareScore(); }
+    shareScore: function () { return shareScore(); },
+    iap: function () { return { native: iapNative(), ready: iapReady, tiers: TIP_TIERS.map(function (t) { return t.id; }), prices: iapPrices, buy: function (id) { return buyTip(id); } }; }   // v101: tip-jar introspection (native no-op on web)
   };
 
   // A shader-compile failure / lost context anywhere in boot() must also land on the friendly

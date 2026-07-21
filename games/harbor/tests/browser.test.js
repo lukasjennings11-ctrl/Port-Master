@@ -2114,6 +2114,11 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('v97 records UI: Settings shows a Records section with a Share button', recUI.hasRecords && recUI.hasShare);
   // v97: tip-jar link shows on the non-portal test build (external links allowed here); opens in a new tab
   ok('v97 support: a "Buy me a coffee" tip link is present where external links are allowed', recUI.hasSupport && !!recUI.kofiHref);
+  // v101: the in-app IAP tip jar is a hard no-op off-native (no Capacitor) — web keeps the Ko-fi link
+  const iap = await page.evaluate(() => { var r = window.__harbor.iap(); var threw = false; try { r.buy('tip_small'); } catch (e) { threw = true; } return { native: r.native, ready: r.ready, tiers: r.tiers, threw: threw, kofiShown: !!document.querySelector('#settingspanel a.set-link[href*="ko-fi.com"]') }; });
+  ok('v101 iap: off-native the tip jar is inert (native false, not ready) and buyTip never throws', iap.native === false && iap.ready === false && iap.threw === false);
+  ok('v101 iap: the tip tiers are declared for the native path', iap.tiers.length === 3 && iap.tiers.indexOf('tip_small') >= 0);
+  ok('v101 iap: on web the Ko-fi link is shown instead of IAP buttons', iap.kofiShown === true);
   await page.evaluate(() => { var b = document.getElementById('setbtn'); if (b && document.getElementById('settingspanel').classList.contains('show')) b.click(); });
   await sleep(150);
 

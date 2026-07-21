@@ -124,6 +124,50 @@ storage, there are no accounts/logins, no analytics, no tracking, and the web-po
 
 ---
 
+## PART E — In-app tip jar (optional, best as your *first update*)
+
+Port Boss has a built-in **tip jar** for the native app (Settings → *Support the dev*). It uses
+**in-app purchases** because Apple/Google **forbid** external tip links inside an app — so a "Buy me a
+coffee" web link can't be used here (that link only appears on the web/itch build). The tip products
+are **consumables** (buyable repeatedly) and grant **no gameplay advantage** — purely a thank-you.
+
+> **Recommended: ship your first release WITHOUT the tip jar**, get approved fast, then add it as
+> **update 1**. IAP requires the **Paid Apps Agreement** + **banking & tax forms** completed first
+> (can take days), and adds review surface. The code is already in the app and is a **safe no-op**
+> until the IAP plugin + products exist, so leaving it off changes nothing.
+
+### The code side (already done)
+- `cordova-plugin-purchase` is in `package.json`; `npm install` + `npx cap sync` installs it natively.
+- The three consumable product IDs the app expects are: **`tip_small`**, **`tip_medium`**,
+  **`tip_large`** (in `games/harbor/game.js`, `TIP_TIERS`). The prices shown come from the store, not
+  the app.
+
+### What you do (per store — once)
+**Both stores first:** complete the **Paid Applications Agreement** and your **banking + tax** info in
+App Store Connect (Agreements, Tax, and Banking) and Play Console (Payments profile). IAP will not
+work until these are active.
+
+**Apple — App Store Connect → your app → *In-App Purchases*:**
+1. Create three **Consumable** products with **Product IDs exactly** `tip_small`, `tip_medium`,
+   `tip_large`.
+2. Give each a display name + description (e.g. *Deckhand's Coffee*), set a **price tier**
+   (~£1.99 / £4.99 / £9.99), add a review screenshot (a shot of the Settings tip section).
+3. Submit the IAPs **with** the app build that contains them (they review together).
+4. Test with a **Sandbox tester** (Users and Access → Sandbox) on a real device before submitting.
+
+**Google — Play Console → your app → Monetize → *In-app products*:**
+1. Create three products with the **same IDs** `tip_small`, `tip_medium`, `tip_large`, set prices,
+   **Activate** them.
+2. Add a **licensed tester** (Play Console → Setup → License testing) and test via an **internal
+   testing** track on a real device.
+
+### Verify
+On a real device with the products live: Settings → *Support the dev* shows the three tiers with real
+localized prices; tapping one opens the native purchase sheet; completing a sandbox purchase shows the
+"Thank you" message. (You can't test this in the Simulator or on the web — it needs the store.)
+
+---
+
 ## Notes & honest caveats
 - **No ads in the app.** The web portal ad SDKs (CrazyGames/Poki) don't work in a native app, so the
   first release ships **ad-free** — simplest and fastest to approve. AdMob rewarded ads can be added
