@@ -3880,6 +3880,10 @@
       });
     } catch (e) {}
     try { initIAP(); } catch (e) {}   // v101: in-app tip jar (no-op if the IAP plugin isn't installed)
+    // v103: keep the App Store / Play rating at 4+ — drop the optional "Merchant's Gamble" wager event
+    // in the native app (Apple counts wagering in-game currency as Simulated Gambling → 17+). The event
+    // stays on the web/itch build; only the native shell excludes it.
+    try { if (SIM && SIM.setEventExclusions) SIM.setEventExclusions(['gamble']); } catch (e) {}
   }
 
   // ---- Phase 17a: Empire Timeline — tapping the era pill opens a compact horizontal age ribbon:
@@ -3995,7 +3999,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v102';
+  var BUILD_TAG = 'v103';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
