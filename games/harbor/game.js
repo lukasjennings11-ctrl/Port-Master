@@ -3994,7 +3994,17 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v97';
+  var BUILD_TAG = 'v98';
+  // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
+  // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
+  // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
+  // ↓↓↓ CHANGE THIS to your real Ko-fi (or Buy Me a Coffee) URL once your account exists ↓↓↓
+  var SUPPORT_URL = 'https://ko-fi.com/portboss';
+  function supportAllowed() {
+    try { if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) return false; } catch (e) {}
+    try { var v = window.Portal && Portal.vendor && Portal.vendor(); if (v === 'crazygames' || v === 'poki') return false; } catch (e) {}
+    return true;
+  }
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4144,6 +4154,13 @@
          '🧭 At 3+ charters, pick a <b>Doctrine</b> in Legacy to specialise your run.<br>' +
          '🖐️ <b>PC:</b> drag to pan · scroll wheel to zoom · right-drag (or Shift+drag) to rotate.<br>' +
          '📱 <b>Mobile:</b> drag to pan · pinch to zoom · two-finger twist to rotate.</div>';
+    // v97: Support the dev — a tip-jar link, only where external links are allowed (own site / itch /
+    // PWA); hidden on CrazyGames/Poki and in the native app (see supportAllowed()).
+    if (supportAllowed()) {
+      h += '<div class="mp-sec">Support</div>';
+      h += '<div class="mp-grid"><a class="mp-item set-link" href="' + SUPPORT_URL + '" target="_blank" rel="noopener"><span class="mi-n">☕ Buy me a coffee</span><span class="mi-c">↗</span></a></div>';
+      h += '<div class="set-help">Port Boss is free and made by one person — a tip keeps the harbour lights on. Thank you! 💛</div>';
+    }
     h += '<div class="mp-sec">About</div>';
     h += '<div class="set-about">Port Boss · build ' + BUILD_TAG +
          (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '') +

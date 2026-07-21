@@ -2107,9 +2107,13 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(200);
   const recUI = await page.evaluate(() => {
     var p = document.getElementById('settingspanel');
-    return { open: !!(p && p.classList.contains('show')), hasRecords: !!(p && /Records/.test(p.textContent)), hasShare: !!(p && p.querySelector('[data-set="share"]')) };
+    var kofi = p && p.querySelector('a.set-link[href*="ko-fi.com"], a.set-link[href*="buymeacoffee"]');
+    return { open: !!(p && p.classList.contains('show')), hasRecords: !!(p && /Records/.test(p.textContent)), hasShare: !!(p && p.querySelector('[data-set="share"]')),
+      hasSupport: !!(p && /Support/.test(p.textContent)), kofiHref: kofi ? kofi.getAttribute('href') : null };
   });
   ok('v97 records UI: Settings shows a Records section with a Share button', recUI.hasRecords && recUI.hasShare);
+  // v97: tip-jar link shows on the non-portal test build (external links allowed here); opens in a new tab
+  ok('v97 support: a "Buy me a coffee" tip link is present where external links are allowed', recUI.hasSupport && !!recUI.kofiHref);
   await page.evaluate(() => { var b = document.getElementById('setbtn'); if (b && document.getElementById('settingspanel').classList.contains('show')) b.click(); });
   await sleep(150);
 
