@@ -2067,6 +2067,27 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   // sanity: a NORMAL load (the shared page) still has a live WebGL2 context — the net only catches failure
   ok('v93 gfx-fail: a normal load still boots WebGL2 fine (fallback is failure-only)', (await page.evaluate(() => window.__harbor.state().webgl)) === true);
 
+  // ---- v94: WebGL CONTEXT-LOSS recovery — iOS WKWebView drops the GL context at runtime under memory
+  // pressure; without a handler the render loop silently goes black ("worked then stopped"). We catch
+  // webglcontextlost and show the recover card. Own context (it halts the loop + covers the screen).
+  const lossCtx = await browser.newContext({ viewport: { width: 414, height: 820 } });
+  const lossPage = await lossCtx.newPage();
+  await lossPage.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe`, { waitUntil: 'load' });
+  await lossPage.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 8000 }).catch(() => {});
+  await lossPage.evaluate(() => {
+    var c = document.getElementById('game');
+    var ext = c.getContext('webgl2') && c.getContext('webgl2').getExtension('WEBGL_lose_context');
+    if (ext) ext.loseContext(); else c.dispatchEvent(new Event('webglcontextlost'));
+  });
+  await lossPage.waitForSelector('.gfx-fail', { timeout: 6000 }).catch(() => {});
+  const loss = await lossPage.evaluate(() => ({
+    card: !!document.querySelector('.gfx-fail .gfx-card'),
+    btn: (document.querySelector('.gfx-fail .gfx-btn') || {}).textContent || ''
+  }));
+  ok('v94 context-loss: losing the WebGL context shows the recover card (not a silent black screen)', loss.card === true);
+  ok('v94 context-loss: the recover card offers a Reload button', /reload/i.test(loss.btn));
+  await lossCtx.close();
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

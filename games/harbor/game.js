@@ -8,7 +8,7 @@
   var GAME = 'harbor', mat4 = window.HGL && HGL.mat4;
   var canvas = document.getElementById('game'), loader = document.getElementById('loader');
   var clockEl = document.getElementById('clock'), hintEl = document.getElementById('hint'), wrap = document.querySelector('.board-wrap');
-  var gl = null, E = null;
+  var gl = null, E = null, glLost = false;
   try { gl = canvas.getContext('webgl2', { antialias: true, alpha: false }); } catch (e) {}
 
   // Phase 12b: portal mode — true when launched with ?portal= (a portal host page/iframe param)
@@ -2088,6 +2088,7 @@
   }
 
   function frame(now) {
+    if (glLost) return;   // WebGL context lost (iOS memory pressure / GPU reset) — stop the loop; onContextLost() shows a recover card
     var dt = Math.min(0.05, (now - (frame._l || now)) / 1000); frame._l = now;
     clock += dt; if (!paused && !awayPaused) tod = (tod + dt * todSpeed) % 1;   // v89: freeze the clock while away
     if (amb) updateAmbientToD(dt);                              // Phase 11c: day/night audio cross-fade
@@ -3983,7 +3984,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v93';
+  var BUILD_TAG = 'v94';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4655,6 +4656,15 @@
     var portalReady = window.Portal ? Portal.init() : null;
     initAds();   // Phase 12a: async provider setup — never blocks boot; bonus button stays hidden until (if) it resolves
     if (!gl) { failGraphics(); return; }   // no WebGL2 context → friendly card + Reload, never an infinite loader
+    // iOS WKWebView drops the WebGL context under memory pressure / on a GPU reset — without a handler
+    // the render loop just goes silently black ("worked for a bit then stopped"). Catch it: stop the
+    // loop and show a recover card (progress is saved in localStorage, so a reload resumes cleanly).
+    canvas.addEventListener('webglcontextlost', function (e) {
+      e.preventDefault();   // preventDefault lets the browser fire a restore event
+      glLost = true;
+      failGraphics('Graphics were interrupted — this can happen when the device runs low on memory. Tap Reload to resume; your progress is saved.');
+    }, false);
+    canvas.addEventListener('webglcontextrestored', function () { try { location.reload(); } catch (e) {} }, false);
     E = HGL.createEngine(gl); ensureFX();
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     boxMesh = E.mesh(new HGL.Builder().box(0, 0, 0, 1, 1, 1, [1, 1, 1]).data());
