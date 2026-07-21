@@ -2088,6 +2088,31 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   ok('v94 context-loss: the recover card offers a Reload button', /reload/i.test(loss.btn));
   await lossCtx.close();
 
+  // ---- v97: personal records + share (local-only high score). Earn money, let updateHUD record the
+  // peak, then check the Records panel + share text. All on-device; no network/accounts.
+  await page.evaluate(() => { var s = window.HARBOR_SIM.raw(); s.money = 1234567; window.HARBOR_SIM.setEra(2); });
+  await page.evaluate(() => { window.__harbor.forceHUD(); });
+  await sleep(150); await page.evaluate(() => { var s = window.HARBOR_SIM.raw(); s.money = 1234567; window.__harbor.forceHUD(); });
+  // bumpRecords is throttled to every 3s — wait past it then force another HUD tick so the peak records
+  await sleep(3100); await page.evaluate(() => { var s = window.HARBOR_SIM.raw(); s.money = 1234567; window.__harbor.forceHUD(); });
+  const rec = await page.evaluate(() => window.__harbor.records());
+  ok('v97 records: peak empire (bestNet) is tracked from money on hand', rec.bestNet >= 1234567);
+  ok('v97 records: highest age reached is tracked', rec.bestEra >= 2 && typeof rec.ageName === 'string');
+  const shareTxt = await page.evaluate(() => window.__harbor.shareText());
+  ok('v97 share: the brag text names the game, the peak £ and the age', /Port Boss/.test(shareTxt) && /£/.test(shareTxt) && /beat it/i.test(shareTxt));
+  const shareRet = await page.evaluate(() => window.__harbor.shareScore());   // no navigator.share/clipboard in headless → falls back cleanly, never throws
+  ok('v97 share: shareScore resolves via a fallback without throwing', ['shared', 'copied', 'shown'].indexOf(shareRet) >= 0);
+  // the Settings panel surfaces a Records section with a Share button
+  await page.evaluate(() => { if (!window.__harbor.state().founded) return; var b = document.getElementById('setbtn'); if (b) b.click(); });
+  await sleep(200);
+  const recUI = await page.evaluate(() => {
+    var p = document.getElementById('settingspanel');
+    return { open: !!(p && p.classList.contains('show')), hasRecords: !!(p && /Records/.test(p.textContent)), hasShare: !!(p && p.querySelector('[data-set="share"]')) };
+  });
+  ok('v97 records UI: Settings shows a Records section with a Share button', recUI.hasRecords && recUI.hasShare);
+  await page.evaluate(() => { var b = document.getElementById('setbtn'); if (b && document.getElementById('settingspanel').classList.contains('show')) b.click(); });
+  await sleep(150);
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

@@ -3994,7 +3994,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v96';
+  var BUILD_TAG = 'v97';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4057,11 +4057,53 @@
     resetArm = false;
     if (settingsOpen) { renderSettings(); sfx('tap'); haptic(8); }
   }
+  // ---- v97: personal records + share (all LOCAL — no accounts, no backend, no data leaves the device) ----
+  var _recBumpAt = 0, _recToastAt = 0;
+  function bumpRecords() {                                            // called from updateHUD; throttled so localStorage isn't hammered
+    if (!window.Retention || !SIM || !SIM.raw) return;
+    var now = Date.now(); if (now - _recBumpAt < 3000) return; _recBumpAt = now;
+    var money = Math.floor((SIM.raw() && SIM.raw().money) || 0);
+    var bestNet = Retention.get(GAME, 'bestNet', 0) | 0;
+    if (money > bestNet) {
+      Retention.set(GAME, 'bestNet', money);
+      if (bestNet > 0 && money >= 10000 && now - _recToastAt > 90000) { _recToastAt = now; showHint('🏆 New best empire — £' + fmt(money) + '! Share it from ⚙ Settings.'); }
+    }
+    var be = Retention.get(GAME, 'bestEra', 0) | 0, e = (SIM.state ? (SIM.state().empireEra || 0) : 0);
+    if (e > be) Retention.set(GAME, 'bestEra', e);
+  }
+  function recordsView() {
+    var bestNet = window.Retention ? (Retention.get(GAME, 'bestNet', 0) | 0) : 0;
+    var be = window.Retention ? (Retention.get(GAME, 'bestEra', 0) | 0) : 0;
+    var live = Math.floor((SIM && SIM.raw && SIM.raw()) ? SIM.raw().money : 0);
+    return { bestNet: Math.max(bestNet, live), bestEra: be, ageName: (SIM && SIM.eraName) ? SIM.eraName(be) : 'Fishing Village',
+      charters: chartersCount(), lb: (window.Retention ? Retention.leaderboard(GAME) : []) };
+  }
+  function shareText() {
+    var r = recordsView();
+    return '⚓ Port Boss — my harbour empire peaked at £' + fmt(r.bestNet) + ' and reached the ' + r.ageName + ' age'
+      + (r.charters > 0 ? ', ' + r.charters + ' charter' + (r.charters > 1 ? 's' : '') + ' signed' : '') + '! Can you beat it?';
+  }
+  function shareScore() {                                            // native share sheet where available; clipboard fallback otherwise
+    var txt = shareText(), url = 'https://ljennings11.itch.io/port-boss', full = txt + ' ' + url;
+    try { if (navigator.share) { navigator.share({ title: 'Port Boss', text: txt, url: url }).catch(function () {}); return 'shared'; } } catch (e) {}
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(full); showHint('📋 Copied — paste it anywhere!'); return 'copied'; } } catch (e) {}
+    showHint(full); return 'shown';
+  }
+
   function renderSettings() {
     if (!settingsPanel) return;
     var streak = (window.Retention && Retention.streak) ? Retention.streak(GAME) : 0;
     var charters = chartersCount(), leg = legacyBal();
     var h = '<div class="mp-head">Settings<button id="set-close">✕</button></div>';
+    // v97: Records + Share — a local high-score board (peak empire, highest age, charters) plus a
+    // Share button. All on-device; the share sheet only sends the one-line brag you choose to send.
+    var rec = recordsView();
+    h += '<div class="mp-sec">🏆 Records</div><div class="set-help">' +
+         '💰 Best empire: <b>£' + fmt(rec.bestNet) + '</b><br>' +
+         '🏛️ Highest age: <b>' + rec.ageName + '</b><br>' +
+         '📜 Charters signed: <b>' + rec.charters + '</b>';
+    if (rec.lb && rec.lb.length) { h += '<br>🥇 Best banked runs: ' + rec.lb.slice(0, 3).map(function (e) { return '£' + fmt(e.score); }).join(' · '); }
+    h += '</div><div class="mp-grid"><button class="mp-item" data-set="share" style="grid-column:1/-1"><span class="mi-n">📤 Share your empire</span><span class="mi-c">Send</span></button></div>';
     h += '<div class="mp-sec">Audio & feedback</div><div class="mp-grid">';
     h += '<button class="mp-item auto' + (!muted ? ' on' : '') + '" data-set="sound"><span class="mi-n">Sound</span><span class="mi-c">' + (muted ? 'OFF' : 'ON') + '</span></button>';
     h += '<button class="mp-item auto' + (!musicOff ? ' on' : '') + '" data-set="music"><span class="mi-n">Music</span><span class="mi-c">' + (musicOff ? 'OFF' : 'ON') + '</span></button>';
@@ -4132,7 +4174,8 @@
     settingsPanel.querySelectorAll('[data-set]').forEach(function (el) {
       el.addEventListener('click', function () {
         var a = el.getAttribute('data-set');
-        if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
+        if (a === 'share') { shareScore(); sfx('tap'); haptic(10); }
+        else if (a === 'sound') { applyMuted(!muted); sfx('tap'); haptic(8); }
         else if (a === 'music') { applyMusicOff(!musicOff); sfx('tap'); haptic(8); renderSettings(); }
         else if (a === 'haptics') { applyHaptics(!hapticsOff); haptic(12); renderSettings(); }
         else if (a === 'post') { setPost(!postEnabled(), true); sfx('tap'); haptic(8); }
@@ -4283,6 +4326,7 @@
     // glow the Manage button when an order is ready to deliver
     var mBtn = document.getElementById('managebtn');
     if (mBtn) { var ready = (s.contracts || []).some(function (c) { return c.can; }); mBtn.classList.toggle('order-ready', ready && !manageOpen); }
+    bumpRecords();   // v97: track peak-empire / highest-age personal records (throttled, local-only)
     checkGoals(s);
     handleHazard(s);
     handleEvent(s);
@@ -5022,7 +5066,10 @@
     forceTipCheck: function () { tickTips(); return window.__harbor.tips(); },   // test-only: run one tickTips() pass synchronously, bypassing the wall-clock frame accumulator
     setTipsEnabled: function (v) { setTipsEnabled(!!v); if (settingsOpen) renderSettings(); return tipsEnabled(); },
     resetTipRateLimit: function () { tipLastShownAt = 0; tipRuleLastShown = {}; },   // test-only: zero the global + per-rule cooldowns
-    dismissTip: function () { hideTip(); }
+    dismissTip: function () { hideTip(); },
+    records: function () { return recordsView(); },                  // v97: local personal records (peak empire / age / charters / board)
+    shareText: function () { return shareText(); },                  // v97: the one-line brag the Share button sends
+    shareScore: function () { return shareScore(); }
   };
 
   // A shader-compile failure / lost context anywhere in boot() must also land on the friendly
