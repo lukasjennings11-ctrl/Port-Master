@@ -100,6 +100,28 @@ I can generate all of these from the game — just ask:
   - **Or a GitHub Gist** (paste the `PRIVACY.md` text, "Create public gist", use its URL), **or** a
     page on your itch.io project. Any always-on public URL is accepted.
 
+## PART D — App privacy questionnaire (the "nutrition label")
+
+Both stores ask you to declare what data the app collects. For the **first (ad-free) release**
+Port Boss collects **nothing that leaves the device** — progress is stored only in on-device local
+storage, there are no accounts/logins, no analytics, no tracking, and the web-portal ad SDKs are
+**not** in the native build. So both forms get the simplest, most trustworthy answer:
+
+- **Apple — App Store Connect → your app → App Privacy → Get Started:**
+  - *"Do you or your third-party partners collect data from this app?"* → **No**.
+  - Result: a clean **"Data Not Collected"** label. Save/Publish.
+- **Google — Play Console → your app → Policy → App content → Data safety:**
+  - *Does your app collect or share any of the required user data types?* → **No**.
+  - *Is all user data encrypted in transit?* / *Do you provide a way to request data deletion?* →
+    not applicable (no data collected); complete the short form accordingly.
+- Both still require the **privacy-policy URL** above, even with no data collected.
+
+> ⚠️ **If you later add ads or analytics** (e.g. AdMob rewarded ads, or any analytics SDK), you
+> **must** come back and update these answers — ad/analytics SDKs collect device identifiers and
+> usage data, so the honest label changes from "Data Not Collected." Do this in the same release that
+> adds the SDK. The same applies if you add an **online leaderboard** (it would collect a name +
+> score + device identifier — see the monetization/leaderboard notes).
+
 ---
 
 ## Notes & honest caveats
