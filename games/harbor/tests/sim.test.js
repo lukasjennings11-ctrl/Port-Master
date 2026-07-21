@@ -1274,6 +1274,22 @@ function autoplay(cfg) {
   SIM.load();
   ok('per-port migrate: existing harbours inherit the old global era (no lost progress)', SIM.port('green').era === 3 && SIM.port('nordic').era === 3);
   ok('per-port migrate: empire era matches the migrated ports', SIM.state().empireEra === 3);
+
+  // v95: managers are era-capped like buildings (base 2 + empireEra), never past the absolute max.
+  function mgrState(era, mgrs) {
+    return { era: era, money: 5e9, lifetimeMoney: 1e6, lastSeen: Date.now(), founded: true, managers: mgrs, active: 'green',
+      ports: { green: { id: 'green', era: era, res: { fish: 0, timber: 0, goods: 0 }, buildings: [], pop: 0, demand: { fish: 1, timber: 1, goods: 1 }, contracts: [], contractSeq: 0 } },
+      network: { xp: 0, level: 1, routes: [] }, hazard: { t: 0, next: 100, phase: 'idle', strikeId: 0, last: null }, crash: null, stats: { storms: 0, shipped: 0 } };
+  }
+  STORE['harbor:sim'] = mgrState(1, { fishing: 0, sales: 0, labour: 0 }); SIM.load();
+  ok('v95 mgr cap: at era 1 the manager cap is 3 (2 + empireEra)', SIM.mgrCap('fishing') === 3);
+  STORE['harbor:sim'] = mgrState(1, { fishing: 3, sales: 0, labour: 0 }); SIM.load();
+  ok('v95 mgr cap: a manager at its era cap cannot be bought further even with money', SIM.mgrCap('fishing') === 3 && SIM.canBuyManager('fishing') === false);
+  ok('v95 mgr cap: managerView exposes the era cap for the UI', SIM.state().managers.fishing.cap === 3 && SIM.state().managers.fishing.max === 10);
+  STORE['harbor:sim'] = mgrState(6, { fishing: 3, sales: 0, labour: 0 }); SIM.load();
+  ok('v95 mgr cap: advancing the era raises the cap (era 6 -> cap 8) and re-opens buying', SIM.mgrCap('fishing') === 8 && SIM.canBuyManager('fishing') === true);
+  STORE['harbor:sim'] = mgrState(20, { fishing: 9, sales: 0, labour: 0 }); SIM.load();
+  ok('v95 mgr cap: the era cap never exceeds the absolute max (10)', SIM.mgrCap('fishing') === 10);
 })();
 
 console.log((fail === 0 ? 'ALL PASS' : 'FAILED') + ' — ' + pass + ' passed, ' + fail + ' failed');

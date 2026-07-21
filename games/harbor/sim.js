@@ -485,7 +485,10 @@
 
   // ---- managers (empire-wide multiplier upgrades; a real money sink) ----
   function managerCost(kind) { var m = MANAGERS[kind]; if (!m) return Infinity; return Math.round(m.cost * Math.pow(m.costMul, (S.managers[kind] || 0))); }
-  function canBuyManager(kind) { var m = MANAGERS[kind]; return !!m && (S.managers[kind] || 0) < m.max && S.money >= managerCost(kind); }
+  // v95: managers are level-capped per age, just like buildings (v90) — you can only raise staff as far
+  // as your most advanced harbour's era allows (base 2 + empireEra), never past the absolute max.
+  function mgrCap(kind) { var m = MANAGERS[kind]; if (!m) return 0; return Math.min(m.max, 2 + empireEra()); }
+  function canBuyManager(kind) { var m = MANAGERS[kind]; return !!m && (S.managers[kind] || 0) < mgrCap(kind) && S.money >= managerCost(kind); }
   function buyManager(kind) { if (!canBuyManager(kind)) return false; S.money -= managerCost(kind); S.managers[kind] = (S.managers[kind] || 0) + 1; save(); return true; }
   function mgrMul(kind) { var m = MANAGERS[kind]; return 1 + m.per * (S.managers[kind] || 0); }
 
@@ -1050,7 +1053,7 @@
   // ---- views ----
   function managerView() {
     var out = {};
-    for (var k in MANAGERS) { var m = MANAGERS[k]; out[k] = { name: m.name, desc: m.desc, lvl: (S.managers[k] || 0), max: m.max, cost: managerCost(k), can: canBuyManager(k) }; }
+    for (var k in MANAGERS) { var m = MANAGERS[k]; out[k] = { name: m.name, desc: m.desc, lvl: (S.managers[k] || 0), max: m.max, cap: mgrCap(k), cost: managerCost(k), can: canBuyManager(k) }; }
     return out;
   }
   function portList() {
@@ -1126,7 +1129,7 @@
     setPace: setPace, pace: function () { return PACE; },           // Phase 15b: gap-roll multiplier (device pref, not saved)
     setDifficulty: setDifficulty, difficulty: difficultyView,       // Easy→Extreme: income/gap/severity/raid/offline/prestige scaling (device pref, not saved)
     prestigeGain: prestigeGain, canPrestige: canPrestige, resetRun: resetRun,
-    buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost,
+    buyManager: buyManager, canBuyManager: canBuyManager, managerCost: managerCost, mgrCap: mgrCap,
     fulfillContract: fulfillContract, canFulfill: canFulfill, rerollContract: rerollContract,
     addRoute: addRoute, canAddRoute: canAddRoute, hasRoute: function (a, b, res) { return S && S.network ? hasRoute(a, b, res) : false; }, upgradeRoute: upgradeRoute, removeRoute: removeRoute, routeCost: routeCost, network: networkView,
     repair: repair, canRepair: canRepair, repairCost: function (i) { return CUR && CUR.buildings[i] ? repairCost(CUR.buildings[i]) : 0; },

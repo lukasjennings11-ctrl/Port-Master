@@ -2599,7 +2599,7 @@
   }
 
   // ---- economy HUD + port management ----
-  var econHud = null, hudMoney = null, hudFish = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
+  var econHud = null, hudMoney = null, hudFish = null, hudTimber = null, hudGoods = null, hudCargo = null, hudPop = null, advBtn = null, managePanel = null, manageOpen = false;
   var setBtn = null, settingsPanel = null, settingsOpen = false, resetArm = false;
   var expBtn = null, expPanel = null, expOpen = false;
   var registryBtn = null, registryPanel = null, registryOpen = false;   // Phase 17b: fleet registry
@@ -3934,7 +3934,17 @@
   function buildEconUI() {
     econHud = document.createElement('div'); econHud.id = 'econhud';
     function chip(id, icon) { var s = document.createElement('span'); s.className = 'estat'; s.innerHTML = '<b>' + icon + '</b><i id="' + id + '">0</i>'; econHud.appendChild(s); return s.querySelector('i'); }
-    hudMoney = chip('e-money', '£'); hudFish = chip('e-fish', 'Fish'); hudPop = chip('e-pop', 'Crew');
+    hudMoney = chip('e-money', '£');
+    // v95: cargo pill — show fish · timber · goods together so the top bar reflects ALL cargo, not just
+    // fish (kept compact as one pill so it fits a phone next to £ and Crew).
+    hudCargo = document.createElement('span'); hudCargo.className = 'estat cargo';
+    hudCargo.innerHTML = '<b>Cargo</b><i class="cg-row">' +
+      '<span class="cg"><em>🐟</em><span id="e-fish">0</span></span>' +
+      '<span class="cg"><em>🪵</em><span id="e-timber">0</span></span>' +
+      '<span class="cg"><em>📦</em><span id="e-goods">0</span></span></i>';
+    econHud.appendChild(hudCargo);
+    hudFish = hudCargo.querySelector('#e-fish'); hudTimber = hudCargo.querySelector('#e-timber'); hudGoods = hudCargo.querySelector('#e-goods');
+    hudPop = chip('e-pop', 'Crew');
     var eraPill = document.getElementById('era-pill'); if (eraPill) eraPill.addEventListener('click', toggleTimeline);   // Phase 17a: era pill opens the age timeline
     muteBtn = document.createElement('button'); muteBtn.id = 'mutebtn'; muteBtn.textContent = muted ? '♪̸' : '♪'; muteBtn.title = 'Sound'; muteBtn.classList.toggle('off', muted);
     muteBtn.addEventListener('click', function () { applyMuted(!muted); sfx('tap'); });
@@ -3984,7 +3994,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v94';
+  var BUILD_TAG = 'v95';
 
   // ---- Phase 12b: error capture — a small ring buffer (last 20) of uncaught errors and
   // unhandled promise rejections, persisted write-through to localStorage so a real bug report
@@ -4246,8 +4256,8 @@
     if (chartersCount() >= DOCTRINE_UNLOCK) announceFeature('doctrine', '🧭', 'Doctrines', 'Pick a path in the Legacy panel.');
     pumpAnnounceQueue();   // retry any announce that was deferred while a modal owned input
     var s = SIM.state();
-    hudFish.textContent = fmt(s.res.fish); hudPop.textContent = fmt(s.pop);
-    if (hudFish.parentNode) hudFish.parentNode.classList.toggle('full', s.res.fish >= s.caps.fish * 0.98);  // storage-full nudge
+    hudFish.textContent = fmt(s.res.fish); hudTimber.textContent = fmt(s.res.timber); hudGoods.textContent = fmt(s.res.goods); hudPop.textContent = fmt(s.pop);
+    if (hudCargo) hudCargo.classList.toggle('full', (s.res.fish >= s.caps.fish * 0.98) || (s.res.timber >= s.caps.timber * 0.98) || (s.res.goods >= s.caps.goods * 0.98));  // storage-full nudge (any resource near cap)
     var pill = document.getElementById('era-pill'); if (pill) pill.textContent = s.eraName;
     advBtn.style.display = s.canAdvance ? '' : 'none';
     advBtn.textContent = s.nextEra ? 'Advance → ' + s.nextEra : 'Advance era';
@@ -4464,10 +4474,9 @@
     if (s.contracts && s.contracts.length) {
       html += '<div class="mp-sec">Orders</div><div class="mp-grid">';
       s.contracts.forEach(function (c) {
-        var unit = c.res.charAt(0).toUpperCase() + c.res.slice(1);
         html += '<button class="mp-item order' + (c.can ? ' ready' : ' ghosted') + '" data-order="' + c.id + '"' + (c.can ? '' : ' disabled') + '>' +
           '<span class="mi-n">' + c.who + '</span>' +
-          '<span class="mi-d">' + c.amt + ' ' + unit + ' &middot; ' + c.have + '/' + c.amt + '</span>' +
+          '<span class="mi-d">Ship ' + c.amt + ' ' + c.res + ' &middot; ' + c.have + '/' + c.amt + ' shipped</span>' +
           '<span class="mi-c">' + (c.can ? 'Deliver £' + fmt(c.reward) : '£' + fmt(c.reward)) + '</span></button>';
       });
       html += '</div>';
@@ -4549,11 +4558,15 @@
     if (s.managers) {
       html += '<div class="mp-sec">Managers</div><div class="mp-grid">';
       Object.keys(s.managers).forEach(function (k) {
-        var m = s.managers[k], maxed = m.lvl >= m.max, dis = maxed || !m.can;
-        html += '<button class="mp-item mgr' + (dis ? ' ghosted' : '') + '" data-mgr="' + k + '"' + (dis ? ' disabled' : '') + '>' +
-          '<span class="mi-n">' + m.name + ' <i class="mi-lv">L' + m.lvl + '</i></span>' +
+        // v95: managers are era-capped like buildings — show L / cap, and "Age max" when this age's
+        // cap is reached (advance the era to raise it) vs "MAX" at the absolute ceiling.
+        var m = s.managers[k], cap = (m.cap != null ? m.cap : m.max);
+        var atEraCap = m.lvl >= cap, atAbsMax = m.lvl >= m.max, dis = atEraCap || !m.can;
+        var costCell = atAbsMax ? 'MAX' : (atEraCap ? 'Age max' : (m.can ? '£' + fmt(m.cost) : 'Need £' + fmt(m.cost)));
+        html += '<button class="mp-item mgr' + (dis ? ' ghosted' : '') + (atEraCap && !atAbsMax ? ' maxed' : '') + '" data-mgr="' + k + '"' + (dis ? ' disabled' : '') + '>' +
+          '<span class="mi-n">' + m.name + ' <i class="mi-lv">L' + m.lvl + '/' + cap + '</i></span>' +
           '<span class="mi-d">' + m.desc + '</span>' +
-          '<span class="mi-c">' + (maxed ? 'MAX' : (m.can ? '£' + fmt(m.cost) : 'Need £' + fmt(m.cost))) + '</span></button>';
+          '<span class="mi-c">' + costCell + '</span></button>';
       });
       html += '</div>';
     }

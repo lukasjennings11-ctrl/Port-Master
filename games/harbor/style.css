@@ -170,6 +170,11 @@ button, [role="button"], .mp-item, .chip, .rs-dot, .biomebar-btn, #biomebar > bu
 }
 .estat b { font-size: 9px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .estat i { font-size: 13px; font-weight: 800; color: var(--text); font-style: normal; }
+/* v95: compact cargo pill — fish · timber · goods on one line so all cargo shows in the top bar */
+.estat.cargo { padding: 3px 9px; }
+.estat.cargo .cg-row { display: inline-flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+.estat.cargo .cg { display: inline-flex; align-items: baseline; gap: 2px; }
+.estat.cargo .cg em { font-style: normal; font-size: 11px; }
 /* bottom action bar — the primary buttons live here, thumb-reachable, so the top stays clean */
 #actionbar {
   position: absolute; left: 0; right: 0; bottom: calc(48px + env(safe-area-inset-bottom));
