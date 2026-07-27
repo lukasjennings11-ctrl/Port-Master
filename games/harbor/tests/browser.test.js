@@ -2122,6 +2122,85 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => { var b = document.getElementById('setbtn'); if (b && document.getElementById('settingspanel').classList.contains('show')) b.click(); });
   await sleep(150);
 
+  // ---- v104: INPUT RELIABILITY. The "buttons don't click" bug: updateHUD() re-rendered any open
+  // panel on a timer by replacing its innerHTML, so a button pressed by a real (70-160ms) human press
+  // was destroyed between press and release and the click was silently dropped. Measured on the old
+  // code: 5ms press = 5/8 clicks registered, 130ms = 0/8. Runs in its OWN context so accumulated
+  // state from earlier blocks (open panels, toasts, modals) can't disturb real mouse input. The first
+  // two assertions are SELF-VALIDATING: the guard is toggled off to show the panel really is rebuilt
+  // under a held pointer without it.
+  const inpCtx = await browser.newContext({ viewport: { width: 414, height: 820 } });
+  const inp = await inpCtx.newPage();
+  const inpErrs = [];
+  inp.on('pageerror', e => inpErrs.push(String(e)));
+  inp.on('console', m => { if (m.type() === 'error' && !/vibrate/i.test(m.text())) inpErrs.push(m.text()); });
+  await inp.goto(`http://localhost:${PORT}/games/harbor/?biome=green&nopost-probe&found&era=3`, { waitUntil: 'load' });
+  await inp.waitForFunction(() => window.__harbor && window.__harbor.state().webgl, null, { timeout: 9000 }).catch(() => {});
+  await inp.evaluate(() => { var w = document.querySelector('#welcomemodal .wm-btn'); if (w) w.click(); });
+  await sleep(500);
+
+  async function writesWhileHeld(gate) {
+    await inp.evaluate(() => { var p = document.getElementById('managepanel'); if (!p.classList.contains('show')) document.getElementById('managebtn').click(); });
+    await sleep(400);
+    await inp.evaluate(g => window.__harbor.setClickGate(g), gate);
+    await sleep(250);
+    const bx = await (await inp.$('#managepanel')).boundingBox();
+    await inp.mouse.move(bx.x + bx.width / 2, bx.y + bx.height - 12);   // low in the panel: no button there
+    await inp.mouse.down();
+    await sleep(60);                                                    // let the press settle...
+    const w0 = await inp.evaluate(() => window.__harbor.panelWrites());  // ...THEN sample, so we only count writes made WHILE held
+    await inp.evaluate(() => { window.HARBOR_SIM.raw().money = 0; });   // flips every row to "Need £X" -> the HTML really changes
+    await sleep(1300);                                                   // long enough to span a refresh tick on software rendering
+    const w1 = await inp.evaluate(() => window.__harbor.panelWrites());
+    await inp.mouse.up();
+    await inp.evaluate(() => { window.HARBOR_SIM.raw().money = 5e6; });
+    await sleep(500);
+    return w1 - w0;
+  }
+  const heldOff = await writesWhileHeld(false);
+  const heldOn = await writesWhileHeld(true);
+  ok('v104 clicks: with the guard OFF an open panel IS rebuilt under a held pointer (reproduces the old bug)', heldOff > 0);
+  ok('v104 clicks: with the guard ON the panel is NEVER rebuilt while a pointer is held (the fix)', heldOn === 0);
+  await inp.evaluate(() => window.__harbor.setClickGate(true));
+
+  // a REAL human-speed press on a panel button must actually do something
+  await inp.evaluate(() => { var p = document.getElementById('managepanel'); if (!p.classList.contains('show')) document.getElementById('managebtn').click(); });
+  await sleep(450);
+  let humanClickErr = '';
+  await inp.locator('#mp-close').click({ delay: 130, timeout: 5000 }).catch(e => { humanClickErr = e.message.split('\n')[0]; });
+  await sleep(300);
+  ok('v104 clicks: a human-speed (130ms) press on a panel button registers' + (humanClickErr ? ' [' + humanClickErr + ']' : ''),
+    await inp.evaluate(() => !document.getElementById('managepanel').classList.contains('show')));
+
+  // the panel keeps the player's scroll position across a rebuild (it used to jump to the top 5x/sec)
+  await inp.evaluate(() => { document.getElementById('managebtn').click(); });
+  await sleep(450);
+  const scrollKept = await inp.evaluate(async () => {
+    var p = document.getElementById('managepanel');
+    p.scrollTop = 40; var want = p.scrollTop;
+    window.HARBOR_SIM.raw().money += 98765;
+    await new Promise(r => setTimeout(r, 950));
+    return { want: want, got: p.scrollTop };
+  });
+  ok('v104 panels: scroll position survives a rebuild', scrollKept.want === 0 || scrollKept.got === scrollKept.want);
+  await inp.evaluate(() => { var p = document.getElementById('managepanel'); if (p.classList.contains('show')) document.getElementById('managebtn').click(); });
+  await sleep(250);
+
+  // a pointer released OUTSIDE the frame (the portal-iframe case) must not leave a stuck gesture —
+  // that used to pan the camera with no button held and fake a second finger on the next press.
+  const gbox104 = await (await inp.$('#game')).boundingBox();
+  await inp.mouse.move(gbox104.x + gbox104.width / 2, gbox104.y + gbox104.height / 2);
+  await inp.mouse.down();
+  await inp.mouse.move(gbox104.x + gbox104.width / 2 + 40, gbox104.y + gbox104.height / 2 + 15, { steps: 3 });
+  const stuckBefore = await inp.evaluate(() => window.__harbor.pointers());
+  await inp.evaluate(() => window.dispatchEvent(new Event('blur')));   // focus leaves the iframe
+  await sleep(150);
+  const stuckAfter = await inp.evaluate(() => window.__harbor.pointers());
+  await inp.mouse.up();
+  ok('v104 iframe: a drag registers a pointer, and losing focus releases it (no stuck gesture)', stuckBefore >= 1 && stuckAfter === 0);
+  ok('v104: the input-reliability pass produced zero console/page errors', inpErrs.length === 0);
+  await inpCtx.close();
+
   // live ticking after everything — no late errors
   await sleep(2000);
   ok('stability: zero console/page errors', errs.length === 0);

@@ -1630,8 +1630,62 @@
     C.txT = clamp(C.txT + ddx, -PANX, PANX); C.tzT = clamp(C.tzT + ddz, PANZ0, PANZ1);
     C.vTx = ddx; C.vTz = ddz;
   }
+  // v104: INPUT RELIABILITY. A `click` only fires when the press AND the release resolve to the SAME
+  // element. updateHUD() re-renders any open panel on a timer by replacing its innerHTML — if that
+  // lands between a player's press and release, the button is destroyed and the click is silently
+  // dropped. Measured on the old code: 5ms press = 5/8 clicks registered, 130ms (a real human press)
+  // = 0/8. That is THE "buttons don't work" bug. Fix: never rebuild a panel while a pointer is down,
+  // nor for a short grace period after it lifts (the click is dispatched on release).
+  var uiBusy = false, uiBusyAt = 0, panelsDirty = false, panelWriteCount = 0;
+  var UI_GRACE_MS = 350;
+  var uiGateOn = true;   // test-only switch (see __harbor.setClickGate) — proves the fix A/B
+  function uiBusyNow() { return uiGateOn && (uiBusy || (Date.now() - uiBusyAt) < UI_GRACE_MS); }
+  try {
+    // capture+passive: observes every pointer anywhere without altering dispatch in any way
+    document.addEventListener('pointerdown', function () { uiBusy = true; uiBusyAt = Date.now(); }, { capture: true, passive: true });
+    var uiRelease = function () {
+      uiBusy = false; uiBusyAt = Date.now();
+      // flush any refresh we deferred, just after the grace window closes (the click has landed by then)
+      setTimeout(function () { if (panelsDirty && !uiBusyNow()) { try { refreshOpenPanels(); } catch (e) {} } }, UI_GRACE_MS + 20);
+    };
+    document.addEventListener('pointerup', uiRelease, { capture: true, passive: true });
+    document.addEventListener('pointercancel', uiRelease, { capture: true, passive: true });
+  } catch (e) {}
+  // v104: write a panel's HTML only when it actually CHANGED (so the live DOM — and its listeners —
+  // survive), and never lose the player's scroll position when we do rewrite it.
+  function setPanelHTML(el, html) {
+    if (!el) return false;
+    if (el.__lastHTML === html) return false;   // identical -> keep the existing buttons alive
+    // HARD BLOCK: never replace a panel's DOM while a pointer is physically down — that is exactly
+    // what destroys the button between press and release and eats the click. This guards EVERY path
+    // (including render calls made directly from event handlers), not just the periodic refresh.
+    // Note it tests the raw `uiBusy` flag, not uiBusyNow(): once the finger lifts, user-initiated
+    // re-renders repaint immediately (no lag after a purchase); only the timer-driven refresh in
+    // refreshOpenPanels waits out the short grace window.
+    if (uiGateOn && uiBusy) { panelsDirty = true; return false; }
+    var st = el.scrollTop;
+    el.innerHTML = html; el.__lastHTML = html; panelWriteCount++;
+    if (st) el.scrollTop = st;
+    return true;
+  }
+
+  // v104: release any stuck gesture. `ptrs` was only ever cleared by a pointerup delivered INSIDE this
+  // document — so a press that ends outside the frame (drag off a portal iframe, an OS gesture, the
+  // tab hiding) left the pointer registered forever: the camera then panned with no button held, and
+  // the next press looked like a second finger (phantom pinch). Called on blur/hide/pointer-leave.
+  function clearGesture() {
+    try {
+      ptrs.clear();
+      pinchPrev = 0; panPrev = null; twistPrev = null; twistAcc = 0;
+      multi = false; moved = false; downPt = null; orbitMode = false;
+      C.vAz = C.vEl = C.vTx = C.vTz = 0;
+    } catch (e) {}
+  }
+
   if (canvas.addEventListener) {
     canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    // a pointer that leaves the document entirely is gone — don't keep dragging with it
+    window.addEventListener('pointerleave', function (e) { if (e.target === document || e.relatedTarget === null) clearGesture(); });
     canvas.addEventListener('pointerdown', function (e) {
       if (window.Juice && !muted) Juice.Audio.unlock();           // unlock WebAudio on first gesture
       if (!muted) startAmbient();                                 // start the harbour soundscape
@@ -1964,8 +2018,13 @@
   document.addEventListener('visibilitychange', function () {
     metricsVisibility(document.hidden);   // Phase 13d: flush/persist accumulated playtime on hide, resume on foreground
     setAway(document.hidden);
+    if (document.hidden) clearGesture();
   });
-  window.addEventListener('blur', function () { setAway(true); });     // switching apps/windows (tab may stay "visible")
+  // v104: focus loss no longer FREEZES the game. Inside a portal iframe (Kongregate) the frame loses
+  // focus constantly — an ad, the parent page, a tap outside — and pausing the economy each time made
+  // the game look broken/unresponsive. Visibility (above) is the honest "player left" signal; blur only
+  // needs to release any stuck gesture.
+  window.addEventListener('blur', function () { clearGesture(); });
   window.addEventListener('focus', function () { if (!document.hidden) setAway(false); });
   function popWorld(wx, wy, wz, text, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.pop.add(s.x, s.y, text, opts); }
   function burstWorld(wx, wy, wz, opts) { if (!FX) return; var s = worldToScreen(wx, wy, wz); if (s) FX.p.burst(s.x, s.y, opts); }
@@ -3121,7 +3180,7 @@
     });
     h += '</div>';
     if (v.used >= v.slots) h += '<div class="ex-note">All ships are at sea — collect a voyage, or grow your empire for more berths.</div>';
-    expPanel.innerHTML = h;
+    if (!setPanelHTML(expPanel, h)) return;   // v104: unchanged -> keep the live buttons (never destroy them mid-click)
     expPanel.querySelector('#ex-close').addEventListener('click', toggleExp);
     expPanel.querySelectorAll('[data-send]').forEach(function (el) { el.addEventListener('click', function () {
       var destId = el.getAttribute('data-send'), destName = null;
@@ -3572,9 +3631,13 @@
     legacyPanel.querySelector('#lg-bal').textContent = '✦ ' + fmt(legacyBal()) + ' Legacy';
     var pres = legacyPanel.querySelector('#lg-prestige');
     var best = (window.Retention ? Retention.best(GAME) : 0) | 0, pc = chartersCount();
-    pres.innerHTML = '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
+    // v104: dirty-checked like the other panels, and its button is bound RIGHT HERE so it can never
+    // be left unbound by the tree's early-return below.
+    if (setPanelHTML(pres, '<div class="lg-pdesc">Cash your empire\'s lifetime earnings into <b>Legacy</b> — a permanent multiplier on every future run.</div>' +
       '<button class="lg-pbtn" id="lg-pbtn"' + (p.can ? '' : ' disabled') + '>' + (p.can ? 'Sign a New Charter  ·  +' + fmt(p.gain) + ' ✦' : 'Reach £' + fmt(p.threshold || 250000) + ' lifetime to prestige') + '</button>' +
-      '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>';
+      '<div class="lg-stats">Charters signed: ' + pc + (best > 0 ? '  ·  Best empire: £' + fmt(best) : '') + '</div>')) {
+      pres.querySelector('#lg-pbtn').addEventListener('click', function () { confirmPrestige(); });
+    }
     var tree = legacyPanel.querySelector('#lg-tree'), html = '';
     // Harbour Pass — the free seasonal reward track
     var ss = seasonGet(), maxAt = PASS_TIERS[PASS_TIERS.length - 1].at;
@@ -3646,8 +3709,7 @@
     html += '<div class="lg-sec">Achievements (' + got + '/' + ACHIEVEMENTS.length + ')</div><div class="lg-achgrid">';
     ACHIEVEMENTS.forEach(function (a) { var has = achOwned(a.id); html += '<div class="lg-ach' + (has ? '' : ' locked') + '">' + (has ? '🏆' : '🔒') + '<span>' + (has ? a.name : '???') + '</span></div>'; });
     html += '</div>';
-    tree.innerHTML = html;
-    pres.querySelector('#lg-pbtn').addEventListener('click', function () { confirmPrestige(); });
+    if (!setPanelHTML(tree, html)) return;   // v104: unchanged -> keep the live buttons (never destroy them mid-click)
     tree.querySelectorAll('[data-leg]').forEach(function (el) { el.addEventListener('click', function () { if (buyLegacy(el.getAttribute('data-leg'))) { sfx('merge'); haptic(16); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
     tree.querySelectorAll('[data-pass]').forEach(function (el) { el.addEventListener('click', function () { if (claimPass(+el.getAttribute('data-pass'))) renderLegacy(); }); });
     tree.querySelectorAll('[data-doct]').forEach(function (el) { el.addEventListener('click', function () { if (pickDoctrine(el.getAttribute('data-doct'))) { sfx('win'); haptic(22); renderLegacy(); updateHUD(); } else sfx('lose'); }); });
@@ -3999,7 +4061,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v103';
+  var BUILD_TAG = 'v104';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
@@ -4158,8 +4220,13 @@
       + (r.charters > 0 ? ', ' + r.charters + ' charter' + (r.charters > 1 ? 's' : '') + ' signed' : '') + '! Can you beat it?';
   }
   function shareScore() {                                            // native share sheet where available; clipboard fallback otherwise
-    var txt = shareText(), url = 'https://ljennings11.itch.io/port-boss', full = txt + ' ' + url;
-    try { if (navigator.share) { navigator.share({ title: 'Port Boss', text: txt, url: url }).catch(function () {}); return 'shared'; } } catch (e) {}
+    // v104: link to WHEREVER the player is actually playing, never a hardcoded portal URL. A literal
+    // hardcoded storefront link in game.js is a rejection risk on competing portals (CrazyGames/Poki/Kongregate
+    // all forbid pointing at a rival host) — and on a portal we share the brag text alone.
+    var txt = shareText(), url = '';
+    try { if (!PORTAL_MODE) url = location.origin + location.pathname; } catch (e) {}
+    var full = url ? (txt + ' ' + url) : txt;
+    try { if (navigator.share) { var payload = { title: 'Port Boss', text: txt }; if (url) payload.url = url; navigator.share(payload).catch(function () {}); return 'shared'; } } catch (e) {}
     try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(full); showHint('📋 Copied — paste it anywhere!'); return 'copied'; } } catch (e) {}
     showHint(full); return 'shown';
   }
@@ -4442,8 +4509,16 @@
       // Phase 17c: the Navy becomes commissionable the same moment the Registry itself does
       // (tier1 needs era>=1, same gate) — announced separately since it's a distinct system (defense, not production).
       if (regShow) announceFeature('navy', '⚓', 'The Navy', 'Commission a navy in the Registry — they defend your harbour and fight off raiders.');
-      if (registryOpen) renderRegistry();
     }
+    // v104: the periodic panel refresh is DEFERRED while the player is pressing (see uiBusyNow) so a
+    // rebuild can never land between their press and release and swallow the click. It flushes the
+    // moment the finger lifts, so live values (prices, affordability, progress) still stay current.
+    refreshOpenPanels();
+  }
+  function refreshOpenPanels() {
+    if (uiBusyNow()) { panelsDirty = true; return; }   // someone is mid-tap — rebuild later
+    panelsDirty = false;
+    if (registryOpen) renderRegistry();
     if (legacyOpen) renderLegacy();
     if (manageOpen) renderManage();
     if (expOpen) renderExp();
@@ -4497,7 +4572,7 @@
       h += '<button class="mp-item reg-buy' + (nghosted ? ' ghosted' : '') + '" data-buy-navy="1"' + (nghosted ? ' disabled' : '') + '>' + nlabel + '</button>';
     }
     h += '</div></div>';
-    registryPanel.innerHTML = h;
+    if (!setPanelHTML(registryPanel, h)) return;   // v104: unchanged -> keep the live buttons (never destroy them mid-click)
     registryPanel.querySelector('#reg-close').addEventListener('click', toggleRegistry);
     registryPanel.querySelectorAll('canvas.reg-portrait').forEach(function (cv) { paintShipPortrait(cv, cv.getAttribute('data-cls')); });
     registryPanel.querySelectorAll('[data-buy]').forEach(function (el) { el.addEventListener('click', function () {
@@ -4715,7 +4790,7 @@
       });
       html += '</div>';
     }
-    managePanel.innerHTML = html;
+    if (!setPanelHTML(managePanel, html)) return;   // v104: unchanged -> keep the live buttons (never destroy them mid-click)
     managePanel.querySelector('#mp-close').addEventListener('click', toggleManage);
     managePanel.querySelectorAll('[data-build]').forEach(function (el) { el.addEventListener('click', function () { var id = el.getAttribute('data-build'); var t = SIM.BT[id]; if (SIM.build(id)) { plopFeedback(t ? t.era + 1 : 1, t ? t.name : 'Built'); triggerTheatre(true); triggerPop(); checkMilestones(); bumpDaily('build'); metricsMilestone('firstBuild'); updateHUD(); renderManage(); } else sfx('lose'); }); });
     managePanel.querySelectorAll('[data-up]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-up'); if (SIM.canUpgrade(i)) { var lv = SIM.port().buildings[i].level; SIM.upgrade(i); plopFeedback(lv + 1, 'Upgraded'); triggerTheatre(false); triggerPop(); bumpDaily('upgrade'); updateHUD(); renderManage(); } else sfx('lose'); }); });
@@ -5159,6 +5234,13 @@
     setTipsEnabled: function (v) { setTipsEnabled(!!v); if (settingsOpen) renderSettings(); return tipsEnabled(); },
     resetTipRateLimit: function () { tipLastShownAt = 0; tipRuleLastShown = {}; },   // test-only: zero the global + per-rule cooldowns
     dismissTip: function () { hideTip(); },
+    setClickGate: function (on) { uiGateOn = !!on; return uiGateOn; },
+    pointers: function () { return ptrs.size; },
+    busy: function () { return { down: uiBusy, gated: uiBusyNow(), dirty: panelsDirty, writes: panelWriteCount }; },   // v104 test-only
+                          // v104 test-only: stuck-gesture detection
+   // v104 test-only: disable to reproduce the pre-fix click-swallow
+    panelWrites: function () { return panelWriteCount; },                 // v104 test-only: how many times an open panel's DOM was replaced
+
     records: function () { return recordsView(); },                  // v97: local personal records (peak empire / age / charters / board)
     shareText: function () { return shareText(); },                  // v97: the one-line brag the Share button sends
     shareScore: function () { return shareScore(); },
