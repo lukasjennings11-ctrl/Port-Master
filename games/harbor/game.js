@@ -2662,6 +2662,7 @@
   var setBtn = null, settingsPanel = null, settingsOpen = false, resetArm = false;
   var expBtn = null, expPanel = null, expOpen = false;
   var registryBtn = null, registryPanel = null, registryOpen = false;   // Phase 17b: fleet registry
+  var netBtn = null;   // v105: Trade Network — hidden until a second harbour exists (a route needs two)
   var timelinePanel = null, timelineStrip = null, timelineOpen = false;   // Phase 17a: age timeline strip
   var SIM = window.HARBOR_SIM || null;
   function simReady() { return !!(SIM && SIM.port && SIM.port()); }   // active world's port exists
@@ -2799,7 +2800,9 @@
       },
       text: function () {
         var uf = firstUnfoundedUnlocked();
-        return uf ? 'Trade routes need a second harbour — you’ve already unlocked ' + wname(uf) + ', so found it (in the Trade Network, tap its dim node), then link them'
+        // v105: the Trade Network button is hidden until a 2nd harbour exists, so this can no longer
+        // point at it — send the player to the world bar (the other founding surface) instead.
+        return uf ? 'Trade routes need a second harbour — you’ve already unlocked ' + wname(uf) + ', so switch to it on the world bar up top and found it'
                   : 'Trade routes need a second harbour — chart Uncharted Waters, found the new coast, then link them';
       } },
     // 2+ harbours founded but never linked into a trade route
@@ -4019,7 +4022,8 @@
     setBtn = document.createElement('button'); setBtn.id = 'setbtn'; setBtn.textContent = '⚙'; setBtn.title = 'Settings';
     setBtn.addEventListener('click', toggleSettings);
     var mBtn = document.createElement('button'); mBtn.id = 'managebtn'; mBtn.textContent = 'Manage port'; mBtn.addEventListener('click', toggleManage);
-    var nBtn = document.createElement('button'); nBtn.id = 'netbtn'; nBtn.textContent = 'Trade network'; nBtn.addEventListener('click', openTrade);
+    // v105: hidden at creation (like legacy/registry/adv) so it can't flash before the first updateHUD
+    netBtn = document.createElement('button'); netBtn.id = 'netbtn'; netBtn.textContent = 'Trade network'; netBtn.style.display = 'none'; netBtn.addEventListener('click', openTrade);
     legacyBtn = document.createElement('button'); legacyBtn.id = 'legacybtn'; legacyBtn.textContent = '✦ Legacy'; legacyBtn.style.display = 'none'; legacyBtn.addEventListener('click', openLegacy);
     crateBtn = document.createElement('button'); crateBtn.id = 'cratebtn'; crateBtn.textContent = '🎁'; crateBtn.style.display = 'none'; crateBtn.addEventListener('click', openCrate);
     expBtn = document.createElement('button'); expBtn.id = 'expbtn'; expBtn.textContent = '⛵ Expeditions'; expBtn.addEventListener('click', toggleExp);
@@ -4030,7 +4034,9 @@
     wrap.appendChild(econHud);
     // bottom action bar: the primary buttons, thumb-reachable, so the top never overflows
     actionBar = document.createElement('div'); actionBar.id = 'actionbar';
-    actionBar.appendChild(advBtn); actionBar.appendChild(nBtn); actionBar.appendChild(expBtn); actionBar.appendChild(registryBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn); actionBar.appendChild(mBtn);
+    // v105: Manage port is the primary action (build & upgrade) so it leads the bar — left-most and
+    // visually larger. The rest follow as slimmer secondaries.
+    actionBar.appendChild(mBtn); actionBar.appendChild(advBtn); actionBar.appendChild(netBtn); actionBar.appendChild(expBtn); actionBar.appendChild(registryBtn); actionBar.appendChild(legacyBtn); actionBar.appendChild(crateBtn);
     wrap.appendChild(actionBar);
 
     // always-visible era progress bar (goal-gradient carrot)
@@ -4061,7 +4067,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v104';
+  var BUILD_TAG = 'v105';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
@@ -4273,7 +4279,7 @@
     h += '<div class="set-help">⚓ Tap the glowing harbour, then <b>Found village</b>.<br>' +
          '🏗️ <b>Manage port</b> to build &amp; upgrade — huts catch fish, cottages house crew, markets sell.<br>' +
          '📈 Fill the <b>era bar</b> (cash + required buildings) to <b>Advance</b> to bigger eras.<br>' +
-         '🚢 <b>Trade network</b> links your ports into routes for passive income.<br>' +
+         '🚢 <b>Trade network</b> links your ports into routes for passive income — it appears once you’ve founded a second harbour.<br>' +
          '⛵ <b>Expeditions</b> send ships on timed voyages — they pay out even while you’re away.<br>' +
          '🧭 <b>Uncharted Waters</b> (in Expeditions) discovers new coasts to found — founding a colony after your first costs a fee.<br>' +
          '🏺 <b>Relics</b> drop from crates &amp; voyages — equip a <b>Loadout</b> in Legacy for permanent perks.<br>' +
@@ -4509,6 +4515,13 @@
       // Phase 17c: the Navy becomes commissionable the same moment the Registry itself does
       // (tier1 needs era>=1, same gate) — announced separately since it's a distinct system (defense, not production).
       if (regShow) announceFeature('navy', '⚓', 'The Navy', 'Commission a navy in the Registry — they defend your harbour and fight off raiders.');
+    }
+    // v105: a trade route needs TWO founded harbours (sim.js canAddRoute), so the button used to sit
+    // there doing nothing for the whole early game. Reveal it the moment a second coast is founded.
+    if (netBtn) {
+      var netShow = tradeFoundedCount() >= 2;
+      netBtn.style.display = netShow ? '' : 'none';
+      if (netShow) announceFeature('trade', '🌐', 'Trade Network', 'Two harbours means trade — open routes between your coasts to ship cargo automatically.');
     }
     // v104: the periodic panel refresh is DEFERRED while the player is pressing (see uiBusyNow) so a
     // rebuild can never land between their press and release and swallow the click. It flushes the

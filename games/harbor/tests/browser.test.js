@@ -56,6 +56,39 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await page.evaluate(() => { var b = document.querySelector('#welcomemodal .wm-btn'); if (b) b.click(); window.__harbor.autoFound(); });
   ok('found: port founded', await page.evaluate(() => !!window.HARBOR_SIM.raw().founded));
 
+  // ---- v105: the action bar leads with Manage port, and Trade network stays hidden until it works ----
+  // "Manage port" is the primary action, so it must be the LEFT-most (= first) pill and visibly the
+  // biggest; every pill still has to clear the 44px touch floor from v88.
+  await page.waitForFunction(() => document.getElementById('actionbar').classList.contains('show'), null, { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => window.__harbor.forceHUD());
+  const bar105 = await page.evaluate(() => {
+    var bar = document.getElementById('actionbar');
+    var vis = [].slice.call(bar.children).filter(function (b) { return b.style.display !== 'none'; });
+    var mb = document.getElementById('managebtn'), sec = document.getElementById('expbtn');
+    return {
+      barShown: bar.classList.contains('show'),
+      firstId: bar.firstElementChild ? bar.firstElementChild.id : '',
+      firstVisibleId: vis.length ? vis[0].id : '',
+      short: vis.map(function (b) { return Math.round(b.getBoundingClientRect().height); }).filter(function (h) { return h > 0 && h < 44; }).length,
+      mgrH: Math.round(mb.getBoundingClientRect().height),
+      secH: Math.round(sec.getBoundingClientRect().height),
+      mgrFont: parseFloat(getComputedStyle(mb).fontSize),
+      secFont: parseFloat(getComputedStyle(sec).fontSize)
+    };
+  });
+  ok('v105 bar: "Manage port" is the first (left-most) action-bar button',
+    bar105.firstId === 'managebtn' && bar105.firstVisibleId === 'managebtn');
+  ok('v105 bar: Manage port is bigger than the secondary pills (taller + larger type)',
+    bar105.barShown && bar105.mgrH > bar105.secH && bar105.mgrFont > bar105.secFont);
+  ok('v105 bar: every visible action-bar button still clears the 44px touch floor',
+    bar105.barShown && bar105.short === 0 && bar105.secH >= 44);
+  const net1 = await page.evaluate(() => ({
+    ports: Object.keys(window.HARBOR_SIM.raw().ports || {}).length,
+    hidden: document.getElementById('netbtn').style.display === 'none'
+  }));
+  ok('v105 trade gate: "Trade network" is HIDDEN with a single founded harbour (a route needs two)',
+    net1.ports === 1 && net1.hidden === true);
+
   // Phase 15a: trade-network guidance — first playtest feedback was "I can't set up a trade
   // network, I can only click on one city": with exactly 1 founded harbour (still true right
   // after autoFound, era 0) the trade map must explain why, not stay silent.
@@ -76,6 +109,10 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(120);
   const rt1 = await page.evaluate(() => window.__harbor.tradeState());
   ok('v84 trade: guide card hides once 2 harbours are founded', rt1.founded === 2 && rt1.guide === false);
+  // v105: the same second harbour is what REVEALS the Trade network button
+  await page.evaluate(() => window.__harbor.forceHUD());
+  ok('v105 trade gate: founding a second harbour REVEALS the "Trade network" button',
+    await page.evaluate(() => document.getElementById('netbtn').style.display !== 'none'));
   // tap green then tropical → the route builder opens (not a silent no-op)
   await page.evaluate(() => { window.__harbor.tradeTapNode('green'); window.__harbor.tradeTapNode('tropical'); });
   const rt2 = await page.evaluate(() => window.__harbor.tradeState());
@@ -2140,6 +2177,9 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
   await sleep(500);
 
   async function writesWhileHeld(gate) {
+    // seed cash FIRST so the rows render affordable — otherwise "money = 0" below might not change a
+    // single rendered row and the guard-OFF control would measure zero writes for the wrong reason
+    await inp.evaluate(() => { window.HARBOR_SIM.raw().money = 5e6; });
     await inp.evaluate(() => { var p = document.getElementById('managepanel'); if (!p.classList.contains('show')) document.getElementById('managebtn').click(); });
     await sleep(400);
     await inp.evaluate(g => window.__harbor.setClickGate(g), gate);
@@ -2150,7 +2190,11 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     await sleep(60);                                                    // let the press settle...
     const w0 = await inp.evaluate(() => window.__harbor.panelWrites());  // ...THEN sample, so we only count writes made WHILE held
     await inp.evaluate(() => { window.HARBOR_SIM.raw().money = 0; });   // flips every row to "Need £X" -> the HTML really changes
-    await sleep(1300);                                                   // long enough to span a refresh tick on software rendering
+    // drive the refresh path directly rather than hoping a natural tick lands inside the hold: under
+    // software rendering with the other test page still churning, the frame rate is not something to
+    // bet an assertion on. forceHUD() -> updateHUD() -> refreshOpenPanels() is the exact path the
+    // guard protects, so both directions stay honest and neither depends on timing luck.
+    for (var k = 0; k < 4; k++) { await inp.evaluate(() => window.__harbor.forceHUD()); await sleep(320); }
     const w1 = await inp.evaluate(() => window.__harbor.panelWrites());
     await inp.mouse.up();
     await inp.evaluate(() => { window.HARBOR_SIM.raw().money = 5e6; });
