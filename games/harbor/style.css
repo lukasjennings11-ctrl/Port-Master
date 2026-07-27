@@ -524,6 +524,12 @@ button, [role="button"], .mp-item, .chip, .rs-dot, .biomebar-btn, #biomebar > bu
 .mp-item:disabled { opacity: .42; cursor: default; }
 .mp-item .mi-n { font-size: 10.5px; font-weight: 700; }
 .mp-item .mi-c { font-size: 10px; font-weight: 800; color: var(--brass); }
+/* v106: the per-type copy count ("3/7") sits next to the name so the ceiling is legible BEFORE you
+   hit it — same convention as the manager cards. `maxed` = this type is at its own cap, which is a
+   different (and permanent-for-this-era) state from the shared ground pool being full. */
+.mp-item .mi-cap { font-size: 9px; font-weight: 800; color: var(--muted); opacity: .9; }
+.mp-item.maxed .mi-c { color: var(--muted); }
+.mp-item.maxed .mi-cap { color: var(--teal); opacity: 1; }
 /* managers — span both columns, room for a description line */
 .mp-item.mgr { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: center; background: rgba(214,178,94,.10); border-color: rgba(214,178,94,.28); }
 .mp-item.mgr .mi-n { flex: 1; }

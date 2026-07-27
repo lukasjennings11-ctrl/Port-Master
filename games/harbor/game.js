@@ -2727,6 +2727,21 @@
     return best;
   }
 
+  // v106: names of the buildings the NEXT advance still needs copies of. Empty means the gate's
+  // building side is satisfied and money/upgrades are the only thing left — which is what lets the
+  // capacity tip below tell the truth instead of always blaming earnings.
+  function eraShortNames() {
+    var out = [];
+    try {
+      var ai = SIM && SIM.advanceInfo && SIM.advanceInfo();
+      if (ai && ai.builds) for (var i = 0; i < ai.builds.length; i++) {
+        var ty = ai.builds[i].type;
+        if (SIM.eraNeedShort(ty) > 0) out.push(SIM.BT[ty] ? SIM.BT[ty].name : ty);
+      }
+    } catch (e) {}
+    return out;
+  }
+
   var idleGoldSince = 0;   // sustained-state tracker for "idleGold" — resets the instant the condition drops, so a
                             // momentary cash spike right after a big sale doesn't trip it; only a genuine stretch of
                             // sitting on 5x+ the cheapest upgrade (~20s) does.
@@ -2766,9 +2781,15 @@
     { id: 'eraReady', cooldown: 240,
       when: function (s) { return !!s.canAdvance; },
       text: 'Your port is ready — tap Advance to reach the next era' },
+    // v106: full ground splits into two very different situations, and blaming earnings for both is
+    // what hid the old soft-lock. If the next gate still wants a building you don't own, money is not
+    // the blocker — name the building (it stays buildable at a full pool, see eraNeedShort in sim.js).
+    { id: 'portNeedsBuild', cooldown: 240,
+      when: function (s) { return !!(s.portFounded && s.slotCap > 0 && s.slotsUsed >= s.slotCap && !s.canAdvance && eraShortNames().length); },
+      text: function () { var n = eraShortNames(); return 'Ground is full, but ' + n.join(' & ') + (n.length > 1 ? ' are' : ' is') + ' still needed to advance — there’s always room for ' + (n.length > 1 ? 'them' : 'it'); } },
     // no room left for more buildings, and the era-up that would raise the ceiling isn't affordable yet
     { id: 'portCapped', cooldown: 240,
-      when: function (s) { return !!(s.portFounded && s.slotCap > 0 && s.slotsUsed >= s.slotCap && !s.canAdvance); },
+      when: function (s) { return !!(s.portFounded && s.slotCap > 0 && s.slotsUsed >= s.slotCap && !s.canAdvance && !eraShortNames().length); },
       text: 'Port at capacity — grow your earnings to advance the era' },
     // a voyage slot sits empty and at least one destination is affordable right now
     { id: 'voyageIdle', cooldown: 240,
@@ -4067,7 +4088,7 @@
     updateHUD();
   }
 
-  var BUILD_TAG = 'v105';
+  var BUILD_TAG = 'v106';
   // v97: developer tip-jar link, shown in Settings ONLY where external links are allowed — our own
   // site / itch / PWA. It is hidden on the CrazyGames/Poki portals (they ban external links) and in
   // the native app (Apple/Google require in-app purchase for developer tips, not an outbound link).
@@ -4731,14 +4752,39 @@
     // Phase 15c: once the port's non-defense slots are full, explain why rather than just greying
     // every row out — defenses (Sea Wall/Lighthouse) keep their own separate caps, so this only
     // fires when the SHARED slot pool (not a per-type cap) is what's blocking new builds.
-    if (atCap) html += '<div class="mp-teaser mp-full">⛴ Port at capacity — advance the era for more ground</div>';
+    // v106: when the pool is full, say what is ACTUALLY blocking the next age. This used to state
+    // "advance the era for more ground" unconditionally, which was wrong in the one case that
+    // mattered: if the next gate still wants a building you don't own, money was never the blocker —
+    // and before v106 that state was an unrecoverable soft-lock. It's now always escapable (the
+    // required type is exempt from the pool), so name it and point at it.
+    if (atCap) {
+      var stillNeed = [];
+      try {
+        var ai = SIM.advanceInfo && SIM.advanceInfo();
+        if (ai && ai.builds) for (var q = 0; q < ai.builds.length; q++) {
+          if (SIM.eraNeedShort && SIM.eraNeedShort(ai.builds[q].type) > 0) stillNeed.push(BT[ai.builds[q].type].name);
+        }
+      } catch (e) {}
+      html += stillNeed.length
+        ? '<div class="mp-teaser mp-full">⛴ Ground is full — but ' + stillNeed.join(' &amp; ') + (stillNeed.length > 1 ? ' are' : ' is') + ' still needed to advance, so there’s always room for ' + (stillNeed.length > 1 ? 'them' : 'it') + '</div>'
+        : '<div class="mp-teaser mp-full">⛴ Port at capacity — advance the era for more ground</div>';
+    }
     html += '<div class="mp-grid">';
     Object.keys(BT).forEach(function (id) {
       var t = BT[id]; if (s.era < t.era) return;                    // hide future-era types
       if (SIM.blocked && SIM.blocked(id)) return;                   // hide buildings this world can't run (e.g. desert sawmill)
       var cost = SIM.buildCost(id), can = SIM.canBuild(id);
-      var full = !can && t.cat !== 'defense' && atCap;               // slot-capped, not just unaffordable
-      html += '<button class="mp-item' + (can ? '' : ' ghosted') + '" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name + '</span><span class="mi-c">' + (can ? '£' + fmt(cost) : (full ? 'Full' : 'Need £' + fmt(cost))) + '</span></button>';
+      // v106: two DIFFERENT ceilings can block a row, and conflating them is what made the old
+      // "Full" label misleading. maxed = this type is at its own per-era copy cap; full = the shared
+      // ground pool is out of room. Show the per-type count on every row so the limit is legible
+      // before you hit it — same convention as the manager cards (v95).
+      var have = SIM.countOf ? SIM.countOf(id) : 0, kindCap = SIM.bmax ? SIM.bmax(id) : 0;
+      var maxed = !can && kindCap > 0 && have >= kindCap;
+      var full = !can && !maxed && t.cat !== 'defense' && atCap;      // slot-capped, not just unaffordable
+      var lbl = can ? '£' + fmt(cost) : (maxed ? 'Max' : (full ? 'Full' : 'Need £' + fmt(cost)));
+      html += '<button class="mp-item' + (can ? '' : ' ghosted') + (maxed ? ' maxed' : '') + '" data-build="' + id + '"' + (can ? '' : ' disabled') + '><span class="mi-n">' + t.name +
+        (kindCap > 0 ? ' <span class="mi-cap">' + have + '/' + kindCap + '</span>' : '') +
+        '</span><span class="mi-c">' + lbl + '</span></button>';
     });
     html += '</div>';
     // Phase 15a: buildings are correctly hidden until their era arrives (keeps the grid readable),

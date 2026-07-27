@@ -461,13 +461,19 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
 
   // Building slots: the Manage header shows "Buildings X/Y", and once full, new-building rows
   // ghost with "Full" (not "Need £") behind a port-at-capacity explainer.
+  // v106: run this at era 2, where all THREE row states are observable at once — "Max" (this type is
+  // at its own per-era copy cap), "Full" (the shared ground pool is out of room), and still-buildable
+  // (a type the next advance requires, which is exempt from the pool so a run can never strand).
+  // Filling with one type no longer works: that's exactly what the per-type cap now prevents.
   await page.evaluate(() => {
     var S = window.HARBOR_SIM;
     S.setActive('green'); window.__harbor.setBiome('green');
-    S.setEra(0);
+    S.setEra(2);
     var p = S.port('green'); if (p) p.buildings.length = 0;
-    S.raw().money = 1e7;
-    for (var i = 0; i < 20; i++) { if (S.canBuild('fishing_hut')) S.build('fishing_hut'); }
+    S.raw().money = 1e9;
+    // era2: 16 slots, per-type cap 6. Fill with types the era2 gate does NOT name (it wants
+    // warehouse + market) so the exemption stays out of the way and the pool itself is what fills.
+    ['fishing_hut', 'jetty', 'cottage'].forEach(function (t) { for (var i = 0; i < 20; i++) if (S.canBuild(t)) S.build(t); });
     document.getElementById('managebtn').click();
   });
   await sleep(150);
@@ -476,12 +482,33 @@ const IGNORE_CONSOLE_ERR = /404|favicon|Blocked call to navigator\.vibrate/;
     var head = document.querySelector('#managepanel .mp-slots');
     var full = document.querySelector('#managepanel .mp-teaser.mp-full');
     var rows = Array.from(document.querySelectorAll('#managepanel .mp-item.ghosted')).map(r => r.textContent);
-    return { cap: S.slotCap(), used: S.slotsUsed('green'), headText: head ? head.textContent : null, fullShown: !!full, hasFullRow: rows.some(t => /Full/.test(t)) };
+    var caps = Array.from(document.querySelectorAll('#managepanel .mp-item .mi-cap')).map(e => e.textContent);
+    return {
+      cap: S.slotCap(), used: S.slotsUsed('green'), headText: head ? head.textContent : null,
+      fullShown: !!full, fullText: full ? full.textContent : '',
+      hasFullRow: rows.some(t => /Full/.test(t)), hasMaxRow: rows.some(t => /Max/.test(t)),
+      caps: caps, atCapCount: caps.filter(t => /^(\d+)\/\1$/.test(t)).length,
+      warehouseBuildable: S.canBuild('warehouse'), marketBuildable: S.canBuild('market'),
+      sawmillBuildable: S.canBuild('sawmill')
+    };
   });
   ok('15c slots: Manage header shows "Buildings X/Y" matching slotCap()/slotsUsed()',
     slotsUI.headText === ('Buildings ' + slotsUI.used + '/' + slotsUI.cap));
   ok('15c slots: port-at-capacity explainer shown + a ghosted row reads "Full" once slot-capped',
     slotsUI.used >= slotsUI.cap && slotsUI.fullShown && slotsUI.hasFullRow);
+  // 16 slots / cap 6 per type => fishing_hut 6/6, jetty 6/6, cottage 4/6: two rows sit at their cap
+  ok('v106 caps: every build row shows its per-type count (e.g. "6/6")',
+    slotsUI.caps.length >= 6 && slotsUI.atCapCount >= 2);
+  ok('v106 caps: a type at its own per-era copy cap reads "Max", distinct from the pool being "Full"',
+    slotsUI.hasMaxRow && slotsUI.hasFullRow);
+  ok('v106 no-soft-lock: at a FULL pool the era-2 gate buildings stay buildable while an unrequired type does not',
+    slotsUI.warehouseBuildable === true && slotsUI.marketBuildable === true && slotsUI.sawmillBuildable === false);
+  ok('v106 no-soft-lock: the capacity explainer names the still-needed building instead of blaming earnings',
+    /still needed to advance/i.test(slotsUI.fullText) && /Warehouse/.test(slotsUI.fullText) && /Market/.test(slotsUI.fullText));
+  // back to era 0 for the v90 checklist assertions below, which read this same open panel and expect
+  // the era-0 level cap ("at Lv 2" / "L1/2"). The buildings stay (grandfathered over the era-0 pool).
+  await page.evaluate(() => { window.HARBOR_SIM.setEra(0); window.__harbor.forceHUD(); });
+  await sleep(150);
   // v90: the "Next age" requirement checklist + per-era level cap shown in the still-open panel
   const v90ui = await page.evaluate(() => {
     var req = document.querySelector('#managepanel .mp-req');

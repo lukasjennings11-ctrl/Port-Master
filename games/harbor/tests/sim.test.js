@@ -284,6 +284,8 @@ function buildSet(list) {
 // run applies a FULL defaults object first (metaWith) — otherwise a previous section's META leaks in.
 var FULL_META = { prodMul: 1, sellMul: 1, costMul: 1, startMoney: 0, offlineHours: 8, hazardResist: 0, routeMul: 1, voyageSpeed: 1, voyageSlots: 0, contractSlots: 0, voyageYield: 0 };
 function metaWith(over) { var m = {}, k; for (k in FULL_META) m[k] = FULL_META[k]; for (k in (over || {})) m[k] = over[k]; return m; }
+// v106: every soft-lock any autoplay run walks into, recorded rather than swallowed (see pushAdvance).
+var softLocks = [];
 
 function autoplay(cfg) {
   var steps = cfg.steps || 180;                                     // 180 × 30s = 90 sim-minutes
@@ -315,6 +317,14 @@ function autoplay(cfg) {
     var B = SIM.port('green').buildings;
     for (var i = 0; i < B.length; i++) if (unmet[B[i].type] && SIM.canUpgrade(i)) { SIM.upgrade(i); return true; }
     for (var t in unmet) if (SIM.canBuild(t)) { SIM.build(t); return true; }   // need MORE copies of a required type
+    // v106: this used to return false silently, which is exactly how the era-advance soft-lock hid
+    // for ~10 versions — a stranded run just stopped advancing and only the loose balance floors
+    // could ever notice. If the money gate is met and a required building is unbuildable AND
+    // un-upgradable with the full purse in hand, the run is stuck: record it so a test can fail on it.
+    for (var t2 in unmet) if (!SIM.canBuild(t2) && SIM.eraNeedShort(t2) > 0) {
+      softLocks.push('era ' + SIM.raw().era + ': needs ' + t2 + ' (own ' + SIM.countOf(t2) + ') but canBuild=false at ' +
+        SIM.slotsUsed('green') + '/' + SIM.slotCap() + ' slots with £' + Math.round(SIM.raw().money));
+    }
     return false;
   }
   var evIds = ['goldrush', 'festival', 'castaway', 'raid', 'gamble', 'commission', 'smuggler'];
@@ -410,6 +420,10 @@ function autoplay(cfg) {
   // catch the fleet multiplier silently regressing to a no-op, comfortably below the ≈187k measured
   // value for seed/RNG headroom.
   ok('17b vanilla: prestige floor — lifetime ≥ 150k after 90 sim-min (fleet-registry policy active)', van.lifetime >= 150000);
+  // v106: no autoplay run may ever reach a state where the money gate is met but a required building
+  // is unbuildable. Before v106 this fired constantly and nothing noticed (pushAdvance returned false
+  // and the run just quietly stopped climbing).
+  ok('v106: no autoplay run hit an era-advance soft-lock' + (softLocks.length ? ' — ' + softLocks[0] : ''), softLocks.length === 0);
 
   // Doctrine sanity: bonuses matter but never break the curve. Phase 15c recalibration: once a hard
   // building-count cap removes the "just build more" release valve, a sales/contract-multiplier
@@ -535,22 +549,78 @@ function autoplay(cfg) {
   SIM.setPace(1); SIM.__setRng(mulberry32(31415)); SIM.newGame(); SIM.foundPort('green');
   var S15c = SIM.raw(); S15c.money = 1e7;
   ok('slots: era0 cap is 8 (8 + 4×0)', SIM.slotCap() === 8);
+  // v106: a per-TYPE ceiling now applies too (4 + era), so one type can no longer eat the whole pool.
+  ok('slots: era0 per-type cap is 4 (4 + 0), under fishing_hut\'s own max of 12', SIM.bmax('fishing_hut') === 4);
   for (var i = 0; i < 20; i++) { if (SIM.canBuild('fishing_hut')) SIM.build('fishing_hut'); }
-  ok('slots: build stops exactly at the cap (8), well below fishing_hut\'s own max (12)', SIM.port('green').buildings.length === 8);
-  ok('slots: slotsUsed() reports the same count', SIM.slotsUsed('green') === 8);
-  ok('slots: canBuild refuses ANY further non-defense type once full', SIM.canBuild('cottage') === false && SIM.canBuild('fishing_hut') === false);
+  ok('slots: one type stops at its own per-type cap (4), not at the 8-slot pool', SIM.countOf('fishing_hut') === 4 && SIM.slotsUsed('green') === 4);
+  // fill the remaining 4 slots with a type the era0 gate does NOT ask for (it needs fishing_hut+cottage),
+  // so the v106 required-building exemption stays out of the way and we measure the pool itself
+  for (var i2 = 0; i2 < 20; i2++) { if (SIM.canBuild('jetty')) SIM.build('jetty'); }
+  ok('slots: mixing types fills the pool exactly to the cap (8)', SIM.slotsUsed('green') === 8);
+  ok('slots: canBuild refuses a non-required type once full', SIM.canBuild('jetty') === false && SIM.canBuild('fishing_hut') === false);
+  // v106: ...but a building the NEXT ADVANCE still needs is exempt, so a full port is never stranded
+  ok('v106 slots: a still-needed required type IS buildable at a full pool (no soft-lock)', SIM.canBuild('cottage') === true);
+  SIM.build('cottage');
+  ok('v106 slots: the exemption is exactly as wide as the gate — 1 cottage owned, 1 needed, now blocked',
+    SIM.eraNeedShort('cottage') === 0 && SIM.canBuild('cottage') === false && SIM.slotsUsed('green') === 9);
 
   SIM.setEra(1);                                     // cap grows to 8+4=12 — room again
   ok('slots: canBuild allowed again after an era-up raises the cap', SIM.canBuild('cottage') === true);
   SIM.build('cottage');
-  ok('slots: slotsUsed grew by exactly one', SIM.slotsUsed('green') === 9);
+  ok('slots: slotsUsed grew by exactly one', SIM.slotsUsed('green') === 10);
 
   // fill the rest of the era1 cap, then confirm a defense building is exempt from the aggregate
   for (var j = 0; j < 20; j++) { if (SIM.canBuild('cottage')) SIM.build('cottage'); }
-  ok('slots: port sits at the era1 cap (12)', SIM.slotsUsed('green') === 12 && SIM.canBuild('cottage') === false);
+  for (var j2 = 0; j2 < 20; j2++) { if (SIM.canBuild('warehouse')) SIM.build('warehouse'); }
+  ok('slots: port sits at the era1 cap (12)', SIM.slotsUsed('green') === 12 && SIM.canBuild('warehouse') === false);
   ok('slots: a defense building is exempt from the aggregate cap', SIM.canBuild('seawall') === true);
   SIM.build('seawall');
   ok('slots: building a defense does not count against the aggregate', SIM.slotsUsed('green') === 12);
+})();
+
+// ---------------------------------------------------------------- v106: the era-advance soft-lock
+// The 15c slot cap and the v90 "advancing needs these named buildings MAXED" gate shipped
+// independently and deadlocked runs for good: fill every slot with types the next gate doesn't ask
+// for and the required building became unbuildable FOREVER — there is no demolish, damaged buildings
+// keep their slot, and neither exit helps (prestige is a full wipe; a fresh era-0 colony can't lift
+// empireEra(), which is the max over ports). Reproduced on all 7 curated eras with infinite money,
+// everything maxed and 200s ticked. These assert the escape hatch on every single gate.
+(function advanceSoftLock() {
+  var CASH = 1e15;
+  function stuckThenEscape(era) {
+    SIM.setPace(1); SIM.__setRng(mulberry32(9090)); SIM.newGame(); SIM.foundPort('green');
+    var R = SIM.raw(); R.money = CASH; SIM.setEra(era); R.money = CASH;
+    var need = {}, info = SIM.advanceInfo();
+    for (var b = 0; b < info.builds.length; b++) need[info.builds[b].type] = info.builds[b].need;
+    var reqTypes = Object.keys(need);
+    // cram every slot with types this gate does NOT name (cheapest first)
+    var fill = Object.keys(SIM.BT).filter(function (t) { return SIM.BT[t].cat !== 'defense' && !need[t]; });
+    fill.sort(function (a, b2) { return SIM.BT[a].cost - SIM.BT[b2].cost; });
+    for (var g = 0; g < 400; g++) {
+      R.money = CASH; var placed = false;
+      for (var f = 0; f < fill.length; f++) if (SIM.canBuild(fill[f])) { SIM.build(fill[f]); placed = true; break; }
+      if (!placed) break;
+    }
+    var filled = SIM.slotsUsed('green');
+    // now escape: buy the required types (this is what the pool used to deny forever), then max all
+    for (var g2 = 0; g2 < 200; g2++) {
+      R.money = CASH; var did = false;
+      for (var r = 0; r < reqTypes.length; r++) if (SIM.canBuild(reqTypes[r])) { SIM.build(reqTypes[r]); did = true; }
+      if (!did) break;
+    }
+    for (var u = 0; u < 400; u++) {
+      R.money = CASH; var up = false, n = SIM.port('green').buildings.length;
+      for (var i = 0; i < n; i++) if (SIM.canUpgrade(i)) { SIM.upgrade(i); up = true; }
+      if (!up) break;
+    }
+    R.money = CASH;
+    return { filled: filled, cap: SIM.slotCap(), can: SIM.canAdvance(), advanced: SIM.advanceEra() };
+  }
+  for (var e = 0; e <= 6; e++) {
+    var r2 = stuckThenEscape(e);
+    ok('v106 soft-lock: era ' + e + ' — a pool filled (' + r2.filled + '/' + r2.cap + ') with non-required types can STILL advance',
+      r2.can === true && r2.advanced === true);
+  }
 })();
 
 // ---------------------------------------------------------------- Phase 15c: over-cap grandfathering
@@ -570,10 +640,15 @@ function autoplay(cfg) {
   SIM.load();
   ok('grandfather: over-cap save loads with all 11 buildings intact', SIM.port('green').buildings.length === 11);
   ok('grandfather: slotsUsed reports the true (over-cap) count', SIM.slotsUsed('green') === 11);
-  ok('grandfather: an over-cap port cannot add another non-defense building', SIM.canBuild('cottage') === false);
+  // 'jetty', not 'cottage': the era0 gate names cottage, so v106 deliberately exempts it from the
+  // pool (that exemption is what makes a soft-lock impossible). jetty is unrequired, so it measures
+  // the cap itself.
+  ok('grandfather: an over-cap port cannot add another non-defense building', SIM.canBuild('jetty') === false);
+  ok('v106 grandfather: 11 fishing huts survive a per-type cap of 4 — the ceiling only blocks ADDING',
+    SIM.countOf('fishing_hut') === 11 && SIM.bmax('fishing_hut') === 4 && SIM.canBuild('fishing_hut') === false);
   SIM.raw().money = 1e6;
   SIM.setEra(1);                                     // cap rises to 12 — now above the 11 grandfathered buildings
-  ok('grandfather: raising the cap above the existing count allows building again', SIM.canBuild('cottage') === true);
+  ok('grandfather: raising the cap above the existing count allows building again', SIM.canBuild('jetty') === true);
 })();
 
 // ---------------------------------------------------------------- Phase 15c: colony founding cost

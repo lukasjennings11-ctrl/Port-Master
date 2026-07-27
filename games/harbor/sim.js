@@ -444,9 +444,16 @@
   // jobs scale with level (bigger buildings need more crew) — keeps housing meaningful late game
   function jobs() { var j = 0, B = CUR.buildings; for (var i = 0; i < B.length; i++) { var b = B[i], t = BT[b.type]; if (t.jobs) j += t.jobs * (1 + 0.5 * ((b.level || 1) - 1)); } return j; }
   function lvlMul(t, lvl) { return Math.pow(t.lvlGain, (lvl || 1) - 1); }
-  // economic buildings are effectively uncapped PER TYPE (geometric cost self-limits, and upgrade
-  // levels reuse this same ceiling so it must stay permissive); defenses keep tight per-type caps.
-  function bmax(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : Math.max(t.max, 999); }
+  // v106: a real PER-TYPE ceiling for economic buildings, era-scaled, so you can't spend a whole age's
+  // ground on copies of one thing (which is how runs used to strand themselves — see eraNeedShort).
+  // Previously this returned 999 for anything non-defense, i.e. no per-type limit at all; the geometric
+  // cost curve was supposed to self-limit, but with idle income it doesn't. Defenses keep their own
+  // tight per-type maxes (t.max) and stay exempt from the slot pool. Over-cap saves are grandfathered
+  // exactly like the slot cap: the ceiling only blocks ADDING more, it never deletes anything.
+  // BMAX_BASE was tuned against the autoplay balance floors in tests/sim.test.js — lowering it
+  // starves late-game income, so change it only with those numbers in hand.
+  var BMAX_BASE = 4;
+  function bmax(type) { var t = BT[type]; return t.cat === 'defense' ? t.max : Math.min(t.max, BMAX_BASE + (S && S.era || 0)); }
   // v90: per-era UPGRADE-LEVEL ceiling for economic buildings. Each age lets you push a building two
   // levels past L1 plus one per era reached: era0 Fishing Village -> L2, era3 Metropolis -> L5,
   // era7 Neon Horizon -> L9, endless tail keeps climbing. Defenses keep their own tight per-type max
@@ -459,10 +466,11 @@
   // gate counts these, so a required building only "counts" toward the next age once it's maxed.
   function countAtCap(port, type) { var B = port.buildings, cap = lvlCapFor(type), n = 0; for (var i = 0; i < B.length; i++) if (B[i].type === type && (B[i].level || 1) >= cap) n++; return n; }
   // Phase 15c: total non-defense building SLOTS per port — replaces "ports grow forever" with a
-  // real, era-scaled ceiling. Deliberately independent of bmax(): bmax also gates upgrade LEVELS
-  // (canUpgrade below), and per-type build counts still self-limit on cost, so touching it would
-  // accidentally cap upgrades too. This is a second, additive gate — only non-defense buildings
-  // (defenses keep their own tight bmax caps and don't compete with them for room) count against it.
+  // real, era-scaled ceiling. Independent of bmax(), which caps copies of a SINGLE type; this is a
+  // second, additive gate on the TOTAL. (Upgrade levels are capped separately again, by lvlCapFor.)
+  // Only non-defense buildings count against it — defenses keep their own tight per-type maxes and
+  // don't compete for room. v106: a building the next advance still requires is exempt, so this can
+  // never strand a run — see eraNeedShort.
   // Tuning: 8 + 4×era. At era0 that covers a full starter loop (a few huts/cottages + a jetty) with
   // room to spare; +4/era roughly tracks the 2-4 new building types each era unlocks, so there's
   // always headroom for one of everything plus some duplicates. See tests/sim.test.js + the Phase 15c
@@ -474,6 +482,23 @@
     var n = 0, B = port.buildings;
     for (var i = 0; i < B.length; i++) if (BT[B[i].type].cat !== 'defense') n++;
     return n;
+  }
+  // v106: NO-SOFT-LOCK INVARIANT. The slot cap (15c) and "advancing needs these named buildings
+  // maxed" (v90) shipped independently and could deadlock a run for good: fill every slot with types
+  // the next gate doesn't ask for and the required building becomes unbuildable forever — and there
+  // is no demolish, damaged buildings keep their slot, and the only exits are a prestige wipe or a
+  // fresh era-0 colony (which can't help, since empireEra() is the MAX over ports). Reproduced on
+  // all 7 curated eras with infinite money and everything maxed.
+  // The fix: the slot pool may never deny a building the NEXT advance requires. This returns how many
+  // more copies of `type` that gate still needs us to OWN. Upgrading is already slot-free (canUpgrade
+  // below), so owning N copies is enough to reach N at the level cap — which makes owning them the
+  // only thing the pool could ever deny. Deliberately narrow: it grants only the copies the gate
+  // names, only while short of them, and never touches cost, per-type caps or level caps.
+  function eraNeedShort(type) {
+    if (!S || !CUR) return 0;
+    var req = eraReq(S.era);
+    if (!req || !req.need || !req.need[type]) return 0;
+    return Math.max(0, req.need[type] - countOf(type));
   }
   function buildCost(type) { var t = BT[type]; return Math.round(t.cost * Math.pow(t.costMul, countOf(type)) * (META.costMul || 1)); }
   function upCost(b) { var t = BT[b.type]; return Math.round(t.cost * 0.6 * Math.pow(t.lvlCost, b.level) * (META.costMul || 1)); }
@@ -971,7 +996,7 @@
   function canBuild(type) {
     var t = BT[type];
     return !!CUR && !!t && S.era >= t.era && !blocked(type) && countOf(type) < bmax(type) &&
-      (t.cat === 'defense' || slotsUsed(CUR) < slotCap()) && S.money >= buildCost(type);
+      (t.cat === 'defense' || eraNeedShort(type) > 0 || slotsUsed(CUR) < slotCap()) && S.money >= buildCost(type);
   }
   function build(type) { if (!canBuild(type)) return false; S.money -= buildCost(type); CUR.buildings.push({ type: type, level: 1, hp: 100 }); save(); return true; }
   function canUpgrade(i) { var b = CUR && CUR.buildings[i]; return !!b && b.level < lvlCapFor(b.type) && S.money >= upCost(b); }
@@ -1170,6 +1195,9 @@
     foundPort: foundPort, foundCost: function () { return S ? foundCost() : 0; }, canFoundPort: function () { return S ? canFoundPort() : true; },
     tick: function (dt) { tick(dt); },
     build: build, canBuild: canBuild, buildCost: buildCost, blocked: blocked,
+    bmax: function (type) { return S && BT[type] ? bmax(type) : 0; },  // v106: per-TYPE copy ceiling (era-scaled) — rendered on the Manage card
+    countOf: function (type) { return CUR ? countOf(type) : 0; },      // v106: copies of `type` in the active port (the "3/7" numerator)
+    eraNeedShort: function (type) { return eraNeedShort(type); },      // v106: copies the next advance still needs — non-zero means slot-cap exempt
     slotCap: function () { return S ? slotCap() : 0; },                // Phase 15c: per-port building-slot ceiling + usage
     slotsUsed: function (id) { var p = S && S.ports ? (S.ports[id || S.active] || null) : null; return p ? slotsUsed(p) : 0; },
     upgrade: upgrade, canUpgrade: canUpgrade, upCost: function (i) { return CUR && CUR.buildings[i] ? upCost(CUR.buildings[i]) : 0; },
