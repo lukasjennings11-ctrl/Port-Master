@@ -168,11 +168,86 @@ localized prices; tapping one opens the native purchase sheet; completing a sand
 
 ---
 
+## Shipping an update — build 3 (do this before you submit)
+
+**Why:** the build already uploaded to App Store Connect (**build 2**) was made from **v103**. Three
+things were fixed after it, and all three matter on a phone:
+
+- **v104** — buttons often didn't respond to a normal tap. This is the thing players complained about,
+  and it's worse on touch than with a mouse.
+- **v105** — "Manage port" is now the first and biggest button; "Trade network" is hidden until you
+  actually have two harbours.
+- **v106** — a port could reach a state where it could **never** advance to the next era again. Runs
+  were being permanently killed. (Anyone already stuck is rescued automatically by this update.)
+
+**If you submit build 2, you ship all three bugs.** Do the steps below instead.
+
+### On your Mac, in Terminal
+
+1. Go to the project folder:
+   `cd ~/prism-play` (use wherever you cloned it)
+2. Get the new code — **both** lines, in this order:
+   ```
+   git checkout claude/fuse-game-success-analysis-da82fa
+   git pull origin claude/fuse-game-success-analysis-da82fa
+   ```
+   (The first line matters: without it you'd pull the new code into whichever branch you happened to
+   be on last time.)
+3. Rebuild the game files:
+   `bash factory/build-portal.sh bare`
+4. **Check the game files really are the new version.** Paste this whole line exactly:
+   ```
+   grep -q "BUILD_TAG = 'v106'" dist/portboss-portal/game.js && echo "GOOD — the app will contain v106" || echo "WRONG — rebuild needed (step 3 did not work)"
+   ```
+   It prints either **GOOD** or **WRONG**. If it says WRONG, stop and tell me — don't continue, or
+   you'll ship the old game again.
+5. Copy the game files into the iPhone app:
+   `npx cap sync`
+   If this errors with something about a missing module or `@capacitor` not being found, run
+   `npm install` first, then `npx cap sync` again.
+6. Open the app project:
+   `npx cap open ios`
+
+> **Why step 3 isn't optional:** the built game files aren't stored in the repo (they're rebuilt each
+> time), so `git pull` alone does **not** update the app. Skip step 3 and Xcode will happily build an
+> app containing the old v103 game.
+
+### In Xcode
+
+7. In the left sidebar, click the blue **App** icon at the very top.
+8. Click the **General** tab.
+9. Find the **Identity** box. You'll see two fields:
+   - **Version** → leave it as `1.0` (this is the name players see)
+   - **Build** → change `2` to **`3`**
+   Apple **rejects** an upload that reuses a build number, so this one edit is mandatory. Version and
+   Build are different things: Version is the public label, Build is Apple's internal counter.
+10. While you're in **Identity**, confirm **Bundle Identifier** is exactly `Port-Boss`.
+    (Not `com.lukasjennings.portboss` — that mismatch caused the "App Record Creation Error" before.)
+11. Still in **General**, confirm **Supported Destinations** lists **iPhone only** (no iPad).
+    That's what removed the iPad screenshot requirement — don't add iPad back.
+12. At the top of the window, set the device selector to **Any iOS Device (arm64)**.
+13. Menu bar → **Product** → **Archive**. Wait for it to finish (a few minutes).
+14. When the **Organizer** window appears, click **Distribute App** → **App Store Connect** →
+    **Upload** → keep clicking **Next** → **Upload**.
+
+### In App Store Connect
+
+15. Go to your app → the **1.0** version page.
+16. Scroll to **Build**. Wait for **build 3** to appear (usually 5–15 minutes; it may say "Processing"
+    for a while). Refresh if needed.
+17. Click **Build**, choose **3**, and remove build 2 if it's selected.
+18. Paste the release notes from **`SUBMIT-DETAILS.md`** → *"What's New in This Version"* into the
+    **What's New in This Version** box.
+19. Click **Save**, then **Add for Review** / **Submit for Review**.
+
+---
+
 ## Notes & honest caveats
 - **No ads in the app.** The web portal ad SDKs (CrazyGames/Poki) don't work in a native app, so the
   first release ships **ad-free** — simplest and fastest to approve. AdMob rewarded ads can be added
   later via a Capacitor plugin if you want in-app revenue; ask me and I'll wire it.
-- **Updates:** change the game → `build-portal.sh bare` → `npx cap sync` → bump the version in Android
-  Studio / Xcode → rebuild → upload. Same as the first time, minus the account setup.
+- **Updates:** change the game → `build-portal.sh bare` → `npx cap sync` → bump the **Build** number in
+  Android Studio / Xcode → rebuild → upload. Same as the first time, minus the account setup.
+  Step-by-step version: *"Shipping an update — build 3"* above.
 - **Review times:** Apple is usually 1–3 days; Google a few hours to a couple of days for a new app.
 - **Keep your keystore (Android) and Apple signing safe** — they're your identity for all future updates.

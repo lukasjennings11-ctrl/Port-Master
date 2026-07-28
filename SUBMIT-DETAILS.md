@@ -196,6 +196,44 @@ Submit. Poki's review runs in stages over a few weeks — that's normal.
 
 ---
 
+---
+
+# Apple App Store — appstoreconnect.apple.com
+
+### "What's New in This Version" (paste into the 1.0 build-3 page)
+
+Deliberately written for players, not developers: no version numbers (Apple's reviewers can't verify
+them), no internal terms, and the progression fix is described as a fix rather than as an admission of
+a specific broken state. Well inside Apple's 4000-character limit.
+
+```
+Taps land properly now.
+Buttons across the port — building, upgrading, managing — used to occasionally ignore a normal tap. That's fixed, and the whole game should feel noticeably more responsive.
+
+A clearer port bar.
+"Manage port" is now the first and largest button, since it's where you'll spend most of your time. The other buttons are slimmer and tidier, and Trade Network only appears once you actually have two harbours to trade between.
+
+Your port can always keep growing.
+Some ports could run out of ground before they'd built everything the next age needed, leaving them unable to progress. There's now always room for the buildings your next age requires, and each building type shows how many more of it you can add. If one of your ports was stuck, it will be able to advance again as soon as you open this update.
+```
+
+### If Apple asks what changed (Review Notes)
+
+```
+This update fixes input reliability (some button taps were being dropped), reorganises the main action bar for clarity, and resolves a progression issue where a port could become unable to advance to the next era. No new features, no data collection changes, no in-app purchases.
+```
+
+### Reminders for the App Store build
+- **Build number must be 3** — Apple rejects a re-upload that reuses one. See
+  `APP-BUILD-GUIDE.md` → *"Shipping an update — build 3"* for the exact Xcode field.
+- **Bundle Identifier is `Port-Boss`** (the registered App ID), not `com.lukasjennings.portboss`.
+- **iPhone only** — leave iPad out of Supported Destinations; that's what removed the iPad
+  screenshot requirement.
+- **In-app purchases: still No** for this release. The tip jar is built but switched off, so the
+  App Privacy and IAP answers from the first submission are unchanged.
+
+---
+
 ## Reminders
 - **Different game file per portal** — CrazyGames gets `portboss-crazygames.zip`, Poki gets
   `portboss-poki.zip`. Don't mix them up.

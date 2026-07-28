@@ -78,7 +78,14 @@ function ok(name, cond) { if (cond) pass++; else { fail++; fails.push(name); } }
   // (with real URLs) by the response(404) + requestfailed handlers below instead, where the portal
   // SDK CDN + favicon are allowlisted. So drop that resource noise from the console-error gate and
   // keep only genuine JS errors. (Same discipline as browser.test.js's IGNORE_CONSOLE_ERR.)
-  page.on('console', m => { if (m.type() === 'error' && !/favicon|Failed to load resource|net::ERR/.test(m.text()) && !SDK_HOST.test(m.text())) errs.push('CONSOLE ' + m.text()); });
+  // Also Chromium's "Blocked call to navigator.vibrate" intervention: this harness drives the UI with
+  // synthetic .click() from page.evaluate(), which does NOT count as a user gesture, so any haptic()
+  // reached that way logs an error. Harmless (vibrate silently no-ops, nothing throws) and only
+  // reachable in automation — a real tap is a real gesture. It made the gate flaky, since whether an
+  // announce/goal fires inside the observation window varies run to run. browser.test.js has
+  // filtered this since v104; this harness was missed.
+  const IGNORE_CONSOLE_ERR = /favicon|Failed to load resource|net::ERR|Blocked call to navigator\.vibrate/;
+  page.on('console', m => { if (m.type() === 'error' && !IGNORE_CONSOLE_ERR.test(m.text()) && !SDK_HOST.test(m.text())) errs.push('CONSOLE ' + m.text()); });
   page.on('console', m => { if (m.type() === 'warning' && /GL_INVALID|INVALID_OPERATION|INVALID_ENUM|INVALID_VALUE|[Ff]eedback loop/.test(m.text())) errs.push('GLWARN ' + m.text()); });
   page.on('response', r => { if (r.status() === 404 && !/favicon/.test(r.url())) notFound.push(r.url()); });
   page.on('requestfailed', r => { if (!SDK_HOST.test(r.url()) && !/favicon/.test(r.url())) reqFailed.push(r.url()); });
